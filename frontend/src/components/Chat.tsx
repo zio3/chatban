@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { useVoiceInput } from "../hooks/useVoiceInput";
 import ThinkingIndicator from "./ThinkingIndicator";
 import type { ChatEntry, Proposal } from "../types";
 
@@ -64,6 +65,12 @@ export default function Chat({
 }) {
   const [input, setInput] = useState("");
   const [opened, setOpened] = useState(false);
+  const [voiceError, setVoiceError] = useState<string | null>(null);
+  // #20: 音声入力 (Ctrl+Space または 🎤 でトグル)
+  const voice = useVoiceInput(
+    (t) => setInput(t),
+    (m) => setVoiceError(m)
+  );
   const [logHeight, setLogHeight] = useState(() => {
     const saved = Number(localStorage.getItem("chatban.logHeight"));
     return saved >= 120 ? saved : 240;
@@ -264,24 +271,44 @@ export default function Chat({
               ▼ 畳む
             </button>
           </div>
-          <div className="flex gap-2 border-t border-slate-100 px-4 py-3">
-            <input
-              ref={inputRef}
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.nativeEvent.isComposing) submit();
-              }}
-              placeholder="ボードに話しかける…（例: 候補挙げて / いい感じに振っといて）"
-              className="flex-1 rounded-xl border border-slate-300 px-4 py-2.5 text-sm outline-none focus:border-indigo-500"
-            />
-            <button
-              onClick={submit}
-              disabled={sending || !input.trim()}
-              className="rounded-xl bg-indigo-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-40"
-            >
-              送信
-            </button>
+          <div className="border-t border-slate-100 px-4 py-3">
+            <div className="flex gap-2">
+              <input
+                ref={inputRef}
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.nativeEvent.isComposing) submit();
+                  if (e.ctrlKey && e.code === "Space") {
+                    e.preventDefault();
+                    setVoiceError(null);
+                    voice.toggle(input);
+                  }
+                }}
+                placeholder="ボードに話しかける…（例: 候補挙げて / いい感じに振っといて）"
+                className="flex-1 rounded-xl border border-slate-300 px-4 py-2.5 text-sm outline-none focus:border-indigo-500"
+              />
+              {voice.supported && (
+                <button
+                  onClick={() => {
+                    setVoiceError(null);
+                    voice.toggle(input);
+                  }}
+                  title="音声入力 (Ctrl+Space)"
+                  className={`rounded-xl px-3 py-2 text-sm ${voice.listening ? "animate-pulse bg-red-600 text-white" : "bg-slate-200 hover:bg-slate-300"}`}
+                >
+                  🎤
+                </button>
+              )}
+              <button
+                onClick={submit}
+                disabled={sending || !input.trim()}
+                className="rounded-xl bg-indigo-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-40"
+              >
+                送信
+              </button>
+            </div>
+            {voiceError && <p className="mt-1 text-xs text-red-500">🎤 {voiceError}</p>}
           </div>
         </div>
       </div>

@@ -90,7 +90,7 @@ test("更新失敗時はロールバックしトースト表示、リトライ�
   await page.route(`**/api/tasks/${id}`, (route) =>
     route.request().method() === "PATCH" ? route.fulfill({ status: 500, body: "forced failure" }) : route.continue()
   );
-  await drag(page, card, page.getByTestId("column-done"));
+  await drag(page, card, page.getByTestId("column-review"));
 
   await expect(page.getByTestId("toast")).toBeVisible();
   // ロールバックでtodo列に戻っている + サーバー側は未変更
@@ -101,6 +101,28 @@ test("更新失敗時はロールバックしトースト表示、リトライ�
   await page.unroute(`**/api/tasks/${id}`);
   await page.getByTestId("toast").getByRole("button", { name: "リトライ" }).click();
   await expect(page.getByTestId("toast")).toBeHidden();
+  await expect(page.getByTestId("column-review").getByTestId(`task-card-${id}`)).toBeVisible();
+  await expect.poll(() => getTaskStatus(id)).toBe("review");
+});
+
+test("DoneへはD&Dで移動できない (検収ボタン経由のみ) (#57)", async ({ page }) => {
+  const id = await createTask("E2E: Doneドロップ禁止テスト");
+  await page.goto("/");
+  const card = page.getByTestId(`task-card-${id}`);
+  await expect(card).toBeVisible();
+
+  // Done列へドラッグしても動かない
+  await drag(page, card, page.getByTestId("column-done"));
+  await expect(page.getByTestId("column-todo").getByTestId(`task-card-${id}`)).toBeVisible();
+  expect(await getTaskStatus(id)).toBe("todo");
+});
+
+test("Review列の検収ボタンでdoneになる (#57)", async ({ page }) => {
+  const id = await createTask("E2E: 検収テスト", "review");
+  await page.goto("/");
+  await expect(page.getByTestId("column-review").getByTestId(`task-card-${id}`)).toBeVisible();
+
+  await page.getByTestId(`approve-${id}`).click();
   await expect(page.getByTestId("column-done").getByTestId(`task-card-${id}`)).toBeVisible();
   await expect.poll(() => getTaskStatus(id)).toBe("done");
 });

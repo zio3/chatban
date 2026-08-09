@@ -19,7 +19,18 @@ export interface MovePayload {
   index: number;
 }
 
-function TaskCard({ task, overlay = false, onOpen }: { task: Task; overlay?: boolean; onOpen?: (id: number) => void }) {
+function TaskCard({
+  task,
+  overlay = false,
+  onOpen,
+  onApprove,
+}: {
+  task: Task;
+  overlay?: boolean;
+  onOpen?: (id: number) => void;
+  /** Review列のみ: 1クリック検収→done (#57) */
+  onApprove?: (id: number) => void;
+}) {
   return (
     <div
       data-testid={`task-card-${task.id}`}
@@ -44,11 +55,33 @@ function TaskCard({ task, overlay = false, onOpen }: { task: Task; overlay?: boo
         )}
       </div>
       {task.reason && <p className="mt-1.5 text-xs text-slate-500">💡 {task.reason}</p>}
+      {onApprove && (
+        <label
+          onClick={(e) => e.stopPropagation()}
+          className="mt-2 flex cursor-pointer items-center gap-2 rounded-md border border-emerald-200 bg-emerald-50 px-2.5 py-1.5 text-xs font-medium text-emerald-700 hover:bg-emerald-100"
+        >
+          <input
+            type="checkbox"
+            data-testid={`approve-${task.id}`}
+            onChange={() => onApprove(task.id)}
+            className="h-5 w-5 accent-emerald-600"
+          />
+          検収OK → Done
+        </label>
+      )}
     </div>
   );
 }
 
-function SortableCard({ task, onOpen }: { task: Task; onOpen: (id: number) => void }) {
+function SortableCard({
+  task,
+  onOpen,
+  onApprove,
+}: {
+  task: Task;
+  onOpen: (id: number) => void;
+  onApprove?: (id: number) => void;
+}) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: task.id });
   return (
     <div
@@ -58,7 +91,7 @@ function SortableCard({ task, onOpen }: { task: Task; onOpen: (id: number) => vo
       style={{ transform: CSS.Transform.toString(transform), transition }}
       className={`cursor-grab touch-none ${isDragging ? "opacity-30" : ""}`}
     >
-      <TaskCard task={task} onOpen={onOpen} />
+      <TaskCard task={task} onOpen={onOpen} onApprove={onApprove} />
     </div>
   );
 }
@@ -117,6 +150,8 @@ function Column({
   archiveWorking,
   onToggleSummaryElement,
   onOpenTask,
+  onApprove,
+  onApproveAll,
 }: {
   col: (typeof COLUMNS)[number];
   tasks: Task[];
@@ -124,18 +159,33 @@ function Column({
   archiveWorking?: boolean;
   onToggleSummaryElement?: (cardId: number, index: number, checked: boolean) => void;
   onOpenTask: (id: number) => void;
+  onApprove?: (id: number) => void;
+  onApproveAll?: () => void;
 }) {
-  const { setNodeRef, isOver } = useDroppable({ id: col.key });
+  // Doneは「置き場」でなく「検収の結果」: D&Dでは到達できない (#57)
+  const { setNodeRef, isOver } = useDroppable({ id: col.key, disabled: col.key === "done" });
   return (
     <div
       ref={setNodeRef}
       data-testid={`column-${col.key}`}
+      title={col.key === "done" ? "Doneへは検収ボタンかチャットの承認からのみ移動できます" : undefined}
       className={`flex min-h-40 flex-col gap-2 rounded-xl border-t-4 ${col.accent} bg-slate-50 p-2 ${isOver ? "ring-2 ring-indigo-400" : ""}`}
     >
       <div className="flex items-center justify-between px-1">
         <h2 className="text-xs font-bold uppercase tracking-wide text-slate-500">{col.label}</h2>
-        <span data-testid={`count-${col.key}`} className="rounded-full bg-slate-200 px-1.5 text-xs text-slate-500">
-          {tasks.length}
+        <span className="flex items-center gap-1.5">
+          {onApproveAll && tasks.length > 0 && (
+            <button
+              data-testid="approve-all"
+              onClick={onApproveAll}
+              className="rounded-md bg-emerald-600 px-2 py-0.5 text-[10px] font-medium text-white hover:bg-emerald-700"
+            >
+              ✓ まとめてDone
+            </button>
+          )}
+          <span data-testid={`count-${col.key}`} className="rounded-full bg-slate-200 px-1.5 text-xs text-slate-500">
+            {tasks.length}
+          </span>
         </span>
       </div>
       {/* 完了→要約合流は非同期(15〜30秒)なので、再生成中はスピナーで明示 (#56) */}
@@ -156,7 +206,7 @@ function Column({
           .map((c) => <SummaryCardView key={c.id} card={c} onToggle={onToggleSummaryElement} />)}
       <SortableContext items={tasks.map((t) => t.id)} strategy={verticalListSortingStrategy}>
         {tasks.map((t) => (
-          <SortableCard key={t.id} task={t} onOpen={onOpenTask} />
+          <SortableCard key={t.id} task={t} onOpen={onOpenTask} onApprove={onApprove} />
         ))}
         {tasks.length === 0 && (
           <p className="rounded-lg border border-dashed border-slate-200 py-4 text-center text-xs text-slate-400">
@@ -175,6 +225,8 @@ export default function Board({
   onMove,
   onToggleSummaryElement,
   onOpenTask,
+  onApprove,
+  onApproveAll,
 }: {
   tasks: Task[];
   summaryCards: SummaryCard[];
@@ -182,6 +234,8 @@ export default function Board({
   onMove: (move: MovePayload) => void;
   onToggleSummaryElement: (cardId: number, index: number, checked: boolean) => void;
   onOpenTask: (id: number) => void;
+  onApprove: (id: number) => void;
+  onApproveAll: () => void;
 }) {
   const [active, setActive] = useState<Task | null>(null);
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
@@ -208,6 +262,8 @@ export default function Board({
     const task = tasks.find((t) => t.id === e.active.id);
     const target = locate(e.over.id as number | TaskStatus);
     if (!task || !target) return;
+    // Done列へのD&D流入は禁止 (検収ボタン/チャット承認のみ)。done内の並び替えは許可 (#57)
+    if (target.status === "done" && task.status !== "done") return;
     const col = byStatus(target.status);
     const curIndex = col.findIndex((t) => t.id === task.id);
     if (task.status === target.status && (curIndex === target.index || curIndex === -1)) return;
@@ -226,6 +282,8 @@ export default function Board({
             archiveWorking={col.key === "done" ? archiveWorking : undefined}
             onToggleSummaryElement={col.key === "done" ? onToggleSummaryElement : undefined}
             onOpenTask={onOpenTask}
+            onApprove={col.key === "review" ? onApprove : undefined}
+            onApproveAll={col.key === "review" ? onApproveAll : undefined}
           />
         ))}
       </div>

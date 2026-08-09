@@ -120,6 +120,16 @@ export default function App() {
     }, 60);
   }, []);
 
+  // Review→Doneの検収 (#57)。Doneへの唯一のUI経路 (D&Dは禁止、他はチャット承認のみ)
+  const approveTask = useCallback((id: number) => {
+    api.updateTask(id, { status: "done" }).catch((e) => {
+      setToast({ message: `検収に失敗しました: ${e?.message ?? e}` });
+    });
+  }, []);
+  const approveAllReview = useCallback(() => {
+    tasks.filter((t) => t.status === "review").forEach((t) => approveTask(t.id));
+  }, [tasks, approveTask]);
+
   const toggleSummaryElement = useCallback((cardId: number, index: number, checked: boolean) => {
     setSummaryCards((prev) =>
       prev.map((c) =>
@@ -216,6 +226,8 @@ export default function App() {
             onMove={moveTask}
             onToggleSummaryElement={toggleSummaryElement}
             onOpenTask={openTask}
+            onApprove={approveTask}
+            onApproveAll={approveAllReview}
           />
         )}
       </main>

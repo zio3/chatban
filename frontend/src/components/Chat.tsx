@@ -63,7 +63,6 @@ export default function Chat({
   onStop: () => void;
 }) {
   const [input, setInput] = useState("");
-  const [opened, setOpened] = useState(false);
   const [logHeight, setLogHeight] = useState(() => {
     const saved = Number(localStorage.getItem("chatban.logHeight"));
     return saved >= 120 ? saved : 240;
@@ -90,16 +89,10 @@ export default function Chat({
     window.addEventListener("pointerup", onUp);
   }
 
-  // 開閉は明示的な状態で持つ(入力フォーカスと連動させない)。新しいやり取り・提案が来たら自動で開く
-  const expanded = opened;
-
-  useEffect(() => {
-    if (log.length > 0 || proposals.length > 0) setOpened(true);
-  }, [log.length, proposals.length]);
-
+  // チャットはこのシステムのアイデンティティなので常設 (畳みUIは廃止 zio判断 8/9)
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
-  }, [log, expanded, proposals.length]);
+  }, [log, proposals.length]);
 
   function submit() {
     const text = input.trim();
@@ -110,11 +103,8 @@ export default function Chat({
 
   return (
     <section className="shrink-0 border-t border-slate-200 bg-white">
-      <div
-        className="grid transition-[grid-template-rows] duration-300 ease-out"
-        style={{ gridTemplateRows: expanded ? "1fr" : "0fr" }}
-      >
-        <div className="min-h-0 overflow-hidden">
+      <div>
+        <div className="min-h-0">
           <div
             onPointerDown={startResize}
             title="ドラッグでチャット欄の高さを調整"
@@ -255,14 +245,22 @@ export default function Chat({
                   </div>
                 </div>
               )}
+              {/* リコメンドチップはログの流れの中に置く (会話の次の一手として提示) */}
+              {suggestions.length > 0 && (
+                <div className="flex flex-wrap items-center gap-2 pt-1">
+                  {suggestions.map((s, i) => (
+                    <button
+                      key={i}
+                      disabled={sending}
+                      onClick={() => onSend(s.message)}
+                      className="rounded-full border border-indigo-200 bg-indigo-50 px-3 py-1.5 text-xs text-indigo-700 hover:bg-indigo-100 disabled:opacity-40"
+                    >
+                      {s.label}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
-            <button
-              onClick={() => setOpened(false)}
-              title="チャット欄を畳む"
-              className="absolute right-3 top-2 rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-500 hover:bg-slate-200"
-            >
-              ▼ 畳む
-            </button>
           </div>
           {/* #20却下: アプリ内音声入力の入口は撤去 (OSの音声入力で足りる)。useVoiceInputフックは温存 */}
           <div className="flex gap-2 border-t border-slate-100 px-4 py-3">
@@ -286,40 +284,6 @@ export default function Chat({
           </div>
         </div>
       </div>
-      {/* 畳んだ状態: 話しかけるボタン + リコメンド置き場 */}
-      {!expanded && (
-        <div className="flex items-center gap-2 px-4 py-3">
-          <button
-            onClick={() => {
-              setOpened(true);
-              setTimeout(() => inputRef.current?.focus(), 320); // 開くアニメーション後にフォーカス
-            }}
-            className="flex shrink-0 items-center gap-2 rounded-xl bg-indigo-600 px-5 py-2.5 text-sm font-bold text-white shadow-sm hover:bg-indigo-700"
-          >
-            💬 ボードに話しかける
-          </button>
-          <div className="flex min-w-0 flex-1 items-center gap-2 overflow-x-auto">
-            {suggestions.map((s, i) => (
-              <button
-                key={i}
-                disabled={sending}
-                onClick={() => onSend(s.message)}
-                className="shrink-0 rounded-full border border-indigo-200 bg-indigo-50 px-3.5 py-2 text-sm text-indigo-700 hover:bg-indigo-100 disabled:opacity-40"
-              >
-                {s.label}
-              </button>
-            ))}
-            {log.length > 0 && (
-              <button
-                onClick={() => setOpened(true)}
-                className="shrink-0 rounded-full bg-slate-100 px-3 py-2 text-xs text-slate-500 hover:bg-slate-200"
-              >
-                ▲ ログ {log.length}
-              </button>
-            )}
-          </div>
-        </div>
-      )}
     </section>
   );
 }

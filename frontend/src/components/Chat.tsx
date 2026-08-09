@@ -341,18 +341,29 @@ export default function Chat({
               >
                 +
               </button>
-              {/* #76: Enter=送信 / Shift+Enter=改行 (AIチャット作法) */}
+              {/* #76: Enter=送信 / Shift+Enter・Ctrl+Enter=改行 (AIチャット作法)。初期2段 */}
               <textarea
                 ref={inputRef}
                 value={input}
-                rows={1}
+                rows={2}
                 onChange={(e) => {
                   setInput(e.target.value);
                   autoResize(e.target);
                 }}
                 onKeyDown={(e) => {
-                  if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
-                    e.preventDefault();
+                  if (e.key !== "Enter" || e.nativeEvent.isComposing) return;
+                  if (e.shiftKey) return; // 既定の改行に任せる
+                  e.preventDefault();
+                  if (e.ctrlKey) {
+                    // Ctrl+Enterでも改行 (カーソル位置に挿入)
+                    const el = e.currentTarget;
+                    const { selectionStart: s, selectionEnd: en } = el;
+                    setInput((v) => v.slice(0, s) + "\n" + v.slice(en));
+                    requestAnimationFrame(() => {
+                      el.selectionStart = el.selectionEnd = s + 1;
+                      autoResize(el);
+                    });
+                  } else {
                     submit();
                   }
                 }}

@@ -99,10 +99,12 @@ export async function regenerateCard(cardId: number): Promise<SummaryCard | unde
   return getSummaryCard(cardId);
 }
 
-/** 完了タスクをアクティブカードに合流させ、生データから要約を再生成する */
-export async function onTaskCompleted(taskId: number): Promise<SummaryCard | undefined> {
+/** 完了タスク群をアクティブカードに合流させ、生データから要約を再生成する。
+ * #60: 一括検収で複数doneが来ても再生成(LLM呼び出し)は1回で済むようバッチで受ける */
+export async function onTasksCompleted(taskIds: number[]): Promise<SummaryCard | undefined> {
+  if (taskIds.length === 0) return undefined;
   const card = getOrCreateActiveCard();
-  assignTaskToCard(taskId, card.id);
+  for (const id of taskIds) assignTaskToCard(id, card.id);
   return regenerateCard(card.id);
 }
 

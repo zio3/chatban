@@ -3,7 +3,7 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import cors from "cors";
 import express from "express";
 import { Server } from "socket.io";
-import { onTaskCompleted, onTaskReopened } from "./archive.js";
+import { onTaskReopened, onTasksCompleted } from "./archive.js";
 import { runChatTurn } from "./chat.js";
 import { hooks } from "./hooks.js";
 import { log } from "./log.js";
@@ -46,13 +46,24 @@ function archiveJobDelta(delta: number) {
 }
 
 // 完了→即アーカイブ+要約合流 (E2E等ではAUTO_ARCHIVE=0で無効化)
+// #60: 一括検収でN件同時にdoneが来るため、少し待って束ね、要約再生成(LLM呼び出し)を1回にする
+const COMPLETED_DEBOUNCE_MS = 2500;
+let pendingCompleted: number[] = [];
+let completedTimer: NodeJS.Timeout | null = null;
 if (process.env.AUTO_ARCHIVE !== "0") {
   hooks.taskCompleted = (taskId) => {
     archiveJobDelta(1);
-    onTaskCompleted(taskId)
-      .then(() => broadcastBoard())
-      .catch((e) => log("archive", `taskCompleted #${taskId} failed: ${e?.message ?? e}`))
-      .finally(() => archiveJobDelta(-1));
+    pendingCompleted.push(taskId);
+    if (completedTimer) clearTimeout(completedTimer);
+    completedTimer = setTimeout(() => {
+      const ids = pendingCompleted;
+      pendingCompleted = [];
+      completedTimer = null;
+      onTasksCompleted(ids)
+        .then(() => broadcastBoard())
+        .catch((e) => log("archive", `tasksCompleted [${ids.join(",")}] failed: ${e?.message ?? e}`))
+        .finally(() => archiveJobDelta(-ids.length));
+    }, COMPLETED_DEBOUNCE_MS);
   };
   hooks.taskReopened = (taskId) => {
     archiveJobDelta(1);

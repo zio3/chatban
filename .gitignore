@@ -7,3 +7,4 @@ dist/
 logs/
 test-results/
 playwright-report/
+backend/backup/

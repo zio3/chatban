@@ -4,7 +4,7 @@ import cors from "cors";
 import express from "express";
 import { Server } from "socket.io";
 import { onTaskReopened, onTasksCompleted } from "./archive.js";
-import { fetchBillingUsage } from "./llm.js";
+import { fetchBillingUsage, fetchModelCatalog, getModel, MODEL_DEFAULTS, type ModelSlot } from "./llm.js";
 import { generateSuggestions, runChatTurn } from "./chat.js";
 import { hooks } from "./hooks.js";
 import { log } from "./log.js";
@@ -12,8 +12,11 @@ import { buildMcpServer } from "./mcp.js";
 import {
   auditLog,
   createTask,
+  deleteSetting,
   deleteTask,
   exportAll,
+  getSetting,
+  setSetting,
   getProjectContextRow,
   getTask,
   listChatMessages,
@@ -236,6 +239,44 @@ app.get("/api/audit/export", (_req, res) => {
   const stamp = new Date().toISOString().slice(0, 19).replace(/[-:T]/g, "").slice(0, 14);
   res.setHeader("Content-Disposition", `attachment; filename="chatban-audit-${stamp}.json"`);
   res.json(exportAll());
+});
+
+// 管理画面 (#88): 用途別モデルの実効値と既定値。source=どこから来た値か
+const SLOTS: ModelSlot[] = ["main", "archive", "cheap"];
+app.get("/api/settings/models", (_req, res) => {
+  res.json({
+    slots: SLOTS.map((slot) => ({
+      slot,
+      model: getModel(slot),
+      default: MODEL_DEFAULTS[slot],
+      source: getSetting(`model.${slot}`) ? "settings" : "default",
+    })),
+  });
+});
+
+// 切り替えは即時反映 (getModelが呼び出しごとにDBを引くため再起動不要)。
+// null/空文字を渡すと設定を削除して既定値に戻る
+app.post("/api/settings/models", (req, res) => {
+  const updates = (req.body ?? {}) as Partial<Record<ModelSlot, string | null>>;
+  for (const slot of SLOTS) {
+    if (!(slot in updates)) continue;
+    const v = updates[slot];
+    if (v) setSetting(`model.${slot}`, v);
+    else deleteSetting(`model.${slot}`);
+  }
+  log("settings", `models -> ${SLOTS.map((s) => `${s}=${getModel(s)}`).join(" ")}`);
+  io.emit("settings:changed", {});
+  res.json({ ok: true, slots: SLOTS.map((slot) => ({ slot, model: getModel(slot) })) });
+});
+
+// モデル候補一覧 (単価つき)。外部API失敗時は空配列 — 手入力のフォールバックがあるので致命的でない
+app.get("/api/models", async (_req, res) => {
+  try {
+    res.json({ models: await fetchModelCatalog() });
+  } catch (e: any) {
+    log("settings", `model catalog failed: ${e?.message ?? e}`);
+    res.json({ models: [] });
+  }
 });
 
 // プロジェクト前提情報の閲覧 (#73)。編集はチャット経由のみ (update_project_context)

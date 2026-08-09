@@ -14,7 +14,7 @@ import {
   updateTask,
   updateTasks,
 } from "./db.js";
-import { chatCompletion, MODELS } from "./llm.js";
+import { chatCompletion, getModel } from "./llm.js";
 import { log } from "./log.js";
 import type { TaskStatus, UiAction } from "./types.js";
 
@@ -431,7 +431,7 @@ function buildAttachmentParts(attachments: ChatAttachment[]): OpenAI.Chat.Comple
 /** AI提案チップ (#75): ボードの文脈から「いま価値のある操作」を提案する。
  * チャットと同一のシステムプロンプト+ツール定義で呼ぶことで、キャッシュ済みプレフィックスに相乗りする */
 export async function generateSuggestions(): Promise<{ label: string; message: string }[]> {
-  const res = await chatCompletion("suggest", MODELS.main, {
+  const res = await chatCompletion("suggest", getModel("main"), {
     messages: [
       { role: "system", content: buildSystemPrompt() },
       {
@@ -490,12 +490,12 @@ export async function runChatTurn(
 
   for (let round = 0; round < 8; round++) {
     const c0 = Date.now();
-    const res = await chatCompletion("chat", MODELS.main, { messages, tools });
+    const res = await chatCompletion("chat", getModel("main"), { messages, tools });
     usage.rounds++;
     usage.promptTokens += res.usage?.prompt_tokens ?? 0;
     usage.completionTokens += res.usage?.completion_tokens ?? 0;
     usage.calls.push({
-      model: res.model ?? MODELS.main,
+      model: res.model ?? getModel("main"),
       promptTokens: res.usage?.prompt_tokens ?? 0,
       completionTokens: res.usage?.completion_tokens ?? 0,
       cachedTokens: (res.usage as any)?.prompt_tokens_details?.cached_tokens ?? 0,

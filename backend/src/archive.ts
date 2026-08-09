@@ -12,7 +12,7 @@ import {
   type SummaryCard,
   type SummaryElement,
 } from "./db.js";
-import { chatCompletion, MODELS } from "./llm.js";
+import { chatCompletion, getModel } from "./llm.js";
 import { log } from "./log.js";
 
 // Doneアーカイブ+要約常駐 (docs/done-archive-design.md + zio設計判断)
@@ -51,7 +51,7 @@ export async function regenerateCard(cardId: number): Promise<SummaryCard | unde
   const checkedElements = card.elements.filter((e) => e.checked);
 
   // 要素分解 (品質が肝・非同期なのでレイテンシ許容): ルーティング委任
-  const res = await chatCompletion("archive-decompose", MODELS.archive, {
+  const res = await chatCompletion("archive-decompose", getModel("archive"), {
     messages: [
       {
         role: "system",
@@ -81,7 +81,7 @@ export async function regenerateCard(cardId: number): Promise<SummaryCard | unde
   // タイトル: 見出しラベルはコスト優先ルーティング(定型)、件数は機械で付与(LLMに数えさせない)
   let label = "";
   try {
-    const titleRes = await chatCompletion("archive-title", MODELS.cheap, {
+    const titleRes = await chatCompletion("archive-title", getModel("cheap"), {
       messages: [
         {
           role: "system",

@@ -48,6 +48,11 @@ CREATE TABLE IF NOT EXISTS chat_messages (
   usage TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
 );
+CREATE TABLE IF NOT EXISTS settings (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL,
+  updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
+);
 CREATE TABLE IF NOT EXISTS llm_calls (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   purpose TEXT NOT NULL,
@@ -418,6 +423,22 @@ export function setProjectContext(text: string) {
   ).run(text);
 }
 
+// #88: 実行時設定 (管理画面から変更可能な値)。未設定ならenv/既定値にフォールバックする
+export function getSetting(key: string): string | null {
+  const r = db.prepare("SELECT value FROM settings WHERE key = ?").get(key) as { value: string } | undefined;
+  return r?.value ?? null;
+}
+
+export function setSetting(key: string, value: string): void {
+  db.prepare(
+    "INSERT INTO settings (key, value, updated_at) VALUES (?, ?, datetime('now', 'localtime')) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at"
+  ).run(key, value);
+}
+
+export function deleteSetting(key: string): void {
+  db.prepare("DELETE FROM settings WHERE key = ?").run(key);
+}
+
 export function saveChatMessage(
   role: "user" | "assistant",
   content: string,
@@ -513,6 +534,7 @@ export function exportAll() {
     proposals: all("proposals"),
     members: all("members"),
     projectContext: db.prepare("SELECT * FROM project_context WHERE id = 1").get() ?? null,
+    settings: db.prepare("SELECT * FROM settings ORDER BY key").all(), // #88: どのモデルで動いていたかの記録
   };
 }
 

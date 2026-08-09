@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import OpenAI from "openai";
-import { recordLlmCall } from "./db.js";
+import { getSetting, recordLlmCall } from "./db.js";
 import { log } from "./log.js";
 
 function loadApiKey(): string {
@@ -47,11 +47,51 @@ export async function fetchBillingUsage(): Promise<{ totalUsageUsd: number } | n
 //    Anthropicはcache_control明示方式でOpenAI互換経由では現状不発 → キャッシュの取れるgpt-5.4-mini固定
 //  - 要約の要素分解(archive): 品質が肝 + 非同期でレイテンシ許容 → ルーティングに委任
 //  - 定型(cheap): タイトル生成など → コスト優先ルーティング
-export const MODELS = {
+// #88: 管理画面のモデル選択肢。OrcaRouterの /v1/models は単価・コンテキスト長・入力モダリティを返す。
+// 182件と多く内容もほぼ不変なので10分キャッシュする
+export interface ModelCatalogEntry {
+  id: string;
+  name: string | null;
+  inputPerM: number | null;
+  outputPerM: number | null;
+  contextLength: number | null;
+  inputModalities: string[];
+}
+let catalogCache: { entries: ModelCatalogEntry[]; fetchedAt: number } | null = null;
+export async function fetchModelCatalog(): Promise<ModelCatalogEntry[]> {
+  if (catalogCache && Date.now() - catalogCache.fetchedAt < 600_000) return catalogCache.entries;
+  const res = await client.models.list();
+  const entries = (res.data as any[]).map((m) => ({
+    id: m.id as string,
+    name: (m.name as string) ?? null,
+    inputPerM: m.pricing?.prompt_per_million != null ? Number(m.pricing.prompt_per_million) : null,
+    outputPerM: m.pricing?.completion_per_million != null ? Number(m.pricing.completion_per_million) : null,
+    contextLength: (m.context_length as number) ?? null,
+    inputModalities: (m.architecture?.input_modalities as string[]) ?? [],
+  }));
+  catalogCache = { entries, fetchedAt: Date.now() };
+  return entries;
+}
+
+export type ModelSlot = "main" | "archive" | "cheap";
+
+/** 出荷時の既定値。管理画面(#88)で上書きされていない場合はこれが使われる */
+export const MODEL_DEFAULTS: Record<ModelSlot, string> = {
   main: process.env.ORCA_MODEL_MAIN ?? "openai/gpt-5.4-mini-2026-03-17",
   archive: process.env.ORCA_MODEL_ARCHIVE ?? "orcarouter/auto",
   cheap: process.env.ORCA_MODEL_CHEAP ?? "orcarouter/fusion-mini",
 };
+
+/** 実効モデルID。優先順位: 管理画面の設定 > env > 既定値。
+ * 呼び出しのたびにDBを引くので、再起動なしで切り替えが効く (#88) */
+export function getModel(slot: ModelSlot): string {
+  return getSetting(`model.${slot}`) ?? MODEL_DEFAULTS[slot];
+}
+
+/** gpt-5.6-luna は function tools と reasoning_effort を併用できず400を返す
+ * ("use /v1/responses or set reasoning_effort to 'none'")。ツール併用時のみ 'none' を明示する。
+ * 同世代でも terra は明示なしで通ることを実測済み (2026-08-10) なので、対象はlunaに限定する */
+const NEEDS_REASONING_NONE = /gpt-5\.6-luna/;
 
 export async function chatCompletion(
   purpose: string,
@@ -60,9 +100,11 @@ export async function chatCompletion(
 ) {
   const t0 = Date.now();
   log("llm", `-> ${purpose} model=${model} messages=${params.messages.length}`);
+  // SDKのReasoningEffort型に 'none' が無いためキャストして通す (OrcaRouter/OpenAI側は受け付ける)
+  const extra = params.tools?.length && NEEDS_REASONING_NONE.test(model) ? ({ reasoning_effort: "none" } as any) : {};
   let res;
   try {
-    res = await client.chat.completions.create({ ...params, model });
+    res = await client.chat.completions.create({ ...params, ...extra, model });
   } catch (e: any) {
     log("llm", `!! ${purpose} model=${model} FAILED after ${Date.now() - t0}ms: ${e?.status ?? ""} ${e?.message ?? e}`);
     throw e;

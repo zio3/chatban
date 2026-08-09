@@ -5,6 +5,7 @@ import Board, { type MovePayload } from "./components/Board";
 import Chat, { type Suggestion } from "./components/Chat";
 import ContextView from "./components/ContextView";
 import MetricsView from "./components/MetricsView";
+import SettingsView from "./components/SettingsView";
 import TaskDetailPanel from "./components/TaskDetailPanel";
 import { useChatTurn } from "./hooks/useChatTurn";
 import { socket } from "./socket";
@@ -27,7 +28,7 @@ export default function App() {
   const [detailTaskId, setDetailTaskId] = useState<number | null>(null);
   const [archiveWorking, setArchiveWorking] = useState(false);
   // #21/#33: ボード以外の閲覧ビューへの遷移 (簡易タブ)
-  const [view, setView] = useState<"board" | "context" | "metrics" | "audit">("board");
+  const [view, setView] = useState<"board" | "context" | "metrics" | "audit" | "settings">("board");
   // #14: なりすまし切替 (デモモード)。認証なしで「いま自分は誰か」を選び、チャット発言に記名される
   const [currentUser, setCurrentUser] = useState(() => localStorage.getItem("chatban.currentUser") || "zio");
   const currentUserRef = useRef(currentUser);
@@ -244,6 +245,7 @@ export default function App() {
                 { key: "context", label: "📋 前提" },
                 { key: "metrics", label: "📊 コスト" },
                 { key: "audit", label: "📜 監査" },
+                { key: "settings", label: "⚙ 設定" },
               ] as const
             ).map((v) => (
               <button
@@ -301,6 +303,7 @@ export default function App() {
         {view === "context" && <ContextView />}
         {view === "metrics" && <MetricsView />}
         {view === "audit" && <AuditView />}
+        {view === "settings" && <SettingsView />}
         {view === "board" && loading && (
           <div data-testid="board-loading" className="flex h-40 items-center justify-center text-sm text-slate-400">
             読み込み中…

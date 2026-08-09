@@ -3,6 +3,7 @@ import { io } from "socket.io-client";
 import { api } from "./api";
 import Board, { type MovePayload } from "./components/Board";
 import Chat, { type Suggestion } from "./components/Chat";
+import TaskDetailPanel from "./components/TaskDetailPanel";
 import type { ChatEntry, Member, Proposal, SummaryCard, Task } from "./types";
 
 interface Toast {
@@ -21,6 +22,7 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [toast, setToast] = useState<Toast | null>(null);
+  const [detailTaskId, setDetailTaskId] = useState<number | null>(null);
   const chatLogRef = useRef(chatLog);
   chatLogRef.current = chatLog;
 
@@ -87,6 +89,27 @@ export default function App() {
       doPatch();
       return prev.map((t) => (t.id === move.id ? { ...t, status: move.status, sort } : t));
     });
+  }, []);
+
+  const openTask = useCallback(
+    (id: number) => {
+      if (tasks.some((t) => t.id === id)) setDetailTaskId(id);
+      else setToast({ message: `#${id} はアーカイブ済みか存在しません` });
+    },
+    [tasks]
+  );
+
+  // 詳細パネルの「ボードで表示」: フィルタ解除→スクロール→フラッシュ
+  const jumpToBoard = useCallback((id: number) => {
+    setFilter(null);
+    setDetailTaskId(null);
+    setTimeout(() => {
+      const el = document.querySelector(`[data-testid="task-card-${id}"]`);
+      if (!el) return;
+      el.scrollIntoView({ behavior: "smooth", block: "center" });
+      el.classList.add("task-flash");
+      setTimeout(() => el.classList.remove("task-flash"), 1700);
+    }, 60);
   }, []);
 
   const toggleSummaryElement = useCallback((cardId: number, index: number, checked: boolean) => {
@@ -199,6 +222,7 @@ export default function App() {
             summaryCards={summaryCards}
             onMove={moveTask}
             onToggleSummaryElement={toggleSummaryElement}
+            onOpenTask={openTask}
           />
         )}
       </main>
@@ -208,8 +232,16 @@ export default function App() {
         suggestions={suggestions}
         proposals={proposals}
         onResolveProposal={resolveProposal}
+        onOpenTask={openTask}
         onSend={sendChat}
       />
+      {detailTaskId !== null && tasks.find((t) => t.id === detailTaskId) && (
+        <TaskDetailPanel
+          task={tasks.find((t) => t.id === detailTaskId)!}
+          onClose={() => setDetailTaskId(null)}
+          onJumpToBoard={jumpToBoard}
+        />
+      )}
       {toast && (
         <div
           data-testid="toast"

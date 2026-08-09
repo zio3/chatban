@@ -4,6 +4,15 @@ html, body, #root {
   height: 100%;
 }
 
+/* ボードカードのハイライトフラッシュ (詳細パネルの「ボードで表示」) */
+@keyframes task-flash-kf {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(99, 102, 241, 0); }
+  25%, 75% { box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.8); }
+}
+.task-flash {
+  animation: task-flash-kf 1.6s ease-in-out;
+}
+
 /* チャット内のMarkdown表示 (吹き出しに収まる控えめなスタイル) */
 .chat-md :is(p, ul, ol, table) { margin: 0.25rem 0; }
 .chat-md ul { list-style: disc; padding-left: 1.25rem; }

@@ -19,11 +19,12 @@ export interface MovePayload {
   index: number;
 }
 
-function TaskCard({ task, overlay = false }: { task: Task; overlay?: boolean }) {
+function TaskCard({ task, overlay = false, onOpen }: { task: Task; overlay?: boolean; onOpen?: (id: number) => void }) {
   return (
     <div
       data-testid={`task-card-${task.id}`}
-      className={`rounded-lg border border-slate-200 bg-white p-2.5 shadow-sm ${overlay ? "rotate-2 shadow-lg" : ""}`}
+      onClick={() => onOpen?.(task.id)}
+      className={`rounded-lg border border-slate-200 bg-white p-2.5 shadow-sm ${overlay ? "rotate-2 shadow-lg" : ""} ${onOpen ? "cursor-pointer hover:border-indigo-300" : ""}`}
     >
       <div className="flex items-start justify-between gap-2">
         <span className="text-sm font-medium leading-snug">
@@ -47,7 +48,7 @@ function TaskCard({ task, overlay = false }: { task: Task; overlay?: boolean }) 
   );
 }
 
-function SortableCard({ task }: { task: Task }) {
+function SortableCard({ task, onOpen }: { task: Task; onOpen: (id: number) => void }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: task.id });
   return (
     <div
@@ -57,7 +58,7 @@ function SortableCard({ task }: { task: Task }) {
       style={{ transform: CSS.Transform.toString(transform), transition }}
       className={`cursor-grab touch-none ${isDragging ? "opacity-30" : ""}`}
     >
-      <TaskCard task={task} />
+      <TaskCard task={task} onOpen={onOpen} />
     </div>
   );
 }
@@ -114,11 +115,13 @@ function Column({
   tasks,
   summaryCards,
   onToggleSummaryElement,
+  onOpenTask,
 }: {
   col: (typeof COLUMNS)[number];
   tasks: Task[];
   summaryCards?: SummaryCard[];
   onToggleSummaryElement?: (cardId: number, index: number, checked: boolean) => void;
+  onOpenTask: (id: number) => void;
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: col.key });
   return (
@@ -141,7 +144,7 @@ function Column({
           .map((c) => <SummaryCardView key={c.id} card={c} onToggle={onToggleSummaryElement} />)}
       <SortableContext items={tasks.map((t) => t.id)} strategy={verticalListSortingStrategy}>
         {tasks.map((t) => (
-          <SortableCard key={t.id} task={t} />
+          <SortableCard key={t.id} task={t} onOpen={onOpenTask} />
         ))}
         {tasks.length === 0 && (
           <p className="rounded-lg border border-dashed border-slate-200 py-4 text-center text-xs text-slate-400">
@@ -158,11 +161,13 @@ export default function Board({
   summaryCards,
   onMove,
   onToggleSummaryElement,
+  onOpenTask,
 }: {
   tasks: Task[];
   summaryCards: SummaryCard[];
   onMove: (move: MovePayload) => void;
   onToggleSummaryElement: (cardId: number, index: number, checked: boolean) => void;
+  onOpenTask: (id: number) => void;
 }) {
   const [active, setActive] = useState<Task | null>(null);
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
@@ -205,6 +210,7 @@ export default function Board({
             tasks={byStatus(col.key)}
             summaryCards={col.key === "done" ? summaryCards : undefined}
             onToggleSummaryElement={col.key === "done" ? onToggleSummaryElement : undefined}
+            onOpenTask={onOpenTask}
           />
         ))}
       </div>

@@ -21,12 +21,32 @@ export interface Suggestion {
   message: string;
 }
 
+/** #NN メンションをMarkdownリンクに変換 (リンク先は #task-NN、レンダラ側でクリックを拾う) */
+function linkifyMentions(text: string): string {
+  return text.replace(/#(\d+)/g, "[#$1](#task-$1)");
+}
+
+/** ユーザー発話(プレーンテキスト)用: #NN をクリック可能なspanに分解 */
+function renderUserText(text: string, onOpenTask: (id: number) => void) {
+  const parts = text.split(/(#\d+)/g);
+  return parts.map((p, i) => {
+    const m = p.match(/^#(\d+)$/);
+    if (!m) return <span key={i}>{p}</span>;
+    return (
+      <button key={i} onClick={() => onOpenTask(Number(m[1]))} className="font-bold underline decoration-dotted underline-offset-2">
+        {p}
+      </button>
+    );
+  });
+}
+
 export default function Chat({
   log,
   sending,
   suggestions,
   proposals,
   onResolveProposal,
+  onOpenTask,
   onSend,
 }: {
   log: ChatEntry[];
@@ -34,6 +54,7 @@ export default function Chat({
   suggestions: Suggestion[];
   proposals: Proposal[];
   onResolveProposal: (id: number, action: "approve" | "reject") => void;
+  onOpenTask: (id: number) => void;
   onSend: (message: string) => void;
 }) {
   const [input, setInput] = useState("");
@@ -107,10 +128,34 @@ export default function Chat({
                   >
                     {e.role === "assistant" ? (
                       <div className="chat-md">
-                        <Markdown remarkPlugins={[remarkGfm]}>{e.content}</Markdown>
+                        <Markdown
+                          remarkPlugins={[remarkGfm]}
+                          components={{
+                            a: ({ href, children }) => {
+                              const m = href?.match(/^#task-(\d+)$/);
+                              if (m) {
+                                return (
+                                  <button
+                                    onClick={() => onOpenTask(Number(m[1]))}
+                                    className="font-bold text-indigo-600 underline decoration-dotted underline-offset-2 hover:text-indigo-800"
+                                  >
+                                    {children}
+                                  </button>
+                                );
+                              }
+                              return (
+                                <a href={href} target="_blank" rel="noreferrer" className="underline">
+                                  {children}
+                                </a>
+                              );
+                            },
+                          }}
+                        >
+                          {linkifyMentions(e.content)}
+                        </Markdown>
                       </div>
                     ) : (
-                      e.content
+                      renderUserText(e.content, onOpenTask)
                     )}
                     {e.trace && e.trace.length > 0 && (
                       <div className="mt-1.5 flex flex-wrap gap-1">
@@ -139,9 +184,9 @@ export default function Chat({
                       {proposals.map((p) => (
                         <div key={p.id} className="rounded-lg border border-amber-100 bg-white px-3 py-2 text-sm">
                           <div className="flex items-center gap-2">
-                            <span className="font-medium">
+                            <button onClick={() => onOpenTask(p.taskId)} className="text-left font-medium hover:underline">
                               #{p.taskId} {p.taskTitle}
-                            </span>
+                            </button>
                             <span className="text-slate-400">→</span>
                             <span className="rounded-full bg-indigo-100 px-2 py-0.5 text-xs font-medium text-indigo-700">
                               {p.assignee}

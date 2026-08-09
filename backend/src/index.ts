@@ -4,6 +4,7 @@ import cors from "cors";
 import express from "express";
 import { Server } from "socket.io";
 import { onTaskReopened, onTasksCompleted } from "./archive.js";
+import { fetchBillingUsage } from "./llm.js";
 import { runChatTurn } from "./chat.js";
 import { hooks } from "./hooks.js";
 import { log } from "./log.js";
@@ -196,8 +197,10 @@ app.post("/api/tasks/:id/chat", async (req, res) => {
   }
 });
 
-app.get("/api/metrics", (_req, res) => {
-  res.json(metrics());
+app.get("/api/metrics", async (_req, res) => {
+  // #21: OrcaRouter請求サマリー(実$)を合流。外部API失敗時はnull (トークン集計は常に返す)
+  const billing = await fetchBillingUsage();
+  res.json({ ...metrics(), billing });
 });
 
 // オーディットログ (#33): 会話・LLM呼び出し・割り振り履歴の閲覧

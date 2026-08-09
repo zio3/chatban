@@ -19,6 +19,29 @@ export const client = new OpenAI({
   baseURL: process.env.ORCA_BASE_URL ?? "https://www.orcarouter.ai/v1",
 });
 
+// #21: OrcaRouterの課金サマリーAPI (docs/operations/billing-and-usage)。
+// total_usageはセント表記。60秒キャッシュ (毎回外部に問い合わせない)
+let billingCache: { totalUsageUsd: number; fetchedAt: number } | null = null;
+export async function fetchBillingUsage(): Promise<{ totalUsageUsd: number } | null> {
+  if (billingCache && Date.now() - billingCache.fetchedAt < 60_000) {
+    return { totalUsageUsd: billingCache.totalUsageUsd };
+  }
+  try {
+    const res = await fetch("https://api.orcarouter.ai/v1/dashboard/billing/usage", {
+      headers: { Authorization: `Bearer ${loadApiKey()}` },
+    });
+    if (!res.ok) return null;
+    const data = (await res.json()) as { total_usage?: number };
+    if (typeof data.total_usage !== "number") return null;
+    const totalUsageUsd = data.total_usage / 100;
+    billingCache = { totalUsageUsd, fetchedAt: Date.now() };
+    return { totalUsageUsd };
+  } catch (e: any) {
+    log("billing", `usage fetch failed: ${e?.message ?? e}`);
+    return null;
+  }
+}
+
 // 用途別モデル戦略 (Day2の実測比較で決定。切り替えはモデルID1行 — ルーターの利点):
 //  - 対話(main): OpenAI系は自動プロンプトキャッシュがOrcaRouter経由でも効く(実測: 2回目以降の入力85-95%が0.1x課金)。
 //    Anthropicはcache_control明示方式でOpenAI互換経由では現状不発 → キャッシュの取れるgpt-5.4-mini固定

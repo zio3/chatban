@@ -20,6 +20,8 @@ interface Metrics {
     elapsed_ms: number;
     created_at: string;
   }[];
+  /** OrcaRouter請求サマリー (#21)。外部API失敗時はnull */
+  billing: { totalUsageUsd: number } | null;
 }
 
 function kt(n: number): string {
@@ -44,8 +46,13 @@ export default function MetricsView() {
 
   return (
     <div className="mx-auto max-w-4xl space-y-6 p-6">
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
         {[
+          {
+            label: "実費 (OrcaRouter請求)",
+            value: data.billing ? `$${data.billing.totalUsageUsd.toFixed(2)}` : "—",
+            hint: data.billing ? `約${Math.round(data.billing.totalUsageUsd * 150)}円` : "取得失敗",
+          },
           { label: "総呼び出し", value: String(data.totalCalls) },
           { label: "入力トークン", value: kt(data.promptTokens) },
           { label: "キャッシュヒット率", value: `${cacheRate}%` },
@@ -54,9 +61,13 @@ export default function MetricsView() {
           <div key={c.label} className="rounded-xl border border-slate-200 bg-white p-4">
             <p className="text-xs text-slate-400">{c.label}</p>
             <p className="mt-1 text-2xl font-bold">{c.value}</p>
+            {"hint" in c && c.hint && <p className="text-[10px] text-slate-400">{c.hint}</p>}
           </div>
         ))}
       </div>
+      <p className="text-xs text-slate-400">
+        実費はOrcaRouter課金APIの累計 (ワークスペース全体・マークアップなし)。リクエスト単位の$内訳はAPI非提供のためOrcaRouterコンソール参照。
+      </p>
 
       <section>
         <h2 className="mb-2 text-sm font-bold text-slate-600">用途別 (対話=固定 / 要約=品質ルーティング / 定型=コスト優先)</h2>

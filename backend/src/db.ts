@@ -87,6 +87,11 @@ try {
   /* already exists */
 }
 try {
+  db.exec("ALTER TABLE tasks ADD COLUMN due TEXT");
+} catch {
+  /* already exists */
+}
+try {
   db.exec("ALTER TABLE llm_calls ADD COLUMN cached_tokens INTEGER NOT NULL DEFAULT 0");
 } catch {
   /* already exists */
@@ -143,6 +148,7 @@ function rowToTask(r: any): Task {
     reason: r.reason,
     context: r.context ?? null,
     lane: r.lane ?? null,
+    due: r.due ?? null,
     sort: r.sort ?? r.id,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
@@ -163,14 +169,14 @@ export function getTask(id: number): Task | undefined {
 
 export function updateTask(
   id: number,
-  patch: Partial<Pick<Task, "title" | "status" | "assignee" | "reason" | "sort" | "lane" | "context">>
+  patch: Partial<Pick<Task, "title" | "status" | "assignee" | "reason" | "sort" | "lane" | "context" | "due">>
 ): Task | undefined {
   const cur = getTask(id);
   if (!cur) return undefined;
   const next = { ...cur, ...patch };
   db.prepare(
-    "UPDATE tasks SET title = ?, status = ?, assignee = ?, reason = ?, sort = ?, lane = ?, context = ?, updated_at = datetime('now', 'localtime') WHERE id = ?"
-  ).run(next.title, next.status, next.assignee, next.reason, next.sort, next.lane, next.context, id);
+    "UPDATE tasks SET title = ?, status = ?, assignee = ?, reason = ?, sort = ?, lane = ?, context = ?, due = ?, updated_at = datetime('now', 'localtime') WHERE id = ?"
+  ).run(next.title, next.status, next.assignee, next.reason, next.sort, next.lane, next.context, next.due, id);
   if (patch.assignee && patch.assignee !== cur.assignee) {
     db.prepare("INSERT INTO assignment_history (task_title, assignee, note) VALUES (?, ?, ?)").run(
       next.title,

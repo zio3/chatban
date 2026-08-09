@@ -58,6 +58,7 @@ const tools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
                 title: { type: "string" },
                 assignee: { type: "string", description: "担当者名。未定なら省略" },
                 reason: { type: "string", description: "その担当にした理由。指名時は「指名」など" },
+                due: { type: "string", description: "期限 YYYY-MM-DD。相対表現は今日の日付から解決" },
               },
               required: ["title"],
             },
@@ -84,12 +85,13 @@ const tools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
                 title: { type: "string" },
                 status: { type: "string", enum: STATUS_VALUES },
                 assignee: { type: "string" },
-                reason: { type: "string", description: "担当変更の理由" },
+                reason: { type: "string", description: "担当変更・却下の判断理由。期限やlaneだけの変更では渡さない(既存の理由を上書きしてしまう)" },
                 lane: {
                   type: ["string", "null"],
                   enum: ["demo", "later", null],
                   description: "台本レーン。demo=デモ台本に必要, later=機能凍結後, null=未分類",
                 },
+                due: { type: ["string", "null"], description: "期限 YYYY-MM-DD。解除はnull" },
               },
               required: ["id"],
             },
@@ -115,7 +117,7 @@ const tools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
     type: "function",
     function: {
       name: "propose_assignments",
-      description: "割り振り案を提案する(人間の承認で確定)。理由には負荷・履歴の根拠を書く",
+      description: "割り振り案を提案する(人間の承認で確定)。理由には負荷・履歴・期限の根拠を書く",
       parameters: {
         type: "object",
         properties: {
@@ -221,9 +223,10 @@ const tools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
 async function execTool(name: string, args: any, uiActions: UiAction[], events: Set<string>): Promise<unknown> {
   switch (name) {
     case "create_tasks": {
-      const created = (args.tasks as any[]).map((t) =>
-        createTask(t.title, "todo", t.assignee ?? null, t.reason ?? null)
-      );
+      const created = (args.tasks as any[]).map((t) => {
+        const task = createTask(t.title, "todo", t.assignee ?? null, t.reason ?? null);
+        return t.due ? updateTask(task.id, { due: t.due }) : task;
+      });
       events.add("board");
       return { ok: true, created };
     }
@@ -235,6 +238,7 @@ async function execTool(name: string, args: any, uiActions: UiAction[], events: 
           ...(u.assignee !== undefined ? { assignee: u.assignee } : {}),
           ...(u.reason !== undefined ? { reason: u.reason } : {}),
           ...(u.lane !== undefined ? { lane: u.lane } : {}),
+          ...(u.due !== undefined ? { due: u.due } : {}),
         })
       );
       events.add("board");
@@ -320,6 +324,7 @@ function buildSystemPrompt(taskFocus?: ReturnType<typeof getTask>): string {
     "- 「ログ整頓して」は compact_archive を使う。完了タスクのアーカイブは自動なので手動操作は不要。",
     "- 削除と却下は文脈で使い分ける: 誤登録・重複・ダミー(「消して」「間違えた」)は delete_tasks。やらない決定(「見送り」「却下」「やらないことにした」)は削除せず update_tasks で status=done にし、reason に却下の根拠を書く (決定として要約アーカイブに残る)。どちらか曖昧なら削除せず確認する。",
     "- 「後回し」「今はやらない」「凍結後で」は却下ではない: update_tasks で lane を \"later\" にするだけ。status は変えない (done にするとアーカイブに吸い込まれる)。デモに必要なら lane を \"demo\" に。",
+    "- 「金曜まで」「明日まで」等の期限表現は今日の日付から YYYY-MM-DD に解決して due に入れる。期限が近い/過ぎたタスクはレポートや割り振り提案で優先的に言及する。",
     "- 操作後は結果を一言で報告する。長い説明はしない。",
     "",
     "## 設計思想 (構造カスタマイズの要望が来たときの応対)",
@@ -331,10 +336,11 @@ function buildSystemPrompt(taskFocus?: ReturnType<typeof getTask>): string {
     "断るときは設計理由 (語彙が固定だから一言が正確に通じる) を一言添える。",
     "",
     // ---- ここから動的セクション (毎ターン変わりうる。キャッシュ対象外になる想定) ----
+    `## 今日: ${new Date().toLocaleDateString("ja-JP", { year: "numeric", month: "2-digit", day: "2-digit", weekday: "short" })}`,
     projectContext ? `## プロジェクトの前提情報 (全員共有)\n${projectContext}\n` : "",
     "## ボードの索引 (status: todo=未着手, inprogress=作業中, review=レビュー中, done=完了)",
     "タイトルは要約品質で書かれている。詳細(割り振り理由・経緯メモ)が必要なら get_task_details で取る。完了タスクは自動アーカイブされここには載らない。",
-    JSON.stringify(tasks.map((t) => ({ id: t.id, title: t.title, status: t.status, assignee: t.assignee, ...(t.lane ? { lane: t.lane } : {}), ...(t.context ? { hasContext: true } : {}) }))),
+    JSON.stringify(tasks.map((t) => ({ id: t.id, title: t.title, status: t.status, assignee: t.assignee, ...(t.lane ? { lane: t.lane } : {}), ...(t.due ? { due: t.due } : {}), ...(t.context ? { hasContext: true } : {}) }))),
     "",
     summaryCards.length
       ? `## アーカイブ要約 (過去の完了の蒸留。過去の作業について聞かれたらここを参照)\n${JSON.stringify(

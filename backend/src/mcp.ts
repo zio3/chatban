@@ -69,6 +69,7 @@ export function buildMcpServer(onEvent: (kind: "board" | "proposals") => void): 
             reason: z.string().optional(),
             lane: z.enum(["demo", "later"]).nullable().optional().describe("demo=90秒台本に必要 / later=機能凍結後"),
             context: z.string().optional().describe("経緯メモ(詳細・決定事項)の全文上書き"),
+            due: z.string().nullable().optional().describe("期限 YYYY-MM-DD。解除はnull"),
           })
         ),
       },
@@ -82,6 +83,7 @@ export function buildMcpServer(onEvent: (kind: "board" | "proposals") => void): 
           ...(u.reason !== undefined ? { reason: u.reason } : {}),
           ...(u.lane !== undefined ? { lane: u.lane } : {}),
           ...(u.context !== undefined ? { context: u.context } : {}),
+          ...(u.due !== undefined ? { due: u.due } : {}),
         })
       );
       onEvent("board");

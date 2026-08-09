@@ -8,6 +8,8 @@ export interface Task {
   reason: string | null;
   context: string | null;
   lane: "demo" | "later" | null;
+  /** 期限 YYYY-MM-DD (#44) */
+  due: string | null;
   sort: number;
   createdAt: string;
   updatedAt: string;

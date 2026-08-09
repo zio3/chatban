@@ -9,6 +9,7 @@ export default defineConfig({
   plugins: [react(), tailwindcss()],
   server: {
     host: true, // #64: スマホ実機からLAN経由でアクセスできるように (http://<PCのIP>:5173)
+    allowedHosts: [".ts.net"], // Tailscale serve (https://main.<tailnet>.ts.net:5173) 経由のアクセスを許可
     proxy: {
       "/api": backend,
       "/socket.io": { target: backend, ws: true },

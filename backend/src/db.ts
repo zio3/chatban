@@ -86,6 +86,11 @@ try {
 } catch {
   /* already exists */
 }
+try {
+  db.exec("ALTER TABLE llm_calls ADD COLUMN cached_tokens INTEGER NOT NULL DEFAULT 0");
+} catch {
+  /* already exists */
+}
 db.exec(`
 CREATE TABLE IF NOT EXISTS summary_cards (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -398,11 +403,12 @@ export function recordLlmCall(row: {
   routedModel: string | null;
   promptTokens: number;
   completionTokens: number;
+  cachedTokens?: number;
   elapsedMs: number;
 }) {
   db.prepare(
-    "INSERT INTO llm_calls (purpose, model, routed_model, prompt_tokens, completion_tokens, elapsed_ms) VALUES (?, ?, ?, ?, ?, ?)"
-  ).run(row.purpose, row.model, row.routedModel, row.promptTokens, row.completionTokens, row.elapsedMs);
+    "INSERT INTO llm_calls (purpose, model, routed_model, prompt_tokens, completion_tokens, cached_tokens, elapsed_ms) VALUES (?, ?, ?, ?, ?, ?, ?)"
+  ).run(row.purpose, row.model, row.routedModel, row.promptTokens, row.completionTokens, row.cachedTokens ?? 0, row.elapsedMs);
 }
 
 export function metrics() {

@@ -20,11 +20,12 @@ export const client = new OpenAI({
 });
 
 // 用途別モデル戦略 (Day2の実測比較で決定。切り替えはモデルID1行 — ルーターの利点):
-//  - 対話(main): 応答速度が生命線 → Haiku固定 (平均3秒・品質は割り振り判断まで実用を確認済み)
+//  - 対話(main): OpenAI系は自動プロンプトキャッシュがOrcaRouter経由でも効く(実測: 2回目以降の入力85-95%が0.1x課金)。
+//    Anthropicはcache_control明示方式でOpenAI互換経由では現状不発 → キャッシュの取れるgpt-5.4-mini固定
 //  - 要約の要素分解(archive): 品質が肝 + 非同期でレイテンシ許容 → ルーティングに委任
 //  - 定型(cheap): タイトル生成など → コスト優先ルーティング
 export const MODELS = {
-  main: process.env.ORCA_MODEL_MAIN ?? "anthropic/claude-haiku-4.5",
+  main: process.env.ORCA_MODEL_MAIN ?? "openai/gpt-5.4-mini-2026-03-17",
   archive: process.env.ORCA_MODEL_ARCHIVE ?? "orcarouter/auto",
   cheap: process.env.ORCA_MODEL_CHEAP ?? "orcarouter/fusion-mini",
 };
@@ -44,9 +45,10 @@ export async function chatCompletion(
     throw e;
   }
   const elapsedMs = Date.now() - t0;
+  const cachedTokens = (res.usage as any)?.prompt_tokens_details?.cached_tokens ?? 0;
   log(
     "llm",
-    `<- ${purpose} routed=${res.model} finish=${res.choices[0]?.finish_reason} tokens=${res.usage?.prompt_tokens}/${res.usage?.completion_tokens} ${elapsedMs}ms`
+    `<- ${purpose} routed=${res.model} finish=${res.choices[0]?.finish_reason} tokens=${res.usage?.prompt_tokens}/${res.usage?.completion_tokens} cached=${cachedTokens} ${elapsedMs}ms`
   );
   recordLlmCall({
     purpose,
@@ -54,6 +56,7 @@ export async function chatCompletion(
     routedModel: res.model ?? null,
     promptTokens: res.usage?.prompt_tokens ?? 0,
     completionTokens: res.usage?.completion_tokens ?? 0,
+    cachedTokens,
     elapsedMs,
   });
   return res;

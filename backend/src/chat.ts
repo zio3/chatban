@@ -265,27 +265,11 @@ function buildSystemPrompt(): string {
   const pending = listPendingProposals();
   const projectContext = getProjectContext();
   const summaryCards = listSummaryCards();
+  // キャッシュ友好の並び: 静的な内容(人格/ルール/思想)を先頭に固定し、動的な内容(索引/履歴/カード)を末尾へ。
+  // プロンプトキャッシュはプレフィックス一致なので、先頭が安定しているほどヒット部分が伸びる。
   return [
     "あなたはチームのタスク管理ボード「ChatBan」のアシスタント。日本語で簡潔に応答する。",
     "",
-    projectContext ? `## プロジェクトの前提情報 (全員共有)\n${projectContext}\n` : "",
-    "## ボードの索引 (status: todo=未着手, inprogress=作業中, review=レビュー中, done=完了)",
-    "タイトルは要約品質で書かれている。詳細(割り振り理由・経緯メモ)が必要なら get_task_details で取る。完了タスクは自動アーカイブされここには載らない。",
-    JSON.stringify(tasks.map((t) => ({ id: t.id, title: t.title, status: t.status, assignee: t.assignee, ...(t.lane ? { lane: t.lane } : {}), ...(t.context ? { hasContext: true } : {}) }))),
-    "",
-    summaryCards.length
-      ? `## アーカイブ要約 (過去の完了の蒸留。過去の作業について聞かれたらここを参照)\n${JSON.stringify(
-          summaryCards.map((c) => ({ id: c.id, title: c.title, elements: c.elements.map((e) => e.text) }))
-        )}`
-      : "",
-    "",
-    "## メンバーと現在の担当タスク数(未完了)",
-    JSON.stringify(loads),
-    "",
-    "## 過去の割り振り履歴 (類似タスクの参考にする)",
-    JSON.stringify(history.slice(0, 10).map((h) => ({ t: h.taskTitle.slice(0, 30), a: h.assignee }))),
-    "",
-    pending.length ? `## 承認待ちの割り振り提案\n${JSON.stringify(pending)}` : "",
     "## 行動ルール",
     "- タスクにすべき発言(「〜を追加して」「〜やらないと」「タスク: 〜」等)は確認を挟まず即 create_tasks で登録する。テンポ優先。",
     "- ただし「候補を挙げて」「相談したい」のような明示的な相談モードのときだけは、登録せずテキストで候補を提示する。",
@@ -307,6 +291,26 @@ function buildSystemPrompt(): string {
     "- 分類したい → lane (demo/later) か、タイトルの付け方で表現する",
     "- 優先したい → 並び順 (「これ上にして」) で表現する",
     "断るときは設計理由 (語彙が固定だから一言が正確に通じる) を一言添える。",
+    "",
+    // ---- ここから動的セクション (毎ターン変わりうる。キャッシュ対象外になる想定) ----
+    projectContext ? `## プロジェクトの前提情報 (全員共有)\n${projectContext}\n` : "",
+    "## ボードの索引 (status: todo=未着手, inprogress=作業中, review=レビュー中, done=完了)",
+    "タイトルは要約品質で書かれている。詳細(割り振り理由・経緯メモ)が必要なら get_task_details で取る。完了タスクは自動アーカイブされここには載らない。",
+    JSON.stringify(tasks.map((t) => ({ id: t.id, title: t.title, status: t.status, assignee: t.assignee, ...(t.lane ? { lane: t.lane } : {}), ...(t.context ? { hasContext: true } : {}) }))),
+    "",
+    summaryCards.length
+      ? `## アーカイブ要約 (過去の完了の蒸留。過去の作業について聞かれたらここを参照)\n${JSON.stringify(
+          summaryCards.map((c) => ({ id: c.id, title: c.title, elements: c.elements.map((e) => e.text) }))
+        )}`
+      : "",
+    "",
+    "## メンバーと現在の担当タスク数(未完了)",
+    JSON.stringify(loads),
+    "",
+    "## 過去の割り振り履歴 (類似タスクの参考にする)",
+    JSON.stringify(history.slice(0, 10).map((h) => ({ t: h.taskTitle.slice(0, 30), a: h.assignee }))),
+    "",
+    pending.length ? `## 承認待ちの割り振り提案\n${JSON.stringify(pending)}` : "",
   ]
     .filter(Boolean)
     .join("\n");

@@ -34,6 +34,14 @@ CREATE TABLE IF NOT EXISTS assignment_history (
   note TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
 );
+CREATE TABLE IF NOT EXISTS chat_messages (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  role TEXT NOT NULL,
+  content TEXT NOT NULL,
+  trace TEXT,
+  usage TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
+);
 CREATE TABLE IF NOT EXISTS llm_calls (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   purpose TEXT NOT NULL,
@@ -49,6 +57,11 @@ CREATE TABLE IF NOT EXISTS llm_calls (
 // 既存DBへの列追加 (EF Migration不使用の流儀: 失敗=適用済みとして無視)
 try {
   db.exec("ALTER TABLE tasks ADD COLUMN sort REAL");
+} catch {
+  /* already exists */
+}
+try {
+  db.exec("ALTER TABLE tasks ADD COLUMN lane TEXT");
 } catch {
   /* already exists */
 }
@@ -82,6 +95,7 @@ function rowToTask(r: any): Task {
     status: r.status,
     assignee: r.assignee,
     reason: r.reason,
+    lane: r.lane ?? null,
     sort: r.sort ?? r.id,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
@@ -102,14 +116,14 @@ export function getTask(id: number): Task | undefined {
 
 export function updateTask(
   id: number,
-  patch: Partial<Pick<Task, "title" | "status" | "assignee" | "reason" | "sort">>
+  patch: Partial<Pick<Task, "title" | "status" | "assignee" | "reason" | "sort" | "lane">>
 ): Task | undefined {
   const cur = getTask(id);
   if (!cur) return undefined;
   const next = { ...cur, ...patch };
   db.prepare(
-    "UPDATE tasks SET title = ?, status = ?, assignee = ?, reason = ?, sort = ?, updated_at = datetime('now', 'localtime') WHERE id = ?"
-  ).run(next.title, next.status, next.assignee, next.reason, next.sort, id);
+    "UPDATE tasks SET title = ?, status = ?, assignee = ?, reason = ?, sort = ?, lane = ?, updated_at = datetime('now', 'localtime') WHERE id = ?"
+  ).run(next.title, next.status, next.assignee, next.reason, next.sort, next.lane, id);
   if (patch.assignee && patch.assignee !== cur.assignee) {
     db.prepare("INSERT INTO assignment_history (task_title, assignee, note) VALUES (?, ?, ?)").run(
       next.title,
@@ -194,6 +208,34 @@ export function resolveProposal(id: number, status: "approved" | "rejected"): Pr
     updateTask(p.taskId, { assignee: p.assignee, reason: p.reason });
   }
   return p;
+}
+
+export function saveChatMessage(role: "user" | "assistant", content: string, trace?: unknown, usage?: unknown) {
+  db.prepare("INSERT INTO chat_messages (role, content, trace, usage) VALUES (?, ?, ?, ?)").run(
+    role,
+    content,
+    trace ? JSON.stringify(trace) : null,
+    usage ? JSON.stringify(usage) : null
+  );
+}
+
+export function listChatMessages(limit = 50): {
+  role: "user" | "assistant";
+  content: string;
+  trace: unknown;
+  usage: unknown;
+  createdAt: string;
+}[] {
+  const rows = db
+    .prepare("SELECT * FROM (SELECT * FROM chat_messages ORDER BY id DESC LIMIT ?) ORDER BY id")
+    .all(limit) as any[];
+  return rows.map((r) => ({
+    role: r.role,
+    content: r.content,
+    trace: r.trace ? JSON.parse(r.trace) : undefined,
+    usage: r.usage ? JSON.parse(r.usage) : undefined,
+    createdAt: r.created_at,
+  }));
 }
 
 export function recordLlmCall(row: {

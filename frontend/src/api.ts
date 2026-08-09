@@ -16,6 +16,10 @@ export const api = {
     }).then((r) => json<Task>(r)),
   resolveProposal: (id: number, action: "approve" | "reject") =>
     fetch(`/api/proposals/${id}/${action}`, { method: "POST" }).then((r) => json<Proposal>(r)),
+  chatLog: () =>
+    fetch("/api/chat/log").then((r) =>
+      json<{ messages: { role: "user" | "assistant"; content: string; trace?: unknown; usage?: unknown }[] }>(r)
+    ),
   chat: (message: string, history: { role: "user" | "assistant"; content: string }[]) =>
     fetch("/api/chat", {
       method: "POST",

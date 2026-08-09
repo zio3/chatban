@@ -73,6 +73,11 @@ const tools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
                 status: { type: "string", enum: STATUS_VALUES },
                 assignee: { type: "string" },
                 reason: { type: "string", description: "担当変更の理由" },
+                lane: {
+                  type: ["string", "null"],
+                  enum: ["demo", "later", null],
+                  description: "台本レーン。demo=デモ台本に必要, later=機能凍結後, null=未分類",
+                },
               },
               required: ["id"],
             },
@@ -152,6 +157,7 @@ function execTool(name: string, args: any, uiActions: UiAction[], events: Set<st
           ...(u.status !== undefined ? { status: u.status as TaskStatus } : {}),
           ...(u.assignee !== undefined ? { assignee: u.assignee } : {}),
           ...(u.reason !== undefined ? { reason: u.reason } : {}),
+          ...(u.lane !== undefined ? { lane: u.lane } : {}),
         })
       );
       events.add("board");
@@ -206,10 +212,19 @@ function buildSystemPrompt(): string {
     .join("\n");
 }
 
+const TOOL_LABELS: Record<string, string> = {
+  create_tasks: "タスクを追加",
+  update_tasks: "タスクを更新",
+  delete_tasks: "タスクを削除",
+  propose_assignments: "割り振りを検討",
+  set_view: "ビューを切替",
+};
+
 export async function runChatTurn(
   userMessage: string,
   history: { role: "user" | "assistant"; content: string }[],
-  onEvent: (kind: "board" | "proposals") => void
+  onEvent: (kind: "board" | "proposals") => void,
+  onProgress?: (label: string) => void
 ): Promise<ChatResult> {
   const t0 = Date.now();
   const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
@@ -240,6 +255,7 @@ export async function runChatTurn(
           /* 引数パース失敗時は空で実行し、エラーはツール結果に出る */
         }
         log("tool", `${tc.function.name} ${tc.function.arguments?.slice(0, 200)}`);
+        onProgress?.(TOOL_LABELS[tc.function.name] ?? tc.function.name);
         const result = execTool(tc.function.name, args, uiActions, events as Set<string>);
         trace.push({ tool: tc.function.name, input: args, result });
         messages.push({ role: "tool", tool_call_id: tc.id, content: JSON.stringify(result) });

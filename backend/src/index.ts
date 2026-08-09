@@ -9,11 +9,13 @@ import { buildMcpServer } from "./mcp.js";
 import {
   createTask,
   deleteTask,
+  listChatMessages,
   listMembers,
   listPendingProposals,
   listTasks,
   metrics,
   resolveProposal,
+  saveChatMessage,
   updateTask,
 } from "./db.js";
 
@@ -81,10 +83,18 @@ app.post("/api/chat", async (req, res) => {
     if (!res.writableEnded) log("chat", `#${id} CLIENT DISCONNECTED after ${Date.now() - t0}ms`);
   });
   try {
-    const result = await runChatTurn(message, history ?? [], (kind) => {
-      if (kind === "board") broadcastBoard();
-      else broadcastProposals();
-    });
+    const result = await runChatTurn(
+      message,
+      history ?? [],
+      (kind) => {
+        if (kind === "board") broadcastBoard();
+        else broadcastProposals();
+      },
+      (label) => io.emit("chat:progress", { label }) // 応答完了前の逐次フィードバック
+    );
+    // 会話ログはサーバーに永続化する (受領ブリーフィングの素材 + リロードで消えない)
+    saveChatMessage("user", message);
+    saveChatMessage("assistant", result.reply, result.trace, result.usage);
     log(
       "chat",
       `#${id} OK ${Date.now() - t0}ms rounds=${result.usage.rounds} tools=[${result.trace.map((t) => t.tool).join(",")}] reply=${result.reply.length}ch`
@@ -94,6 +104,10 @@ app.post("/api/chat", async (req, res) => {
     log("chat", `#${id} FAILED ${Date.now() - t0}ms: ${e?.message ?? e}`);
     res.status(500).json({ error: e?.message ?? "chat failed" });
   }
+});
+
+app.get("/api/chat/log", (req, res) => {
+  res.json({ messages: listChatMessages(Number(req.query.limit ?? 50)) });
 });
 
 app.get("/api/metrics", (_req, res) => {

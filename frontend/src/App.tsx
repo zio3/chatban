@@ -40,9 +40,17 @@ export default function App() {
 
   useEffect(() => {
     reload();
+    // サーバー保存された会話履歴を復元 (リロードで消えない)
+    api.chatLog().then((r) => setChatLog(r.messages as ChatEntry[])).catch(() => {});
     const socket = io();
     socket.on("board:changed", (p: { tasks: Task[] }) => setTasks(p.tasks));
     socket.on("proposals:changed", (p: { proposals: Proposal[] }) => setProposals(p.proposals));
+    // ツール実行の逐次フィードバック: 応答待ちの吹き出しに実行中の操作を表示
+    socket.on("chat:progress", (p: { label: string }) => {
+      setChatLog((prev) =>
+        prev.map((e) => (e.pending ? { ...e, content: `🔧 ${p.label}中…` } : e))
+      );
+    });
     return () => {
       socket.disconnect();
     };

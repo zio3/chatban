@@ -6,6 +6,8 @@ export interface Task {
   status: TaskStatus;
   assignee: string | null;
   reason: string | null;
+  /** demo=90秒台本に必要 / later=機能凍結後 / null=未分類 */
+  lane: "demo" | "later" | null;
   sort: number;
   createdAt: string;
   updatedAt: string;

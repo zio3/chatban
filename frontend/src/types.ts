@@ -6,6 +6,7 @@ export interface Task {
   status: TaskStatus;
   assignee: string | null;
   reason: string | null;
+  lane: "demo" | "later" | null;
   sort: number;
   createdAt: string;
   updatedAt: string;

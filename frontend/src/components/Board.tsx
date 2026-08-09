@@ -28,6 +28,12 @@ function TaskCard({ task, overlay = false }: { task: Task; overlay?: boolean }) 
       <div className="flex items-start justify-between gap-2">
         <span className="text-sm font-medium leading-snug">
           <span className="mr-1 text-xs text-slate-400">#{task.id}</span>
+          {task.lane === "demo" && (
+            <span className="mr-1 rounded bg-amber-100 px-1 py-0.5 text-[10px] font-bold text-amber-700">🎬 DEMO</span>
+          )}
+          {task.lane === "later" && (
+            <span className="mr-1 rounded bg-slate-100 px-1 py-0.5 text-[10px] text-slate-400">⏸ 凍結後</span>
+          )}
           {task.title}
         </span>
         {task.assignee && (

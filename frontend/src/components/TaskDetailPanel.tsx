@@ -110,6 +110,9 @@ export default function TaskDetailPanel({
           </div>
         )}
         <div className="flex flex-wrap items-center gap-2 text-sm">
+          {task.rejected && (
+            <span className="rounded-full bg-rose-600 px-2.5 py-0.5 text-xs font-bold text-white">🚫 却下</span>
+          )}
           <span className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${status.cls}`}>{status.label}</span>
           {task.assignee && (
             <span className="rounded-full bg-indigo-100 px-2.5 py-0.5 text-xs font-medium text-indigo-700">

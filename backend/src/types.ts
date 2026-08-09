@@ -14,6 +14,8 @@ export interface Task {
   due: string | null;
   /** 依存先タスクID (#41)。このタスクは blocked_by の全タスクが完了するまで着手できない想定 */
   blockedBy: number[] | null;
+  /** 却下=やらない決定 (#65)。reason に却下理由を持ち、要約でも【却下】として蒸留される */
+  rejected: boolean;
   sort: number;
   createdAt: string;
   updatedAt: string;

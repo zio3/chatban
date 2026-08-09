@@ -71,6 +71,7 @@ export function buildMcpServer(onEvent: (kind: "board" | "proposals") => void): 
             context: z.string().optional().describe("経緯メモ(詳細・決定事項)の全文上書き"),
             due: z.string().nullable().optional().describe("期限 YYYY-MM-DD。解除はnull"),
             blocked_by: z.array(z.number().int()).nullable().optional().describe("依存先タスクID(全置換)。解除はnull"),
+            rejected: z.boolean().optional().describe("却下(やらない決定)フラグ。reasonに根拠を書く"),
           })
         ),
       },
@@ -88,6 +89,8 @@ export function buildMcpServer(onEvent: (kind: "board" | "proposals") => void): 
             ...(u.lane !== undefined ? { lane: u.lane } : {}),
             ...(u.context !== undefined ? { context: u.context } : {}),
             ...(u.due !== undefined ? { due: u.due } : {}),
+            ...(u.blocked_by !== undefined ? { blockedBy: u.blocked_by } : {}),
+            ...(u.rejected !== undefined ? { rejected: u.rejected } : {}),
           },
         }))
       );

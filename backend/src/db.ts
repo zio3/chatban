@@ -97,6 +97,11 @@ try {
   /* already exists */
 }
 try {
+  db.exec("ALTER TABLE tasks ADD COLUMN rejected INTEGER NOT NULL DEFAULT 0");
+} catch {
+  /* already exists */
+}
+try {
   db.exec("ALTER TABLE llm_calls ADD COLUMN cached_tokens INTEGER NOT NULL DEFAULT 0");
 } catch {
   /* already exists */
@@ -155,6 +160,7 @@ function rowToTask(r: any): Task {
     lane: r.lane ?? null,
     due: r.due ?? null,
     blockedBy: r.blocked_by ? JSON.parse(r.blocked_by) : null,
+    rejected: !!r.rejected,
     sort: r.sort ?? r.id,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
@@ -174,7 +180,7 @@ export function getTask(id: number): Task | undefined {
 }
 
 export type TaskPatch = Partial<
-  Pick<Task, "title" | "status" | "assignee" | "reason" | "sort" | "lane" | "context" | "due" | "blockedBy">
+  Pick<Task, "title" | "status" | "assignee" | "reason" | "sort" | "lane" | "context" | "due" | "blockedBy" | "rejected">
 >;
 
 /** 複数タスクの一括更新 (#60)。完了遷移はまとめて1回だけ通知する (要約再生成のバッチ化)。
@@ -187,7 +193,7 @@ export function updateTasks(patches: { id: number; patch: TaskPatch }[]): (Task 
     if (!cur) return undefined;
     const next = { ...cur, ...patch };
     db.prepare(
-      "UPDATE tasks SET title = ?, status = ?, assignee = ?, reason = ?, sort = ?, lane = ?, context = ?, due = ?, blocked_by = ?, updated_at = datetime('now', 'localtime') WHERE id = ?"
+      "UPDATE tasks SET title = ?, status = ?, assignee = ?, reason = ?, sort = ?, lane = ?, context = ?, due = ?, blocked_by = ?, rejected = ?, updated_at = datetime('now', 'localtime') WHERE id = ?"
     ).run(
       next.title,
       next.status,
@@ -198,6 +204,7 @@ export function updateTasks(patches: { id: number; patch: TaskPatch }[]): (Task 
       next.context,
       next.due,
       next.blockedBy?.length ? JSON.stringify(next.blockedBy) : null,
+      next.rejected ? 1 : 0,
       id
     );
     if (patch.assignee && patch.assignee !== cur.assignee) {

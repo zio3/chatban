@@ -93,6 +93,7 @@ const tools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
                 },
                 due: { type: ["string", "null"], description: "期限 YYYY-MM-DD。解除はnull" },
                 blocked_by: { type: ["array", "null"], items: { type: "integer" }, description: "依存先タスクID(全置換)。解除はnull" },
+                rejected: { type: "boolean", description: "却下(やらない決定)フラグ。却下時はtrue+reasonに根拠。取り消しはfalse" },
               },
               required: ["id"],
             },
@@ -241,7 +242,8 @@ async function execTool(name: string, args: any, uiActions: UiAction[], events: 
         (args.updates as any[]).map((u) => {
           // reason上書きガード: 担当・状態の変更を伴わない更新(lane/due/依存のみ等)で
           // LLMがreasonを添えると既存の割り振り理由が破壊されるため無視する (実事故2件の再発防止)
-          const keepReason = u.reason !== undefined && (u.assignee !== undefined || u.status !== undefined);
+          const keepReason =
+            u.reason !== undefined && (u.assignee !== undefined || u.status !== undefined || u.rejected !== undefined);
           return {
             id: u.id,
             patch: {
@@ -252,6 +254,7 @@ async function execTool(name: string, args: any, uiActions: UiAction[], events: 
               ...(u.lane !== undefined ? { lane: u.lane } : {}),
               ...(u.due !== undefined ? { due: u.due } : {}),
               ...(u.blocked_by !== undefined ? { blockedBy: u.blocked_by } : {}),
+              ...(u.rejected !== undefined ? { rejected: !!u.rejected } : {}),
             },
           };
         })
@@ -334,7 +337,7 @@ function buildSystemPrompt(taskFocus?: ReturnType<typeof getTask>): string {
     "- チーム共通の前提・決まりごと(締切、方針、用語など)を伝えられたら update_project_context で前提情報に反映する。",
     "- 特定タスクの経緯・決定事項・補足(「#22は◯◯方式でいくことにした」等)は update_task_context でそのタスクの経緯メモに記録する。",
     "- 「ログ整頓して」は compact_archive を使う。完了タスクのアーカイブは自動なので手動操作は不要。",
-    "- 削除と却下は文脈で使い分ける: 誤登録・重複・ダミー(「消して」「間違えた」)は delete_tasks。やらない決定(「見送り」「却下」「やらないことにした」)は削除せず update_tasks で status=review に置き、reason に却下の根拠を書いて「却下としてReviewに置きました。検収で確定します」と返す (検収後、決定として要約アーカイブに残る)。どちらか曖昧なら操作せず確認する。",
+    "- 削除と却下は文脈で使い分ける: 誤登録・重複・ダミー(「消して」「間違えた」)は delete_tasks。やらない決定(「見送り」「却下」「やらないことにした」)は削除せず update_tasks で status=review + rejected=true にし、reason に却下の根拠を書いて「却下としてReviewに置きました。検収で確定します」と返す (検収後、決定として要約アーカイブに残る)。どちらか曖昧なら操作せず確認する。",
     "- ボードから退場するもの(完了・却下)は必ずReviewを通る。done へ直行してよいのは人間の明示(「doneまで行っちゃって」等)だけ。",
     "- 「後回し」「今はやらない」「凍結後で」は却下ではない: update_tasks で lane を \"later\" にするだけ。status は変えない (done にするとアーカイブに吸い込まれる)。デモに必要なら lane を \"demo\" に。",
     "- 「金曜まで」「明日まで」等の期限表現は今日の日付から YYYY-MM-DD に解決して due に入れる。期限が近い/過ぎたタスクはレポートや割り振り提案で優先的に言及する。",

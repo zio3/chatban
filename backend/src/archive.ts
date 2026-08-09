@@ -41,7 +41,13 @@ export async function regenerateCard(cardId: number): Promise<SummaryCard | unde
     updateCardContent(cardId, null, card.elements.filter((e) => e.checked));
     return getSummaryCard(cardId);
   }
-  const taskData = tasks.map((t) => ({ id: t.id, title: t.title, assignee: t.assignee, reason: t.reason }));
+  const taskData = tasks.map((t) => ({
+    id: t.id,
+    title: t.title,
+    assignee: t.assignee,
+    reason: t.reason,
+    ...(t.rejected ? { rejected: true } : {}),
+  }));
   const checkedElements = card.elements.filter((e) => e.checked);
 
   // 要素分解 (品質が肝・非同期なのでレイテンシ許容): ルーティング委任
@@ -55,6 +61,7 @@ export async function regenerateCard(cardId: number): Promise<SummaryCard | unde
           "- 単なる件数ではなく、決定事項・担当の偏り・成果の内容が残る形に凝縮する",
           "- 関連するタスクはまとめて1要素にする。タスクIDを #n 形式で含める",
           "- 些末なタスク(動作検証・軽微な修正等)は独立要素にせず省いてよい。省いた分は末尾に「ほか軽微N件 (#x, #y)」として1行でまとめる",
+          "- rejected=true のタスクは「やらないと決めた」決定。省かず、要素の先頭に【却下】と付け、reason の却下理由を要素文に残す (なぜやらないかが後から分かるように)",
           "- 「確認済み要素」に既に含まれている内容は出力しない (その要素は変更せず保持される)",
           "- 2〜5要素程度、各1文",
           '- 出力はJSON文字列配列のみ: ["要素1", "要素2"]',

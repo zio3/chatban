@@ -58,6 +58,9 @@ function TaskCard({
       <div className="flex items-start justify-between gap-2">
         <span className="text-sm font-medium leading-snug">
           <span className="mr-1 text-xs text-slate-400">#{task.id}</span>
+          {task.rejected && (
+            <span className="mr-1 rounded bg-rose-600 px-1.5 py-0.5 text-[10px] font-bold text-white">🚫 却下</span>
+          )}
           {task.lane === "demo" && (
             <span className="mr-1 rounded bg-amber-100 px-1 py-0.5 text-[10px] font-bold text-amber-700">🎬 DEMO</span>
           )}

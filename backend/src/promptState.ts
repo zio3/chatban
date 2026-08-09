@@ -38,6 +38,7 @@ function capture(): Snapshot {
         ...(t.lane ? { lane: t.lane } : {}),
         ...(t.due ? { due: t.due } : {}),
         ...(t.blockedBy?.length ? { dep: t.blockedBy } : {}),
+        ...(t.rejected ? { rejected: true } : {}),
         ...(t.context ? { hasContext: true } : {}),
       }),
     ])

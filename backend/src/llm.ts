@@ -19,11 +19,13 @@ export const client = new OpenAI({
   baseURL: process.env.ORCA_BASE_URL ?? "https://www.orcarouter.ai/v1",
 });
 
-// 全面的にOrcaRouterのルーティングに任せる実験中 (2026-08-09〜)。
-// ルーティングLLM自体は無料で、プロンプトの粒度分類→コスト最適なモデル選択はOrcaRouter側が行う。
-// 固定に戻す場合は env で ORCA_MODEL_MAIN=anthropic/claude-haiku-4.5 等を指定。
+// 用途別モデル戦略 (Day2の実測比較で決定。切り替えはモデルID1行 — ルーターの利点):
+//  - 対話(main): 応答速度が生命線 → Haiku固定 (平均3秒・品質は割り振り判断まで実用を確認済み)
+//  - 要約の要素分解(archive): 品質が肝 + 非同期でレイテンシ許容 → ルーティングに委任
+//  - 定型(cheap): タイトル生成など → コスト優先ルーティング
 export const MODELS = {
-  main: process.env.ORCA_MODEL_MAIN ?? "orcarouter/auto",
+  main: process.env.ORCA_MODEL_MAIN ?? "anthropic/claude-haiku-4.5",
+  archive: process.env.ORCA_MODEL_ARCHIVE ?? "orcarouter/auto",
   cheap: process.env.ORCA_MODEL_CHEAP ?? "orcarouter/fusion-mini",
 };
 

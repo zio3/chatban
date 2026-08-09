@@ -43,8 +43,8 @@ export async function regenerateCard(cardId: number): Promise<SummaryCard | unde
   const taskData = tasks.map((t) => ({ id: t.id, title: t.title, assignee: t.assignee, reason: t.reason }));
   const checkedElements = card.elements.filter((e) => e.checked);
 
-  // 要素分解 (品質優先): 生データ全体から確認単位を再生成。チェック済みは固定
-  const res = await chatCompletion("archive-decompose", MODELS.main, {
+  // 要素分解 (品質が肝・非同期なのでレイテンシ許容): ルーティング委任
+  const res = await chatCompletion("archive-decompose", MODELS.archive, {
     messages: [
       {
         role: "system",

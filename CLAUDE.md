@@ -30,7 +30,7 @@ cd backend; npx tsc --noEmit           # 型チェック (frontendも同様)
 ## APIキー・モデル
 
 - OrcaRouter APIキー: 環境変数 `ORCAROUTER_API_KEY` または `~\.orcarouter\apikey.txt` (1行)。**キーの値をチャットやログに出さない**
-- モデルは `orcarouter/auto` (全面ルーティング実験中)。固定に戻す: `ORCA_MODEL_MAIN=anthropic/claude-haiku-4.5`
+- モデルは用途別 (Day2実測で決定): 対話=`anthropic/claude-haiku-4.5`固定 / 要約分解=`orcarouter/auto` / 定型=`orcarouter/fusion-mini`。env `ORCA_MODEL_MAIN` / `ORCA_MODEL_ARCHIVE` / `ORCA_MODEL_CHEAP` で上書き可
 - モデルIDは `provider/model` 形式必須 (`gpt-4o-mini` 等は model_not_found)
 
 ## 開発運用 (ドッグフーディング)

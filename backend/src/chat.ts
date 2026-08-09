@@ -58,6 +58,7 @@ const tools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
                 assignee: { type: "string", description: "担当者名。未定なら省略" },
                 reason: { type: "string", description: "その担当にした理由。指名時は「指名」など" },
                 due: { type: "string", description: "期限 YYYY-MM-DD。相対表現は今日の日付から解決" },
+                blocked_by: { type: "array", items: { type: "integer" }, description: "依存先タスクID(これらが終わるまで着手不可)" },
               },
               required: ["title"],
             },
@@ -91,6 +92,7 @@ const tools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
                   description: "台本レーン。demo=デモ台本に必要, later=機能凍結後, null=未分類",
                 },
                 due: { type: ["string", "null"], description: "期限 YYYY-MM-DD。解除はnull" },
+                blocked_by: { type: ["array", "null"], items: { type: "integer" }, description: "依存先タスクID(全置換)。解除はnull" },
               },
               required: ["id"],
             },
@@ -224,7 +226,11 @@ async function execTool(name: string, args: any, uiActions: UiAction[], events: 
     case "create_tasks": {
       const created = (args.tasks as any[]).map((t) => {
         const task = createTask(t.title, "todo", t.assignee ?? null, t.reason ?? null);
-        return t.due ? updateTask(task.id, { due: t.due }) : task;
+        const extra = {
+          ...(t.due ? { due: t.due } : {}),
+          ...(t.blocked_by?.length ? { blockedBy: t.blocked_by } : {}),
+        };
+        return Object.keys(extra).length > 0 ? updateTask(task.id, extra) : task;
       });
       events.add("board");
       return { ok: true, created };
@@ -232,17 +238,23 @@ async function execTool(name: string, args: any, uiActions: UiAction[], events: 
     case "update_tasks": {
       // 一括更新は db 層でまとめて処理 (完了遷移の通知=要約再生成が1回で済む #60)
       const updated = updateTasks(
-        (args.updates as any[]).map((u) => ({
-          id: u.id,
-          patch: {
-            ...(u.title !== undefined ? { title: u.title } : {}),
-            ...(u.status !== undefined ? { status: u.status as TaskStatus } : {}),
-            ...(u.assignee !== undefined ? { assignee: u.assignee } : {}),
-            ...(u.reason !== undefined ? { reason: u.reason } : {}),
-            ...(u.lane !== undefined ? { lane: u.lane } : {}),
-            ...(u.due !== undefined ? { due: u.due } : {}),
-          },
-        }))
+        (args.updates as any[]).map((u) => {
+          // reason上書きガード: 担当・状態の変更を伴わない更新(lane/due/依存のみ等)で
+          // LLMがreasonを添えると既存の割り振り理由が破壊されるため無視する (実事故2件の再発防止)
+          const keepReason = u.reason !== undefined && (u.assignee !== undefined || u.status !== undefined);
+          return {
+            id: u.id,
+            patch: {
+              ...(u.title !== undefined ? { title: u.title } : {}),
+              ...(u.status !== undefined ? { status: u.status as TaskStatus } : {}),
+              ...(u.assignee !== undefined ? { assignee: u.assignee } : {}),
+              ...(keepReason ? { reason: u.reason } : {}),
+              ...(u.lane !== undefined ? { lane: u.lane } : {}),
+              ...(u.due !== undefined ? { due: u.due } : {}),
+              ...(u.blocked_by !== undefined ? { blockedBy: u.blocked_by } : {}),
+            },
+          };
+        })
       );
       events.add("board");
       return { ok: true, updated };
@@ -326,6 +338,7 @@ function buildSystemPrompt(taskFocus?: ReturnType<typeof getTask>): string {
     "- ボードから退場するもの(完了・却下)は必ずReviewを通る。done へ直行してよいのは人間の明示(「doneまで行っちゃって」等)だけ。",
     "- 「後回し」「今はやらない」「凍結後で」は却下ではない: update_tasks で lane を \"later\" にするだけ。status は変えない (done にするとアーカイブに吸い込まれる)。デモに必要なら lane を \"demo\" に。",
     "- 「金曜まで」「明日まで」等の期限表現は今日の日付から YYYY-MM-DD に解決して due に入れる。期限が近い/過ぎたタスクはレポートや割り振り提案で優先的に言及する。",
+    "- 「#AはB待ち」「Bが終わってから」等の依存表現は blocked_by に依存先IDを登録する(複数可)。索引の dep がそれ。依存先が未完了のタスクは割り振り提案の対象にせず、レポートでは「#N待ち」と添える。",
     "- 操作後は結果を一言で報告する。長い説明はしない。",
     "",
     "## 設計思想 (構造カスタマイズの要望が来たときの応対)",

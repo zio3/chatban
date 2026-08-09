@@ -37,6 +37,7 @@ function capture(): Snapshot {
         assignee: t.assignee,
         ...(t.lane ? { lane: t.lane } : {}),
         ...(t.due ? { due: t.due } : {}),
+        ...(t.blockedBy?.length ? { dep: t.blockedBy } : {}),
         ...(t.context ? { hasContext: true } : {}),
       }),
     ])

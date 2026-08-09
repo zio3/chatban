@@ -12,6 +12,8 @@ export interface Task {
   lane: "demo" | "later" | null;
   /** 期限 YYYY-MM-DD (#44)。相対表現はチャットが今日の日付から解決して格納する */
   due: string | null;
+  /** 依存先タスクID (#41)。このタスクは blocked_by の全タスクが完了するまで着手できない想定 */
+  blockedBy: number[] | null;
   sort: number;
   createdAt: string;
   updatedAt: string;

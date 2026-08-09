@@ -37,6 +37,7 @@ function TaskCard({
   onOpen,
   approved,
   onToggleApproved,
+  openIds,
 }: {
   task: Task;
   overlay?: boolean;
@@ -44,7 +45,10 @@ function TaskCard({
   /** Review列のみ: 検収OKマーク状態 (#57)。Doneへの確定は列ヘッダーの一括ボタンで行う */
   approved?: boolean;
   onToggleApproved?: (id: number) => void;
+  /** 未完了タスクIDの集合 (#41: 依存バッジの未解決判定用) */
+  openIds?: Set<number>;
 }) {
+  const depsUnresolved = task.blockedBy?.some((id) => openIds?.has(id)) ?? false;
   return (
     <div
       data-testid={`task-card-${task.id}`}
@@ -63,6 +67,16 @@ function TaskCard({
           {task.due && (
             <span className={`mr-1 rounded px-1 py-0.5 text-[10px] ${dueBadge(task.due).cls}`}>
               {dueBadge(task.due).text}
+            </span>
+          )}
+          {task.blockedBy && task.blockedBy.length > 0 && (
+            <span
+              title={depsUnresolved ? "依存先が未完了のため着手できません" : "依存先はすべて完了済み"}
+              className={`mr-1 rounded px-1 py-0.5 text-[10px] ${
+                depsUnresolved ? "bg-violet-100 font-bold text-violet-700" : "bg-slate-100 text-slate-400 line-through"
+              }`}
+            >
+              ⛓ 依存 {task.blockedBy.map((id) => `#${id}`).join(" ")}
             </span>
           )}
           {task.title}
@@ -102,11 +116,13 @@ function SortableCard({
   onOpen,
   approved,
   onToggleApproved,
+  openIds,
 }: {
   task: Task;
   onOpen: (id: number) => void;
   approved?: boolean;
   onToggleApproved?: (id: number) => void;
+  openIds?: Set<number>;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: task.id });
   return (
@@ -117,7 +133,7 @@ function SortableCard({
       style={{ transform: CSS.Transform.toString(transform), transition }}
       className={`cursor-grab touch-none ${isDragging ? "opacity-30" : ""}`}
     >
-      <TaskCard task={task} onOpen={onOpen} approved={approved} onToggleApproved={onToggleApproved} />
+      <TaskCard task={task} onOpen={onOpen} approved={approved} onToggleApproved={onToggleApproved} openIds={openIds} />
     </div>
   );
 }
@@ -162,6 +178,7 @@ function Column({
   approvedIds,
   onToggleApproved,
   onCommitApproved,
+  openIds,
 }: {
   col: (typeof COLUMNS)[number];
   tasks: Task[];
@@ -172,6 +189,8 @@ function Column({
   approvedIds?: Set<number>;
   onToggleApproved?: (id: number) => void;
   onCommitApproved?: () => void;
+  /** 未完了タスクIDの集合 (#41: 依存バッジの未解決判定用) */
+  openIds?: Set<number>;
 }) {
   // Doneは「置き場」でなく「検収の結果」: D&Dでは到達できない (#57)
   const { setNodeRef, isOver } = useDroppable({ id: col.key, disabled: col.key === "done" });
@@ -223,6 +242,7 @@ function Column({
             onOpen={onOpenTask}
             approved={approvedIds?.has(t.id)}
             onToggleApproved={onToggleApproved}
+            openIds={openIds}
           />
         ))}
         {tasks.length === 0 && (
@@ -258,6 +278,8 @@ export default function Board({
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
 
   const byStatus = (s: TaskStatus) => tasks.filter((t) => t.status === s);
+  // #41: 依存バッジの未解決判定 (依存先がボード上に未完了で残っていれば「待ち」)
+  const openIds = new Set(tasks.filter((t) => t.status !== "done").map((t) => t.id));
 
   function locate(overId: number | TaskStatus): { status: TaskStatus; index: number } | null {
     if (COLUMNS.some((c) => c.key === overId)) {
@@ -301,6 +323,7 @@ export default function Board({
             approvedIds={col.key === "review" ? approvedIds : undefined}
             onToggleApproved={col.key === "review" ? onToggleApproved : undefined}
             onCommitApproved={col.key === "review" ? onCommitApproved : undefined}
+            openIds={openIds}
           />
         ))}
       </div>

@@ -10,6 +10,8 @@ export interface Task {
   lane: "demo" | "later" | null;
   /** 期限 YYYY-MM-DD (#44) */
   due: string | null;
+  /** 依存先タスクID (#41)。全完了まで着手不可の想定 */
+  blockedBy: number[] | null;
   sort: number;
   createdAt: string;
   updatedAt: string;

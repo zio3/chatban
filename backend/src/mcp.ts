@@ -70,6 +70,7 @@ export function buildMcpServer(onEvent: (kind: "board" | "proposals") => void): 
             lane: z.enum(["demo", "later"]).nullable().optional().describe("demo=90秒台本に必要 / later=機能凍結後"),
             context: z.string().optional().describe("経緯メモ(詳細・決定事項)の全文上書き"),
             due: z.string().nullable().optional().describe("期限 YYYY-MM-DD。解除はnull"),
+            blocked_by: z.array(z.number().int()).nullable().optional().describe("依存先タスクID(全置換)。解除はnull"),
           })
         ),
       },

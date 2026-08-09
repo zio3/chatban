@@ -108,10 +108,21 @@ export default function App() {
     });
   }, []);
 
+  // アーカイブ済みタスクの詳細表示用 (#59: 要約カードの#xxリンクから開く)
+  const [archivedTask, setArchivedTask] = useState<Task | null>(null);
   const openTask = useCallback(
     (id: number) => {
-      if (tasks.some((t) => t.id === id)) setDetailTaskId(id);
-      else setToast({ message: `#${id} はアーカイブ済みか存在しません` });
+      if (tasks.some((t) => t.id === id)) {
+        setDetailTaskId(id);
+        return;
+      }
+      api
+        .getTask(id)
+        .then((t) => {
+          setArchivedTask(t);
+          setDetailTaskId(id);
+        })
+        .catch(() => setToast({ message: `#${id} は存在しません` }));
     },
     [tasks]
   );
@@ -181,7 +192,10 @@ export default function App() {
   const foundDetailTask = detailTaskId !== null ? tasks.find((t) => t.id === detailTaskId) : undefined;
   const lastDetailTaskRef = useRef<Task | undefined>(undefined);
   if (foundDetailTask) lastDetailTaskRef.current = foundDetailTask;
-  const detailTask = detailTaskId !== null ? foundDetailTask ?? lastDetailTaskRef.current : undefined;
+  const detailTask =
+    detailTaskId !== null
+      ? foundDetailTask ?? (archivedTask?.id === detailTaskId ? archivedTask : undefined) ?? lastDetailTaskRef.current
+      : undefined;
   const detailArchived = detailTaskId !== null && !foundDetailTask && !!detailTask;
 
   return (

@@ -11,6 +11,7 @@ import { buildMcpServer } from "./mcp.js";
 import {
   createTask,
   deleteTask,
+  getTask,
   listChatMessages,
   listMembers,
   listPendingProposals,
@@ -89,6 +90,13 @@ app.post("/api/tasks/approve", (req, res) => {
   const updated = updateTasks(ids.map((id) => ({ id, patch: { status: "done" as const } })));
   broadcastBoard();
   res.json({ ok: true, updated });
+});
+
+// アーカイブ済み含む単一タスク取得 (#59: 要約カードの#xxリンクから詳細を開く用)
+app.get("/api/tasks/:id", (req, res) => {
+  const task = getTask(Number(req.params.id));
+  if (!task) return res.status(404).json({ error: "not found" });
+  res.json(task);
 });
 
 app.patch("/api/tasks/:id", (req, res) => {

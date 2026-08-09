@@ -16,6 +16,7 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(patch),
     }).then((r) => json<Task>(r)),
+  getTask: (id: number) => fetch(`/api/tasks/${id}`).then((r) => json<Task>(r)),
   approveTasks: (ids: number[]) =>
     fetch("/api/tasks/approve", {
       method: "POST",

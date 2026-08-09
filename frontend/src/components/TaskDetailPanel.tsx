@@ -109,7 +109,9 @@ export default function TaskDetailPanel({
       <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-4 py-3">
         {archived && (
           <div className="rounded-lg bg-emerald-50 px-3 py-2 text-xs text-emerald-700">
-            ✅ このタスクは完了し、Doneの要約カードにアーカイブされました
+            {task.rejected
+              ? "🚫 このタスクは却下として確定し、アーカイブ済みです (経緯は下のreason参照)"
+              : "✅ このタスクは完了し、Doneの要約カードにアーカイブされました"}
           </div>
         )}
         <div className="flex flex-wrap items-center gap-2 text-sm">

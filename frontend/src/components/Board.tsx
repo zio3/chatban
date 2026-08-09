@@ -141,9 +141,26 @@ function SortableCard({
   );
 }
 
+/** 要約要素内の #NN をクリック可能にする (#59: アーカイブ済みタスクの詳細も開ける) */
+function renderRefs(text: string, onOpen: (id: number) => void) {
+  return text.split(/(#\d+)/g).map((p, i) => {
+    const m = p.match(/^#(\d+)$/);
+    if (!m) return <span key={i}>{p}</span>;
+    return (
+      <button
+        key={i}
+        onClick={() => onOpen(Number(m[1]))}
+        className="font-bold text-emerald-700 underline decoration-dotted underline-offset-2 hover:text-emerald-900"
+      >
+        {p}
+      </button>
+    );
+  });
+}
+
 // #58: チェックボックスは廃止 (done=検収済みなので把握確認が二重になる)。
 // アクティブカード=緑で開いた状態、整頓で過去ログ化(settled)されたカード=グレーで畳んだ状態
-function SummaryCardView({ card }: { card: SummaryCard }) {
+function SummaryCardView({ card, onOpenTask }: { card: SummaryCard; onOpenTask: (id: number) => void }) {
   const [open, setOpen] = useState(!card.settled);
   return (
     <div
@@ -162,7 +179,7 @@ function SummaryCardView({ card }: { card: SummaryCard }) {
           {card.elements.map((e, i) => (
             <li key={i} className="flex items-start gap-1.5 text-xs leading-snug text-slate-700">
               <span className="text-slate-400">•</span>
-              <span>{e.text}</span>
+              <span>{renderRefs(e.text, onOpenTask)}</span>
             </li>
           ))}
           {card.elements.length === 0 && <li className="text-xs text-slate-400">要約を生成中…</li>}
@@ -236,7 +253,7 @@ function Column({
       {summaryCards &&
         [...summaryCards]
           .sort((a, b) => Number(a.settled) - Number(b.settled) || b.id - a.id)
-          .map((c) => <SummaryCardView key={c.id} card={c} />)}
+          .map((c) => <SummaryCardView key={c.id} card={c} onOpenTask={onOpenTask} />)}
       <SortableContext items={tasks.map((t) => t.id)} strategy={verticalListSortingStrategy}>
         {tasks.map((t) => (
           <SortableCard

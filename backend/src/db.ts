@@ -91,6 +91,11 @@ try {
 } catch {
   /* already exists */
 }
+try {
+  db.exec("ALTER TABLE chat_messages ADD COLUMN task_id INTEGER");
+} catch {
+  /* already exists */
+}
 db.exec(`
 CREATE TABLE IF NOT EXISTS summary_cards (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -369,25 +374,35 @@ export function setProjectContext(text: string) {
   ).run(text);
 }
 
-export function saveChatMessage(role: "user" | "assistant", content: string, trace?: unknown, usage?: unknown) {
-  db.prepare("INSERT INTO chat_messages (role, content, trace, usage) VALUES (?, ?, ?, ?)").run(
+export function saveChatMessage(
+  role: "user" | "assistant",
+  content: string,
+  trace?: unknown,
+  usage?: unknown,
+  taskId?: number | null
+) {
+  db.prepare("INSERT INTO chat_messages (role, content, trace, usage, task_id) VALUES (?, ?, ?, ?, ?)").run(
     role,
     content,
     trace ? JSON.stringify(trace) : null,
-    usage ? JSON.stringify(usage) : null
+    usage ? JSON.stringify(usage) : null,
+    taskId ?? null
   );
 }
 
-export function listChatMessages(limit = 50): {
+/** taskId未指定=メインチャット(task_id IS NULL)、指定=そのタスク専用の会話 */
+export function listChatMessages(limit = 50, taskId?: number): {
   role: "user" | "assistant";
   content: string;
   trace: unknown;
   usage: unknown;
   createdAt: string;
 }[] {
+  const where = taskId != null ? "WHERE task_id = ?" : "WHERE task_id IS NULL";
+  const params = taskId != null ? [taskId, limit] : [limit];
   const rows = db
-    .prepare("SELECT * FROM (SELECT * FROM chat_messages ORDER BY id DESC LIMIT ?) ORDER BY id")
-    .all(limit) as any[];
+    .prepare(`SELECT * FROM (SELECT * FROM chat_messages ${where} ORDER BY id DESC LIMIT ?) ORDER BY id`)
+    .all(...params) as any[];
   return rows.map((r) => ({
     role: r.role,
     content: r.content,

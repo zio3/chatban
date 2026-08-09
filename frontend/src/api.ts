@@ -24,10 +24,16 @@ export const api = {
     }).then((r) => json<Task>(r)),
   resolveProposal: (id: number, action: "approve" | "reject") =>
     fetch(`/api/proposals/${id}/${action}`, { method: "POST" }).then((r) => json<Proposal>(r)),
-  chatLog: () =>
-    fetch("/api/chat/log").then((r) =>
+  chatLog: (taskId?: number) =>
+    fetch(`/api/chat/log${taskId != null ? `?taskId=${taskId}` : ""}`).then((r) =>
       json<{ messages: { role: "user" | "assistant"; content: string; trace?: unknown; usage?: unknown }[] }>(r)
     ),
+  taskChat: (taskId: number, message: string, history: { role: "user" | "assistant"; content: string }[]) =>
+    fetch(`/api/tasks/${taskId}/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message, history }),
+    }).then((r) => json<ChatResponse>(r)),
   chat: (message: string, history: { role: "user" | "assistant"; content: string }[]) =>
     fetch("/api/chat", {
       method: "POST",

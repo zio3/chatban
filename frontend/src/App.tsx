@@ -23,6 +23,7 @@ export default function App() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [toast, setToast] = useState<Toast | null>(null);
   const [detailTaskId, setDetailTaskId] = useState<number | null>(null);
+  const [panelPinned, setPanelPinned] = useState(() => localStorage.getItem("chatban.panelPinned") === "1");
   const chatLogRef = useRef(chatLog);
   chatLogRef.current = chatLog;
 
@@ -99,18 +100,22 @@ export default function App() {
     [tasks]
   );
 
-  // 詳細パネルの「ボードで表示」: フィルタ解除→スクロール→フラッシュ
-  const jumpToBoard = useCallback((id: number) => {
-    setFilter(null);
-    setDetailTaskId(null);
-    setTimeout(() => {
-      const el = document.querySelector(`[data-testid="task-card-${id}"]`);
-      if (!el) return;
-      el.scrollIntoView({ behavior: "smooth", block: "center" });
-      el.classList.add("task-flash");
-      setTimeout(() => el.classList.remove("task-flash"), 1700);
-    }, 60);
-  }, []);
+  // 詳細パネルの「ボードで表示」: フィルタ解除→スクロール→フラッシュ。
+  // ピン留め(常駐)中はパネルを開いたまま、オーバーレイ時は閉じてから飛ぶ
+  const jumpToBoard = useCallback(
+    (id: number) => {
+      setFilter(null);
+      if (!panelPinned) setDetailTaskId(null);
+      setTimeout(() => {
+        const el = document.querySelector(`[data-testid="task-card-${id}"]`);
+        if (!el) return;
+        el.scrollIntoView({ behavior: "smooth", block: "center" });
+        el.classList.add("task-flash");
+        setTimeout(() => el.classList.remove("task-flash"), 1700);
+      }, 60);
+    },
+    [panelPinned]
+  );
 
   const toggleSummaryElement = useCallback((cardId: number, index: number, checked: boolean) => {
     setSummaryCards((prev) =>
@@ -174,8 +179,16 @@ export default function App() {
 
   const sortedTasks = [...tasks].sort((a, b) => a.sort - b.sort || a.id - b.id);
 
+  const detailTask = detailTaskId !== null ? tasks.find((t) => t.id === detailTaskId) : undefined;
+  const togglePin = () => {
+    const next = !panelPinned;
+    setPanelPinned(next);
+    localStorage.setItem("chatban.panelPinned", next ? "1" : "0");
+  };
+
   return (
-    <div className="flex h-full flex-col bg-slate-100 text-slate-900">
+    <div className="flex h-full bg-slate-100 text-slate-900">
+      <div className="flex min-w-0 flex-1 flex-col">
       <header className="flex items-center justify-between border-b border-slate-200 bg-white px-4 py-2">
         <div className="flex items-baseline gap-3">
           <h1 className="text-lg font-bold tracking-tight">ChatBan</h1>
@@ -235,9 +248,12 @@ export default function App() {
         onOpenTask={openTask}
         onSend={sendChat}
       />
-      {detailTaskId !== null && tasks.find((t) => t.id === detailTaskId) && (
+      </div>
+      {detailTask && (
         <TaskDetailPanel
-          task={tasks.find((t) => t.id === detailTaskId)!}
+          task={detailTask}
+          pinned={panelPinned}
+          onTogglePin={togglePin}
           onClose={() => setDetailTaskId(null)}
           onJumpToBoard={jumpToBoard}
         />

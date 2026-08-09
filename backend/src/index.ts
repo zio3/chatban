@@ -138,7 +138,37 @@ app.post("/api/chat", async (req, res) => {
 });
 
 app.get("/api/chat/log", (req, res) => {
-  res.json({ messages: listChatMessages(Number(req.query.limit ?? 50)) });
+  const taskId = req.query.taskId != null ? Number(req.query.taskId) : undefined;
+  res.json({ messages: listChatMessages(Number(req.query.limit ?? 50), taskId) });
+});
+
+// タスク専用チャット (#24): 対象タスクの全詳細をシステムプロンプトに注入し、会話はtask_id付きで分離保存
+app.post("/api/tasks/:id/chat", async (req, res) => {
+  const taskId = Number(req.params.id);
+  const { message, history } = req.body ?? {};
+  if (!message) return res.status(400).json({ error: "message required" });
+  const id = ++chatSeq;
+  const t0 = Date.now();
+  log("chat", `#${id} TASK-CHAT(task=${taskId}) REQ "${String(message).slice(0, 120)}"`);
+  try {
+    const result = await runChatTurn(
+      message,
+      history ?? [],
+      (kind) => {
+        if (kind === "board") broadcastBoard();
+        else broadcastProposals();
+      },
+      (label) => io.emit("chat:progress", { label, taskId }),
+      taskId
+    );
+    saveChatMessage("user", message, undefined, undefined, taskId);
+    saveChatMessage("assistant", result.reply, result.trace, result.usage, taskId);
+    log("chat", `#${id} OK ${Date.now() - t0}ms rounds=${result.usage.rounds} tools=[${result.trace.map((t) => t.tool).join(",")}]`);
+    res.json(result);
+  } catch (e: any) {
+    log("chat", `#${id} FAILED ${Date.now() - t0}ms: ${e?.message ?? e}`);
+    res.status(500).json({ error: e?.message ?? "chat failed" });
+  }
 });
 
 app.get("/api/metrics", (_req, res) => {

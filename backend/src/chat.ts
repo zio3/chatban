@@ -286,7 +286,7 @@ async function execTool(name: string, args: any, uiActions: UiAction[], events: 
   }
 }
 
-function buildSystemPrompt(): string {
+function buildSystemPrompt(taskFocus?: ReturnType<typeof getTask>): string {
   const tasks = listTasks();
   const loads = memberLoads();
   const history = assignmentHistory();
@@ -340,6 +340,15 @@ function buildSystemPrompt(): string {
     JSON.stringify(history.slice(0, 10).map((h) => ({ t: h.taskTitle.slice(0, 30), a: h.assignee }))),
     "",
     pending.length ? `## 承認待ちの割り振り提案\n${JSON.stringify(pending)}` : "",
+    taskFocus
+      ? [
+          "",
+          `## いま注目しているタスク (このチャットは #${taskFocus.id} 専用)`,
+          JSON.stringify(taskFocus),
+          `- 「これ」「このタスク」等の指示語は #${taskFocus.id} を指す。`,
+          `- この会話で決まったこと・分かったことは update_task_context で #${taskFocus.id} の経緯メモに反映する (既存contextを読んでマージ)。`,
+        ].join("\n")
+      : "",
   ]
     .filter(Boolean)
     .join("\n");
@@ -362,11 +371,13 @@ export async function runChatTurn(
   userMessage: string,
   history: { role: "user" | "assistant"; content: string }[],
   onEvent: (kind: "board" | "proposals") => void,
-  onProgress?: (label: string) => void
+  onProgress?: (label: string) => void,
+  taskFocusId?: number
 ): Promise<ChatResult> {
   const t0 = Date.now();
+  const taskFocus = taskFocusId != null ? getTask(taskFocusId) : undefined;
   const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
-    { role: "system", content: buildSystemPrompt() },
+    { role: "system", content: buildSystemPrompt(taskFocus) },
     ...history.slice(-20),
     { role: "user", content: userMessage },
   ];

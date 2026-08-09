@@ -154,7 +154,7 @@ export default function TaskDetailPanel({
       </div>
 
       {/* タスク専用チャット (#24) */}
-      <section className="flex h-72 shrink-0 flex-col border-t border-slate-200 bg-slate-50/50">
+      <section className="flex h-1/2 shrink-0 flex-col border-t border-slate-200 bg-slate-50/50">
         <p className="px-4 pt-2 text-xs font-bold text-slate-400">💬 このタスクのチャット</p>
         <div ref={logRef} className="min-h-0 flex-1 space-y-2 overflow-y-auto px-3 py-2">
           {log.length === 0 && (

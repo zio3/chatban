@@ -39,17 +39,28 @@ function broadcastProposals() {
   io.emit("proposals:changed", { proposals: listPendingProposals() });
 }
 
+// 要約再生成は非同期で15〜30秒かかるため、実行中件数をUIへ通知する (#56)
+let archiveJobs = 0;
+function archiveJobDelta(delta: number) {
+  archiveJobs = Math.max(0, archiveJobs + delta);
+  io.emit("archive:working", { count: archiveJobs });
+}
+
 // 完了→即アーカイブ+要約合流 (E2E等ではAUTO_ARCHIVE=0で無効化)
 if (process.env.AUTO_ARCHIVE !== "0") {
   hooks.taskCompleted = (taskId) => {
+    archiveJobDelta(1);
     onTaskCompleted(taskId)
       .then(() => broadcastBoard())
-      .catch((e) => log("archive", `taskCompleted #${taskId} failed: ${e?.message ?? e}`));
+      .catch((e) => log("archive", `taskCompleted #${taskId} failed: ${e?.message ?? e}`))
+      .finally(() => archiveJobDelta(-1));
   };
   hooks.taskReopened = (taskId) => {
+    archiveJobDelta(1);
     onTaskReopened(taskId)
       .then(() => broadcastBoard())
-      .catch((e) => log("archive", `taskReopened #${taskId} failed: ${e?.message ?? e}`));
+      .catch((e) => log("archive", `taskReopened #${taskId} failed: ${e?.message ?? e}`))
+      .finally(() => archiveJobDelta(-1));
   };
 }
 

@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { io } from "socket.io-client";
 import { api } from "./api";
 import Board, { type MovePayload } from "./components/Board";
 import Chat, { type Suggestion } from "./components/Chat";
 import TaskDetailPanel from "./components/TaskDetailPanel";
+import { useChatTurn } from "./hooks/useChatTurn";
+import { socket } from "./socket";
 import type { ChatEntry, Member, Proposal, SummaryCard, Task } from "./types";
 
 interface Toast {
@@ -17,14 +18,22 @@ export default function App() {
   const [proposals, setProposals] = useState<Proposal[]>([]);
   const [summaryCards, setSummaryCards] = useState<SummaryCard[]>([]);
   const [filter, setFilter] = useState<string | null>(null);
-  const [chatLog, setChatLog] = useState<ChatEntry[]>([]);
-  const [sending, setSending] = useState(false);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [toast, setToast] = useState<Toast | null>(null);
   const [detailTaskId, setDetailTaskId] = useState<number | null>(null);
-  const chatLogRef = useRef(chatLog);
-  chatLogRef.current = chatLog;
+  const [archiveWorking, setArchiveWorking] = useState(false);
+
+  // メインチャット: ライフサイクル(送信/考え中/停止/タイムアウト/再送)は共有フックに集約 (#23/#28/#29/#30)
+  const mainChat = useChatTurn({
+    request: (m, h, signal) => api.chat(m, h, signal),
+    onResponse: (res) => {
+      for (const a of res.uiActions) {
+        if (a.type === "set_filter") setFilter(a.assignee);
+      }
+    },
+  });
+  const setMainLog = mainChat.setLog;
 
   const reload = useCallback(async () => {
     setLoading(true);
@@ -45,23 +54,23 @@ export default function App() {
   useEffect(() => {
     reload();
     // サーバー保存された会話履歴を復元 (リロードで消えない)
-    api.chatLog().then((r) => setChatLog(r.messages as ChatEntry[])).catch(() => {});
-    const socket = io();
-    socket.on("board:changed", (p: { tasks: Task[]; summaryCards?: SummaryCard[] }) => {
+    api.chatLog().then((r) => setMainLog(r.messages as ChatEntry[])).catch(() => {});
+    const onBoard = (p: { tasks: Task[]; summaryCards?: SummaryCard[] }) => {
       setTasks(p.tasks);
       if (p.summaryCards) setSummaryCards(p.summaryCards);
-    });
-    socket.on("proposals:changed", (p: { proposals: Proposal[] }) => setProposals(p.proposals));
-    // ツール実行の逐次フィードバック: 応答待ちの吹き出しに実行中の操作を表示
-    socket.on("chat:progress", (p: { label: string }) => {
-      setChatLog((prev) =>
-        prev.map((e) => (e.pending ? { ...e, content: `🔧 ${p.label}中…` } : e))
-      );
-    });
-    return () => {
-      socket.disconnect();
     };
-  }, [reload]);
+    const onProposals = (p: { proposals: Proposal[] }) => setProposals(p.proposals);
+    // Done要約カードの非同期再生成中インジケータ (#56)
+    const onArchive = (p: { count: number }) => setArchiveWorking(p.count > 0);
+    socket.on("board:changed", onBoard);
+    socket.on("proposals:changed", onProposals);
+    socket.on("archive:working", onArchive);
+    return () => {
+      socket.off("board:changed", onBoard);
+      socket.off("proposals:changed", onProposals);
+      socket.off("archive:working", onArchive);
+    };
+  }, [reload, setMainLog]);
 
   // 列内挿入位置から新しいsort値を計算 (前後の中間値。端は±1)
   const moveTask = useCallback((move: MovePayload) => {
@@ -123,31 +132,6 @@ export default function App() {
   const resolveProposal = useCallback((id: number, action: "approve" | "reject") => {
     setProposals((prev) => prev.filter((p) => p.id !== id));
     api.resolveProposal(id, action).catch(() => api.board().then((b) => setProposals(b.proposals)));
-  }, []);
-
-  const sendChat = useCallback(async (message: string) => {
-    setSending(true);
-    const history = chatLogRef.current
-      .filter((e) => !e.pending)
-      .map((e) => ({ role: e.role, content: e.content }));
-    setChatLog((prev) => [...prev, { role: "user", content: message }, { role: "assistant", content: "…", pending: true }]);
-    try {
-      const res = await api.chat(message, history);
-      for (const a of res.uiActions) {
-        if (a.type === "set_filter") setFilter(a.assignee);
-      }
-      setChatLog((prev) => [
-        ...prev.filter((e) => !e.pending),
-        { role: "assistant", content: res.reply || "(操作を実行しました)", trace: res.trace, usage: res.usage },
-      ]);
-    } catch (e: any) {
-      setChatLog((prev) => [
-        ...prev.filter((en) => !en.pending),
-        { role: "assistant", content: `エラー: ${e?.message ?? e}` },
-      ]);
-    } finally {
-      setSending(false);
-    }
   }, []);
 
   // 「何を話しかければいいか分からない人」向けのユースケース導線。ボード状態で出し分ける
@@ -228,6 +212,7 @@ export default function App() {
           <Board
             tasks={filter ? sortedTasks.filter((t) => t.assignee === filter) : sortedTasks}
             summaryCards={summaryCards}
+            archiveWorking={archiveWorking}
             onMove={moveTask}
             onToggleSummaryElement={toggleSummaryElement}
             onOpenTask={openTask}
@@ -235,13 +220,15 @@ export default function App() {
         )}
       </main>
       <Chat
-        log={chatLog}
-        sending={sending}
+        log={mainChat.log}
+        sending={mainChat.sending}
+        elapsedSec={mainChat.elapsedSec}
         suggestions={suggestions}
         proposals={proposals}
         onResolveProposal={resolveProposal}
         onOpenTask={openTask}
-        onSend={sendChat}
+        onSend={mainChat.send}
+        onStop={mainChat.stop}
       />
       </div>
       {detailTask && (

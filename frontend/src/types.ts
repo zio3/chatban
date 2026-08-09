@@ -67,4 +67,8 @@ export interface ChatEntry {
   trace?: ToolTrace[];
   usage?: ChatResponse["usage"];
   pending?: boolean;
+  /** エラー・停止・タイムアウトの通知行 (履歴としてLLMには送らない) */
+  error?: boolean;
+  /** 失敗した元メッセージ (再送ボタン用) */
+  retryText?: string;
 }

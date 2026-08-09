@@ -1,7 +1,9 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { api } from "../api";
+import { useChatTurn } from "../hooks/useChatTurn";
+import ThinkingIndicator from "./ThinkingIndicator";
 import type { ChatEntry, Task } from "../types";
 
 const STATUS_LABELS: Record<string, { label: string; cls: string }> = {
@@ -29,42 +31,30 @@ export default function TaskDetailPanel({
     return saved >= 320 ? saved : 400;
   });
 
-  // タスク専用チャット (#24)
-  const [log, setLog] = useState<ChatEntry[]>([]);
+  // タスク専用チャット (#24)。ライフサイクルは共有フック (#23/#28/#29/#30)
+  const chat = useChatTurn({
+    request: (m, h, signal) => api.taskChat(task.id, m, h, signal),
+    progressTaskId: task.id,
+  });
+  const { setLog } = chat;
   const [input, setInput] = useState("");
-  const [sending, setSending] = useState(false);
   const logRef = useRef<HTMLDivElement>(null);
-  const logStateRef = useRef(log);
-  logStateRef.current = log;
 
   useEffect(() => {
     setLog([]);
     api.chatLog(task.id).then((r) => setLog(r.messages as ChatEntry[])).catch(() => {});
-  }, [task.id]);
+  }, [task.id, setLog]);
 
   useEffect(() => {
     logRef.current?.scrollTo({ top: logRef.current.scrollHeight });
-  }, [log]);
+  }, [chat.log]);
 
-  const send = useCallback(async () => {
+  function submit() {
     const text = input.trim();
-    if (!text || sending) return;
+    if (!text || chat.sending) return;
     setInput("");
-    setSending(true);
-    const history = logStateRef.current.filter((e) => !e.pending).map((e) => ({ role: e.role, content: e.content }));
-    setLog((prev) => [...prev, { role: "user", content: text }, { role: "assistant", content: "…", pending: true }]);
-    try {
-      const res = await api.taskChat(task.id, text, history);
-      setLog((prev) => [
-        ...prev.filter((e) => !e.pending),
-        { role: "assistant", content: res.reply || "(操作を実行しました)", trace: res.trace, usage: res.usage },
-      ]);
-    } catch (e: any) {
-      setLog((prev) => [...prev.filter((en) => !en.pending), { role: "assistant", content: `エラー: ${e?.message ?? e}` }]);
-    } finally {
-      setSending(false);
-    }
-  }, [input, sending, task.id]);
+    chat.send(text);
+  }
 
   // 左端ドラッグで幅調整 (localStorageに保存)
   function startResize(e: React.PointerEvent) {
@@ -165,19 +155,38 @@ export default function TaskDetailPanel({
       <section className="flex h-1/2 shrink-0 flex-col border-t border-slate-200 bg-slate-50/50">
         <p className="px-4 pt-2 text-xs font-bold text-slate-400">💬 このタスクのチャット</p>
         <div ref={logRef} className="min-h-0 flex-1 space-y-2 overflow-y-auto px-3 py-2">
-          {log.length === 0 && (
+          {chat.log.length === 0 && (
             <p className="text-xs text-slate-400">
               例:「これどう進めるのがいい？」「◯◯方式でいくことにした」→ 決定は経緯メモに残ります
             </p>
           )}
-          {log.map((e, i) => (
+          {chat.log.map((e, i) => (
             <div key={i} className={`flex ${e.role === "user" ? "justify-end" : "justify-start"}`}>
               <div
                 className={`max-w-[85%] rounded-xl px-3 py-1.5 text-sm whitespace-pre-wrap ${
-                  e.role === "user" ? "bg-indigo-600 text-white" : "bg-white text-slate-900 shadow-sm"
-                } ${e.pending ? "animate-pulse" : ""}`}
+                  e.role === "user"
+                    ? "bg-indigo-600 text-white"
+                    : e.error
+                      ? "border border-red-200 bg-red-50 text-red-700"
+                      : "bg-white text-slate-900 shadow-sm"
+                }`}
               >
-                {e.role === "assistant" ? (
+                {e.pending ? (
+                  <ThinkingIndicator label={e.content} elapsedSec={chat.elapsedSec} onStop={chat.stop} />
+                ) : e.error ? (
+                  <div className="flex items-center gap-2">
+                    <span>{e.content}</span>
+                    {e.retryText && (
+                      <button
+                        onClick={() => chat.send(e.retryText!)}
+                        disabled={chat.sending}
+                        className="shrink-0 rounded-md bg-red-600 px-2 py-0.5 text-xs font-medium text-white hover:bg-red-700 disabled:opacity-40"
+                      >
+                        🔄 再送
+                      </button>
+                    )}
+                  </div>
+                ) : e.role === "assistant" ? (
                   <div className="chat-md">
                     <Markdown remarkPlugins={[remarkGfm]}>{e.content}</Markdown>
                   </div>
@@ -193,14 +202,14 @@ export default function TaskDetailPanel({
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.nativeEvent.isComposing) send();
+              if (e.key === "Enter" && !e.nativeEvent.isComposing) submit();
             }}
             placeholder={`#${task.id} について話す…`}
             className="min-w-0 flex-1 rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-indigo-500"
           />
           <button
-            onClick={send}
-            disabled={sending || !input.trim()}
+            onClick={submit}
+            disabled={chat.sending || !input.trim()}
             className="rounded-xl bg-indigo-600 px-3 py-2 text-sm font-medium text-white disabled:opacity-40"
           >
             送信

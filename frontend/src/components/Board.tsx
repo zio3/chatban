@@ -114,12 +114,14 @@ function Column({
   col,
   tasks,
   summaryCards,
+  archiveWorking,
   onToggleSummaryElement,
   onOpenTask,
 }: {
   col: (typeof COLUMNS)[number];
   tasks: Task[];
   summaryCards?: SummaryCard[];
+  archiveWorking?: boolean;
   onToggleSummaryElement?: (cardId: number, index: number, checked: boolean) => void;
   onOpenTask: (id: number) => void;
 }) {
@@ -136,6 +138,16 @@ function Column({
           {tasks.length}
         </span>
       </div>
+      {/* 完了→要約合流は非同期(15〜30秒)なので、再生成中はスピナーで明示 (#56) */}
+      {archiveWorking && (
+        <div
+          data-testid="archive-working"
+          className="flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-2 text-xs text-emerald-700"
+        >
+          <span className="h-3 w-3 shrink-0 animate-spin rounded-full border-2 border-emerald-500 border-t-transparent" />
+          要約カードを再生成中…
+        </div>
+      )}
       {/* Done列: 要約カード常駐 (未確認カード→過去ログの順) */}
       {summaryCards &&
         onToggleSummaryElement &&
@@ -159,12 +171,14 @@ function Column({
 export default function Board({
   tasks,
   summaryCards,
+  archiveWorking,
   onMove,
   onToggleSummaryElement,
   onOpenTask,
 }: {
   tasks: Task[];
   summaryCards: SummaryCard[];
+  archiveWorking?: boolean;
   onMove: (move: MovePayload) => void;
   onToggleSummaryElement: (cardId: number, index: number, checked: boolean) => void;
   onOpenTask: (id: number) => void;
@@ -209,6 +223,7 @@ export default function Board({
             col={col}
             tasks={byStatus(col.key)}
             summaryCards={col.key === "done" ? summaryCards : undefined}
+            archiveWorking={col.key === "done" ? archiveWorking : undefined}
             onToggleSummaryElement={col.key === "done" ? onToggleSummaryElement : undefined}
             onOpenTask={onOpenTask}
           />

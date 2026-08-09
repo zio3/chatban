@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import ThinkingIndicator from "./ThinkingIndicator";
 import type { ChatEntry, Proposal } from "../types";
 
 const TOOL_LABELS: Record<string, string> = {
@@ -43,19 +44,23 @@ function renderUserText(text: string, onOpenTask: (id: number) => void) {
 export default function Chat({
   log,
   sending,
+  elapsedSec,
   suggestions,
   proposals,
   onResolveProposal,
   onOpenTask,
   onSend,
+  onStop,
 }: {
   log: ChatEntry[];
   sending: boolean;
+  elapsedSec: number;
   suggestions: Suggestion[];
   proposals: Proposal[];
   onResolveProposal: (id: number, action: "approve" | "reject") => void;
   onOpenTask: (id: number) => void;
   onSend: (message: string) => void;
+  onStop: () => void;
 }) {
   const [input, setInput] = useState("");
   const [opened, setOpened] = useState(false);
@@ -123,10 +128,29 @@ export default function Chat({
                 <div key={i} className={`flex ${e.role === "user" ? "justify-end" : "justify-start"}`}>
                   <div
                     className={`max-w-[75%] rounded-2xl px-3.5 py-2 text-sm whitespace-pre-wrap ${
-                      e.role === "user" ? "bg-indigo-600 text-white" : "bg-slate-100 text-slate-900"
-                    } ${e.pending ? "animate-pulse" : ""}`}
+                      e.role === "user"
+                        ? "bg-indigo-600 text-white"
+                        : e.error
+                          ? "border border-red-200 bg-red-50 text-red-700"
+                          : "bg-slate-100 text-slate-900"
+                    }`}
                   >
-                    {e.role === "assistant" ? (
+                    {e.pending ? (
+                      <ThinkingIndicator label={e.content} elapsedSec={elapsedSec} onStop={onStop} />
+                    ) : e.error ? (
+                      <div className="flex items-center gap-2">
+                        <span>{e.content}</span>
+                        {e.retryText && (
+                          <button
+                            onClick={() => onSend(e.retryText!)}
+                            disabled={sending}
+                            className="shrink-0 rounded-md bg-red-600 px-2 py-0.5 text-xs font-medium text-white hover:bg-red-700 disabled:opacity-40"
+                          >
+                            🔄 再送
+                          </button>
+                        )}
+                      </div>
+                    ) : e.role === "assistant" ? (
                       <div className="chat-md">
                         <Markdown
                           remarkPlugins={[remarkGfm]}

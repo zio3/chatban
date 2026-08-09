@@ -3,7 +3,7 @@ import { io } from "socket.io-client";
 import { api } from "./api";
 import Board, { type MovePayload } from "./components/Board";
 import Chat, { type Suggestion } from "./components/Chat";
-import type { ChatEntry, Member, Proposal, Task } from "./types";
+import type { ChatEntry, Member, Proposal, SummaryCard, Task } from "./types";
 
 interface Toast {
   message: string;
@@ -14,6 +14,7 @@ export default function App() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [members, setMembers] = useState<Member[]>([]);
   const [proposals, setProposals] = useState<Proposal[]>([]);
+  const [summaryCards, setSummaryCards] = useState<SummaryCard[]>([]);
   const [filter, setFilter] = useState<string | null>(null);
   const [chatLog, setChatLog] = useState<ChatEntry[]>([]);
   const [sending, setSending] = useState(false);
@@ -31,6 +32,7 @@ export default function App() {
       setTasks(b.tasks);
       setMembers(b.members);
       setProposals(b.proposals);
+      setSummaryCards(b.summaryCards ?? []);
     } catch (e: any) {
       setLoadError(e?.message ?? String(e));
     } finally {
@@ -43,7 +45,10 @@ export default function App() {
     // サーバー保存された会話履歴を復元 (リロードで消えない)
     api.chatLog().then((r) => setChatLog(r.messages as ChatEntry[])).catch(() => {});
     const socket = io();
-    socket.on("board:changed", (p: { tasks: Task[] }) => setTasks(p.tasks));
+    socket.on("board:changed", (p: { tasks: Task[]; summaryCards?: SummaryCard[] }) => {
+      setTasks(p.tasks);
+      if (p.summaryCards) setSummaryCards(p.summaryCards);
+    });
     socket.on("proposals:changed", (p: { proposals: Proposal[] }) => setProposals(p.proposals));
     // ツール実行の逐次フィードバック: 応答待ちの吹き出しに実行中の操作を表示
     socket.on("chat:progress", (p: { label: string }) => {
@@ -82,6 +87,15 @@ export default function App() {
       doPatch();
       return prev.map((t) => (t.id === move.id ? { ...t, status: move.status, sort } : t));
     });
+  }, []);
+
+  const toggleSummaryElement = useCallback((cardId: number, index: number, checked: boolean) => {
+    setSummaryCards((prev) =>
+      prev.map((c) =>
+        c.id === cardId ? { ...c, elements: c.elements.map((e, i) => (i === index ? { ...e, checked } : e)) } : c
+      )
+    );
+    api.checkSummaryElement(cardId, index, checked).catch(() => api.board().then((b) => setSummaryCards(b.summaryCards)));
   }, []);
 
   const resolveProposal = useCallback((id: number, action: "approve" | "reject") => {
@@ -130,6 +144,10 @@ export default function App() {
   if (tasks.filter((t) => t.status === "todo").length === 0) {
     suggestions.push({ label: "💡 次のタスク候補を挙げて", message: "次にやるべきタスクの候補を挙げて" });
   }
+  const settledCandidates = summaryCards.filter((c) => c.elements.length > 0 && c.elements.every((e) => e.checked));
+  if (settledCandidates.length >= 2) {
+    suggestions.push({ label: `🧹 確認済みログ${settledCandidates.length}枚を整頓`, message: "過去ログを整頓して" });
+  }
 
   const sortedTasks = [...tasks].sort((a, b) => a.sort - b.sort || a.id - b.id);
 
@@ -176,7 +194,12 @@ export default function App() {
           </div>
         )}
         {!loading && !loadError && (
-          <Board tasks={filter ? sortedTasks.filter((t) => t.assignee === filter) : sortedTasks} onMove={moveTask} />
+          <Board
+            tasks={filter ? sortedTasks.filter((t) => t.assignee === filter) : sortedTasks}
+            summaryCards={summaryCards}
+            onMove={moveTask}
+            onToggleSummaryElement={toggleSummaryElement}
+          />
         )}
       </main>
       <Chat

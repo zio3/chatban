@@ -3,7 +3,9 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import cors from "cors";
 import express from "express";
 import { Server } from "socket.io";
+import { onTaskCompleted, onTaskReopened } from "./archive.js";
 import { runChatTurn } from "./chat.js";
+import { hooks } from "./hooks.js";
 import { log } from "./log.js";
 import { buildMcpServer } from "./mcp.js";
 import {
@@ -12,10 +14,12 @@ import {
   listChatMessages,
   listMembers,
   listPendingProposals,
+  listSummaryCards,
   listTasks,
   metrics,
   resolveProposal,
   saveChatMessage,
+  setSummaryElementChecked,
   updateTask,
 } from "./db.js";
 
@@ -29,14 +33,41 @@ const server = http.createServer(app);
 const io = new Server(server, { cors: { origin: "*" } });
 
 function broadcastBoard() {
-  io.emit("board:changed", { tasks: listTasks() });
+  io.emit("board:changed", { tasks: listTasks(), summaryCards: listSummaryCards() });
 }
 function broadcastProposals() {
   io.emit("proposals:changed", { proposals: listPendingProposals() });
 }
 
+// 完了→即アーカイブ+要約合流 (E2E等ではAUTO_ARCHIVE=0で無効化)
+if (process.env.AUTO_ARCHIVE !== "0") {
+  hooks.taskCompleted = (taskId) => {
+    onTaskCompleted(taskId)
+      .then(() => broadcastBoard())
+      .catch((e) => log("archive", `taskCompleted #${taskId} failed: ${e?.message ?? e}`));
+  };
+  hooks.taskReopened = (taskId) => {
+    onTaskReopened(taskId)
+      .then(() => broadcastBoard())
+      .catch((e) => log("archive", `taskReopened #${taskId} failed: ${e?.message ?? e}`));
+  };
+}
+
 app.get("/api/board", (_req, res) => {
-  res.json({ tasks: listTasks(), members: listMembers(), proposals: listPendingProposals() });
+  res.json({
+    tasks: listTasks(),
+    members: listMembers(),
+    proposals: listPendingProposals(),
+    summaryCards: listSummaryCards(),
+  });
+});
+
+app.post("/api/summary-cards/:id/check", (req, res) => {
+  const { index, checked } = req.body ?? {};
+  const card = setSummaryElementChecked(Number(req.params.id), Number(index), !!checked);
+  if (!card) return res.status(404).json({ error: "not found" });
+  broadcastBoard();
+  res.json(card);
 });
 
 app.post("/api/tasks", (req, res) => {

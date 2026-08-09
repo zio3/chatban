@@ -1,4 +1,5 @@
 import Database from "better-sqlite3";
+import { hooks } from "./hooks.js";
 import type { Member, Proposal, Task, TaskStatus } from "./types.js";
 
 const db = new Database(process.env.DB_PATH ?? "chatban.db");
@@ -70,6 +71,30 @@ try {
 } catch {
   /* already exists */
 }
+try {
+  db.exec("ALTER TABLE tasks ADD COLUMN archived INTEGER NOT NULL DEFAULT 0");
+} catch {
+  /* already exists */
+}
+try {
+  db.exec("ALTER TABLE tasks ADD COLUMN summary_card_id INTEGER");
+} catch {
+  /* already exists */
+}
+db.exec(`
+CREATE TABLE IF NOT EXISTS summary_cards (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  title TEXT NOT NULL,
+  elements TEXT NOT NULL,
+  task_ids TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
+);
+`);
+try {
+  db.exec("ALTER TABLE summary_cards ADD COLUMN settled INTEGER NOT NULL DEFAULT 0");
+} catch {
+  /* already exists */
+}
 
 // 初回起動時のみシード
 const memberCount = db.prepare("SELECT COUNT(*) AS c FROM members").get() as { c: number };
@@ -88,9 +113,10 @@ if (memberCount.c === 0) {
   insTask.run("ボードUI(かんばん)の骨格実装", "inprogress", "zio", "実装の中心");
 }
 
-export function listTasks(): Task[] {
+export function listTasks(includeArchived = false): Task[] {
   // sort未設定の既存行はid順に混ざる (COALESCEでidを暫定sortとして扱う)
-  return (db.prepare("SELECT * FROM tasks ORDER BY COALESCE(sort, id), id").all() as any[]).map(rowToTask);
+  const where = includeArchived ? "" : "WHERE archived = 0";
+  return (db.prepare(`SELECT * FROM tasks ${where} ORDER BY COALESCE(sort, id), id`).all() as any[]).map(rowToTask);
 }
 
 function rowToTask(r: any): Task {
@@ -136,6 +162,9 @@ export function updateTask(
       patch.reason ?? null
     );
   }
+  // 完了/再開の遷移をアプリ層に通知 (Doneアーカイブ+要約の再生成トリガー)
+  if (cur.status !== "done" && next.status === "done") hooks.taskCompleted?.(id);
+  else if (cur.status === "done" && next.status !== "done") hooks.taskReopened?.(id);
   return getTask(id);
 }
 
@@ -213,6 +242,109 @@ export function resolveProposal(id: number, status: "approved" | "rejected"): Pr
     updateTask(p.taskId, { assignee: p.assignee, reason: p.reason });
   }
   return p;
+}
+
+export interface SummaryElement {
+  text: string;
+  checked: boolean;
+}
+
+export interface SummaryCard {
+  id: number;
+  title: string;
+  elements: SummaryElement[];
+  taskIds: number[];
+  settled: boolean;
+  createdAt: string;
+}
+
+function rowToCard(r: any): SummaryCard {
+  return {
+    id: r.id,
+    title: r.title,
+    elements: JSON.parse(r.elements),
+    taskIds: JSON.parse(r.task_ids),
+    settled: !!r.settled,
+    createdAt: r.created_at,
+  };
+}
+
+export function listSummaryCards(): SummaryCard[] {
+  return (db.prepare("SELECT * FROM summary_cards ORDER BY id").all() as any[]).map(rowToCard);
+}
+
+export function getSummaryCard(id: number): SummaryCard | undefined {
+  const r = db.prepare("SELECT * FROM summary_cards WHERE id = ?").get(id) as any;
+  return r ? rowToCard(r) : undefined;
+}
+
+// 完了タスクの合流先。settled=0 のカードが「まだ見ていない要約」。
+// 全要素チェック済みなら過去ログ化(settle)して新しいカードを始める。
+export function getOrCreateActiveCard(): SummaryCard {
+  const active = listSummaryCards().filter((c) => !c.settled).at(-1);
+  if (active) {
+    const allChecked = active.elements.length > 0 && active.elements.every((e) => e.checked);
+    if (!allChecked) return active;
+    db.prepare("UPDATE summary_cards SET settled = 1 WHERE id = ?").run(active.id);
+  }
+  const info = db
+    .prepare("INSERT INTO summary_cards (title, elements, task_ids) VALUES (?, ?, ?)")
+    .run("完了タスクの要約", "[]", "[]");
+  return getSummaryCard(Number(info.lastInsertRowid))!;
+}
+
+export function assignTaskToCard(taskId: number, cardId: number) {
+  db.prepare("UPDATE tasks SET archived = 1, summary_card_id = ? WHERE id = ?").run(cardId, taskId);
+  const ids = new Set<number>(JSON.parse((db.prepare("SELECT task_ids FROM summary_cards WHERE id = ?").get(cardId) as any).task_ids));
+  ids.add(taskId);
+  db.prepare("UPDATE summary_cards SET task_ids = ? WHERE id = ?").run(JSON.stringify([...ids]), cardId);
+}
+
+export function detachTaskFromCard(taskId: number) {
+  const r = db.prepare("SELECT summary_card_id FROM tasks WHERE id = ?").get(taskId) as any;
+  const cardId = r?.summary_card_id;
+  db.prepare("UPDATE tasks SET archived = 0, summary_card_id = NULL WHERE id = ?").run(taskId);
+  if (cardId) {
+    const card = getSummaryCard(cardId);
+    if (card) {
+      const ids = card.taskIds.filter((id) => id !== taskId);
+      db.prepare("UPDATE summary_cards SET task_ids = ? WHERE id = ?").run(JSON.stringify(ids), cardId);
+    }
+  }
+  return cardId as number | undefined;
+}
+
+export function tasksOfCard(cardId: number): Task[] {
+  return (db.prepare("SELECT * FROM tasks WHERE summary_card_id = ? ORDER BY id").all(cardId) as any[]).map(rowToTask);
+}
+
+export function updateCardContent(cardId: number, title: string | null, elements: SummaryElement[]) {
+  const cur = getSummaryCard(cardId);
+  if (!cur) return;
+  db.prepare("UPDATE summary_cards SET title = ?, elements = ? WHERE id = ?").run(
+    title ?? cur.title,
+    JSON.stringify(elements),
+    cardId
+  );
+}
+
+export function deleteSummaryCards(ids: number[]) {
+  const stmt = db.prepare("DELETE FROM summary_cards WHERE id = ?");
+  for (const id of ids) stmt.run(id);
+}
+
+export function reassignTasksToCard(taskIds: number[], cardId: number) {
+  const stmt = db.prepare("UPDATE tasks SET summary_card_id = ? WHERE id = ?");
+  for (const id of taskIds) stmt.run(cardId, id);
+  db.prepare("UPDATE summary_cards SET task_ids = ? WHERE id = ?").run(JSON.stringify(taskIds), cardId);
+}
+
+export function setSummaryElementChecked(cardId: number, index: number, checked: boolean): SummaryCard | undefined {
+  const card = getSummaryCard(cardId);
+  if (!card || !card.elements[index]) return undefined;
+  card.elements[index].checked = checked;
+  db.prepare("UPDATE summary_cards SET elements = ? WHERE id = ?").run(JSON.stringify(card.elements), cardId);
+  return getSummaryCard(cardId);
 }
 
 export function getProjectContext(): string {

@@ -1,4 +1,4 @@
-import type { ChatResponse, Member, Proposal, Task, TaskStatus } from "./types";
+import type { ChatResponse, Member, Proposal, SummaryCard, Task, TaskStatus } from "./types";
 
 async function json<T>(res: Response): Promise<T> {
   if (!res.ok) throw new Error(`${res.status}: ${await res.text()}`);
@@ -7,7 +7,15 @@ async function json<T>(res: Response): Promise<T> {
 
 export const api = {
   board: () =>
-    fetch("/api/board").then((r) => json<{ tasks: Task[]; members: Member[]; proposals: Proposal[] }>(r)),
+    fetch("/api/board").then((r) =>
+      json<{ tasks: Task[]; members: Member[]; proposals: Proposal[]; summaryCards: SummaryCard[] }>(r)
+    ),
+  checkSummaryElement: (cardId: number, index: number, checked: boolean) =>
+    fetch(`/api/summary-cards/${cardId}/check`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ index, checked }),
+    }).then((r) => json<SummaryCard>(r)),
   updateTask: (id: number, patch: Partial<Pick<Task, "title" | "assignee" | "reason" | "sort">> & { status?: TaskStatus }) =>
     fetch(`/api/tasks/${id}`, {
       method: "PATCH",

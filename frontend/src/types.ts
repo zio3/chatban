@@ -28,6 +28,20 @@ export interface Proposal {
   createdAt: string;
 }
 
+export interface SummaryElement {
+  text: string;
+  checked: boolean;
+}
+
+export interface SummaryCard {
+  id: number;
+  title: string;
+  elements: SummaryElement[];
+  taskIds: number[];
+  settled: boolean;
+  createdAt: string;
+}
+
 export interface ToolTrace {
   tool: string;
   input: unknown;

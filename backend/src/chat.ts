@@ -1,4 +1,5 @@
 import type OpenAI from "openai";
+import { compactArchive } from "./archive.js";
 import {
   assignmentHistory,
   createProposal,
@@ -6,6 +7,7 @@ import {
   deleteTask,
   getProjectContext,
   listPendingProposals,
+  listSummaryCards,
   listTasks,
   memberLoads,
   setProjectContext,
@@ -130,6 +132,15 @@ const tools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
   {
     type: "function",
     function: {
+      name: "compact_archive",
+      description:
+        "確認済み(全要素チェック済み)の要約カードを1枚に統合する(「ログ整頓して」)。生データから再要約するので情報は薄まらない",
+      parameters: { type: "object", properties: {} },
+    },
+  },
+  {
+    type: "function",
+    function: {
       name: "update_project_context",
       description:
         "プロジェクトの前提情報(全員共有、システムプロンプトに常時含まれる)を上書き更新する。既存内容を踏まえ、ユーザーの要望を反映した新しい全文を渡す",
@@ -158,7 +169,7 @@ const tools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
   },
 ];
 
-function execTool(name: string, args: any, uiActions: UiAction[], events: Set<string>): unknown {
+async function execTool(name: string, args: any, uiActions: UiAction[], events: Set<string>): Promise<unknown> {
   switch (name) {
     case "create_tasks": {
       const created = (args.tasks as any[]).map((t) =>
@@ -190,6 +201,15 @@ function execTool(name: string, args: any, uiActions: UiAction[], events: Set<st
       events.add("proposals");
       return { ok: true, proposals: created };
     }
+    case "compact_archive": {
+      try {
+        const result = await compactArchive();
+        events.add("board");
+        return { ok: true, ...result };
+      } catch (e: any) {
+        return { ok: false, error: e?.message ?? String(e) };
+      }
+    }
     case "update_project_context": {
       setProjectContext(args.text ?? "");
       return { ok: true };
@@ -209,12 +229,20 @@ function buildSystemPrompt(): string {
   const history = assignmentHistory();
   const pending = listPendingProposals();
   const projectContext = getProjectContext();
+  const summaryCards = listSummaryCards();
   return [
     "あなたはチームのタスク管理ボード「ChatBan」のアシスタント。日本語で簡潔に応答する。",
     "",
     projectContext ? `## プロジェクトの前提情報 (全員共有)\n${projectContext}\n` : "",
     "## ボードの状態 (status: todo=未着手, inprogress=作業中, review=レビュー中, done=完了)",
+    "完了タスクは自動でアーカイブされ要約カードに畳まれる。以下のボードには未アーカイブ分のみ載っている。",
     JSON.stringify(tasks),
+    "",
+    summaryCards.length
+      ? `## アーカイブ要約 (過去の完了の蒸留。過去の作業について聞かれたらここを参照)\n${JSON.stringify(
+          summaryCards.map((c) => ({ id: c.id, title: c.title, elements: c.elements.map((e) => e.text) }))
+        )}`
+      : "",
     "",
     "## メンバーと現在の担当タスク数(未完了)",
     JSON.stringify(loads),
@@ -232,6 +260,7 @@ function buildSystemPrompt(): string {
     "- 「終わりました」等の完了報告は該当タスクを status=done に更新。発言者名が分かればその人のタスクを優先して曖昧参照を解決する。",
     "- 「◯◯さんの分だけ見せて」は set_view を使う。",
     "- チーム共通の前提・決まりごと(締切、方針、用語など)を伝えられたら update_project_context で前提情報に反映する。",
+    "- 「ログ整頓して」は compact_archive を使う。完了タスクのアーカイブは自動なので手動操作は不要。",
     "- 操作後は結果を一言で報告する。長い説明はしない。",
   ]
     .filter(Boolean)
@@ -245,6 +274,7 @@ const TOOL_LABELS: Record<string, string> = {
   propose_assignments: "割り振りを検討",
   set_view: "ビューを切替",
   update_project_context: "前提情報を更新",
+  compact_archive: "過去ログを整頓",
 };
 
 export async function runChatTurn(
@@ -283,7 +313,7 @@ export async function runChatTurn(
         }
         log("tool", `${tc.function.name} ${tc.function.arguments?.slice(0, 200)}`);
         onProgress?.(TOOL_LABELS[tc.function.name] ?? tc.function.name);
-        const result = execTool(tc.function.name, args, uiActions, events as Set<string>);
+        const result = await execTool(tc.function.name, args, uiActions, events as Set<string>);
         trace.push({ tool: tc.function.name, input: args, result });
         messages.push({ role: "tool", tool_call_id: tc.id, content: JSON.stringify(result) });
       }

@@ -22,6 +22,7 @@ export default defineConfig({
       env: {
         PORT: String(BACKEND_PORT),
         DB_PATH: "e2e-test.db",
+        AUTO_ARCHIVE: "0", // done移動でLLM要約が走らないように
       },
     },
     {

@@ -105,44 +105,28 @@ function SortableCard({
   );
 }
 
-function SummaryCardView({
-  card,
-  onToggle,
-}: {
-  card: SummaryCard;
-  onToggle: (cardId: number, index: number, checked: boolean) => void;
-}) {
-  const allChecked = card.elements.length > 0 && card.elements.every((e) => e.checked);
-  const [open, setOpen] = useState(!allChecked); // 未確認が残るカードは開いた状態
-  const unchecked = card.elements.filter((e) => !e.checked).length;
+// #58: チェックボックスは廃止 (done=検収済みなので把握確認が二重になる)。
+// アクティブカード=緑で開いた状態、整頓で過去ログ化(settled)されたカード=グレーで畳んだ状態
+function SummaryCardView({ card }: { card: SummaryCard }) {
+  const [open, setOpen] = useState(!card.settled);
   return (
     <div
       data-testid={`summary-card-${card.id}`}
-      className={`rounded-lg border p-2.5 shadow-sm ${allChecked ? "border-slate-200 bg-slate-50" : "border-emerald-300 bg-emerald-50"}`}
+      className={`rounded-lg border p-2.5 shadow-sm ${card.settled ? "border-slate-200 bg-slate-50" : "border-emerald-300 bg-emerald-50"}`}
     >
       <button onClick={() => setOpen(!open)} className="flex w-full items-center justify-between gap-2 text-left">
         <span className="text-sm font-bold text-slate-700">
           📦 {card.title}
           <span className="ml-1.5 text-xs font-normal text-slate-400">({card.taskIds.length}件)</span>
         </span>
-        <span className="flex items-center gap-1.5 text-xs text-slate-400">
-          {unchecked > 0 && (
-            <span className="rounded-full bg-emerald-600 px-1.5 py-0.5 font-medium text-white">未確認 {unchecked}</span>
-          )}
-          {open ? "▾" : "▸"}
-        </span>
+        <span className="text-xs text-slate-400">{open ? "▾" : "▸"}</span>
       </button>
       {open && (
         <ul className="mt-2 space-y-1.5">
           {card.elements.map((e, i) => (
-            <li key={i} className="flex items-start gap-2 text-xs leading-snug">
-              <input
-                type="checkbox"
-                checked={e.checked}
-                onChange={(ev) => onToggle(card.id, i, ev.target.checked)}
-                className="mt-0.5 accent-emerald-600"
-              />
-              <span className={e.checked ? "text-slate-400" : "text-slate-700"}>{e.text}</span>
+            <li key={i} className="flex items-start gap-1.5 text-xs leading-snug text-slate-700">
+              <span className="text-slate-400">•</span>
+              <span>{e.text}</span>
             </li>
           ))}
           {card.elements.length === 0 && <li className="text-xs text-slate-400">要約を生成中…</li>}
@@ -157,7 +141,6 @@ function Column({
   tasks,
   summaryCards,
   archiveWorking,
-  onToggleSummaryElement,
   onOpenTask,
   approvedIds,
   onToggleApproved,
@@ -167,7 +150,6 @@ function Column({
   tasks: Task[];
   summaryCards?: SummaryCard[];
   archiveWorking?: boolean;
-  onToggleSummaryElement?: (cardId: number, index: number, checked: boolean) => void;
   onOpenTask: (id: number) => void;
   /** Review列のみ: 検収OKマークの集合と一括確定 (#57) */
   approvedIds?: Set<number>;
@@ -211,12 +193,11 @@ function Column({
           要約カードを再生成中…
         </div>
       )}
-      {/* Done列: 要約カード常駐 (未確認カード→過去ログの順) */}
+      {/* Done列: 要約カード常駐 (アクティブ→過去ログの順) */}
       {summaryCards &&
-        onToggleSummaryElement &&
         [...summaryCards]
-          .sort((a, b) => Number(a.elements.every((e) => e.checked)) - Number(b.elements.every((e) => e.checked)) || b.id - a.id)
-          .map((c) => <SummaryCardView key={c.id} card={c} onToggle={onToggleSummaryElement} />)}
+          .sort((a, b) => Number(a.settled) - Number(b.settled) || b.id - a.id)
+          .map((c) => <SummaryCardView key={c.id} card={c} />)}
       <SortableContext items={tasks.map((t) => t.id)} strategy={verticalListSortingStrategy}>
         {tasks.map((t) => (
           <SortableCard
@@ -242,7 +223,6 @@ export default function Board({
   summaryCards,
   archiveWorking,
   onMove,
-  onToggleSummaryElement,
   onOpenTask,
   approvedIds,
   onToggleApproved,
@@ -252,7 +232,6 @@ export default function Board({
   summaryCards: SummaryCard[];
   archiveWorking?: boolean;
   onMove: (move: MovePayload) => void;
-  onToggleSummaryElement: (cardId: number, index: number, checked: boolean) => void;
   onOpenTask: (id: number) => void;
   approvedIds: Set<number>;
   onToggleApproved: (id: number) => void;
@@ -301,7 +280,6 @@ export default function Board({
             tasks={byStatus(col.key)}
             summaryCards={col.key === "done" ? summaryCards : undefined}
             archiveWorking={col.key === "done" ? archiveWorking : undefined}
-            onToggleSummaryElement={col.key === "done" ? onToggleSummaryElement : undefined}
             onOpenTask={onOpenTask}
             approvedIds={col.key === "review" ? approvedIds : undefined}
             onToggleApproved={col.key === "review" ? onToggleApproved : undefined}

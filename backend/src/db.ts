@@ -294,15 +294,11 @@ export function getSummaryCard(id: number): SummaryCard | undefined {
   return r ? rowToCard(r) : undefined;
 }
 
-// 完了タスクの合流先。settled=0 のカードが「まだ見ていない要約」。
-// 全要素チェック済みなら過去ログ化(settle)して新しいカードを始める。
+// 完了タスクの合流先。settled=0 のカードが「育っているアクティブ要約」。
+// 過去ログ化(settle)の引き金は整頓(compact_archive)のみ (#58)。
 export function getOrCreateActiveCard(): SummaryCard {
   const active = listSummaryCards().filter((c) => !c.settled).at(-1);
-  if (active) {
-    const allChecked = active.elements.length > 0 && active.elements.every((e) => e.checked);
-    if (!allChecked) return active;
-    db.prepare("UPDATE summary_cards SET settled = 1 WHERE id = ?").run(active.id);
-  }
+  if (active) return active;
   const info = db
     .prepare("INSERT INTO summary_cards (title, elements, task_ids) VALUES (?, ?, ?)")
     .run("完了タスクの要約", "[]", "[]");
@@ -355,12 +351,8 @@ export function reassignTasksToCard(taskIds: number[], cardId: number) {
   db.prepare("UPDATE summary_cards SET task_ids = ? WHERE id = ?").run(JSON.stringify(taskIds), cardId);
 }
 
-export function setSummaryElementChecked(cardId: number, index: number, checked: boolean): SummaryCard | undefined {
-  const card = getSummaryCard(cardId);
-  if (!card || !card.elements[index]) return undefined;
-  card.elements[index].checked = checked;
-  db.prepare("UPDATE summary_cards SET elements = ? WHERE id = ?").run(JSON.stringify(card.elements), cardId);
-  return getSummaryCard(cardId);
+export function setCardSettled(cardId: number): void {
+  db.prepare("UPDATE summary_cards SET settled = 1 WHERE id = ?").run(cardId);
 }
 
 export function getProjectContext(): string {

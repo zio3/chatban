@@ -142,15 +142,6 @@ export default function App() {
     setApprovedIds(new Set());
   }, [tasks, approvedIds]);
 
-  const toggleSummaryElement = useCallback((cardId: number, index: number, checked: boolean) => {
-    setSummaryCards((prev) =>
-      prev.map((c) =>
-        c.id === cardId ? { ...c, elements: c.elements.map((e, i) => (i === index ? { ...e, checked } : e)) } : c
-      )
-    );
-    api.checkSummaryElement(cardId, index, checked).catch(() => api.board().then((b) => setSummaryCards(b.summaryCards)));
-  }, []);
-
   const resolveProposal = useCallback((id: number, action: "approve" | "reject") => {
     setProposals((prev) => prev.filter((p) => p.id !== id));
     api.resolveProposal(id, action).catch(() => api.board().then((b) => setProposals(b.proposals)));
@@ -172,9 +163,8 @@ export default function App() {
   if (tasks.filter((t) => t.status === "todo").length === 0) {
     suggestions.push({ label: "💡 次のタスク候補を挙げて", message: "次にやるべきタスクの候補を挙げて" });
   }
-  const settledCandidates = summaryCards.filter((c) => c.elements.length > 0 && c.elements.every((e) => e.checked));
-  if (settledCandidates.length >= 2) {
-    suggestions.push({ label: `🧹 確認済みログ${settledCandidates.length}枚を整頓`, message: "過去ログを整頓して" });
+  if (summaryCards.length >= 2) {
+    suggestions.push({ label: `🧹 要約カード${summaryCards.length}枚を整頓`, message: "過去ログを整頓して" });
   }
 
   const sortedTasks = [...tasks].sort((a, b) => a.sort - b.sort || a.id - b.id);
@@ -236,7 +226,6 @@ export default function App() {
             summaryCards={summaryCards}
             archiveWorking={archiveWorking}
             onMove={moveTask}
-            onToggleSummaryElement={toggleSummaryElement}
             onOpenTask={openTask}
             approvedIds={approvedIds}
             onToggleApproved={toggleApproved}

@@ -176,7 +176,7 @@ const tools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
     type: "function",
     function: {
       name: "compact_archive",
-      description: "確認済みの要約カードを1枚に統合する",
+      description: "要約カードを1枚の過去ログに統合する",
       parameters: { type: "object", properties: {} },
     },
   },

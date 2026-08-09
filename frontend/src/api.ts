@@ -10,12 +10,6 @@ export const api = {
     fetch("/api/board").then((r) =>
       json<{ tasks: Task[]; members: Member[]; proposals: Proposal[]; summaryCards: SummaryCard[] }>(r)
     ),
-  checkSummaryElement: (cardId: number, index: number, checked: boolean) =>
-    fetch(`/api/summary-cards/${cardId}/check`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ index, checked }),
-    }).then((r) => json<SummaryCard>(r)),
   updateTask: (id: number, patch: Partial<Pick<Task, "title" | "assignee" | "reason" | "sort">> & { status?: TaskStatus }) =>
     fetch(`/api/tasks/${id}`, {
       method: "PATCH",

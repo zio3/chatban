@@ -19,7 +19,6 @@ import {
   metrics,
   resolveProposal,
   saveChatMessage,
-  setSummaryElementChecked,
   updateTask,
 } from "./db.js";
 
@@ -71,14 +70,6 @@ app.get("/api/board", (_req, res) => {
     proposals: listPendingProposals(),
     summaryCards: listSummaryCards(),
   });
-});
-
-app.post("/api/summary-cards/:id/check", (req, res) => {
-  const { index, checked } = req.body ?? {};
-  const card = setSummaryElementChecked(Number(req.params.id), Number(index), !!checked);
-  if (!card) return res.status(404).json({ error: "not found" });
-  broadcastBoard();
-  res.json(card);
 });
 
 app.post("/api/tasks", (req, res) => {

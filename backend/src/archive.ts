@@ -6,6 +6,7 @@ import {
   deleteSummaryCards,
   listSummaryCards,
   reassignTasksToCard,
+  setCardSettled,
   tasksOfCard,
   updateCardContent,
   type SummaryCard,
@@ -112,23 +113,20 @@ export async function onTaskReopened(taskId: number): Promise<SummaryCard | unde
   return regenerateCard(cardId);
 }
 
-/** 過去ログ整頓: 全要素確認済みのカードを1枚に統合 (生データから再要約するので薄まらない) */
+/** 過去ログ整頓: 全カードを1枚のsettled過去ログに統合 (生データから再要約するので薄まらない)。
+ * #58: 過去ログ化(settle)の唯一の引き金。次の完了から新しいアクティブカードが始まる */
 export async function compactArchive(): Promise<{ merged: number; card?: SummaryCard }> {
-  const cards = listSummaryCards();
-  const targets = cards.filter((c) => c.elements.length > 0 && c.elements.every((e) => e.checked));
-  if (targets.length < 2) return { merged: 0 };
+  const targets = listSummaryCards().filter((c) => c.taskIds.length > 0);
+  if (targets.length === 0) return { merged: 0 };
   const keep = targets[0];
   const allTaskIds = targets.flatMap((c) => c.taskIds);
   reassignTasksToCard(allTaskIds, keep.id);
   deleteSummaryCards(targets.slice(1).map((c) => c.id));
   // 白紙にしてから全生データで再要約 (要約の要約ではなく原本から作り直す)
   updateCardContent(keep.id, null, []);
-  const regenerated = await regenerateCard(keep.id);
-  // 統合後は「確認済みの過去ログ」なので全要素をchecked扱いにする
-  if (regenerated) {
-    updateCardContent(keep.id, null, regenerated.elements.map((e) => ({ ...e, checked: true })));
-  }
+  await regenerateCard(keep.id);
+  setCardSettled(keep.id);
   const card = getSummaryCard(keep.id);
-  log("archive", `compacted ${targets.length} cards -> card#${keep.id} (${allTaskIds.length} tasks)`);
+  log("archive", `compacted ${targets.length} cards -> card#${keep.id} (${allTaskIds.length} tasks, settled)`);
   return { merged: targets.length, card };
 }

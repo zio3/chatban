@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "./api";
+import AuditView from "./components/AuditView";
 import Board, { type MovePayload } from "./components/Board";
 import Chat, { type Suggestion } from "./components/Chat";
+import MetricsView from "./components/MetricsView";
 import TaskDetailPanel from "./components/TaskDetailPanel";
 import { useChatTurn } from "./hooks/useChatTurn";
 import { socket } from "./socket";
@@ -23,6 +25,8 @@ export default function App() {
   const [toast, setToast] = useState<Toast | null>(null);
   const [detailTaskId, setDetailTaskId] = useState<number | null>(null);
   const [archiveWorking, setArchiveWorking] = useState(false);
+  // #21/#33: ボード以外の閲覧ビューへの遷移 (簡易タブ)
+  const [view, setView] = useState<"board" | "metrics" | "audit">("board");
   // #14: なりすまし切替 (デモモード)。認証なしで「いま自分は誰か」を選び、チャット発言に記名される
   const [currentUser, setCurrentUser] = useState(() => localStorage.getItem("chatban.currentUser") || "zio");
   const currentUserRef = useRef(currentUser);
@@ -205,6 +209,23 @@ export default function App() {
         <div className="flex items-baseline gap-3">
           <h1 className="text-lg font-bold tracking-tight">ChatBan</h1>
           <span className="text-xs text-slate-500">会話がそのままタスク管理になる</span>
+          <span className="flex gap-1 text-xs">
+            {(
+              [
+                { key: "board", label: "ボード" },
+                { key: "metrics", label: "📊 コスト" },
+                { key: "audit", label: "📜 監査" },
+              ] as const
+            ).map((v) => (
+              <button
+                key={v.key}
+                onClick={() => setView(v.key)}
+                className={`rounded-full px-2.5 py-1 ${view === v.key ? "bg-slate-900 text-white" : "text-slate-500 hover:bg-slate-100"}`}
+              >
+                {v.label}
+              </button>
+            ))}
+          </span>
         </div>
         <div className="flex items-center gap-1 text-sm">
           <button
@@ -248,12 +269,14 @@ export default function App() {
         </div>
       </header>
       <main className="min-h-0 flex-1 overflow-auto p-3">
-        {loading && (
+        {view === "metrics" && <MetricsView />}
+        {view === "audit" && <AuditView />}
+        {view === "board" && loading && (
           <div data-testid="board-loading" className="flex h-40 items-center justify-center text-sm text-slate-400">
             読み込み中…
           </div>
         )}
-        {!loading && loadError && (
+        {view === "board" && !loading && loadError && (
           <div data-testid="board-error" className="flex h-40 flex-col items-center justify-center gap-3">
             <p className="text-sm text-red-600">読み込みに失敗しました: {loadError}</p>
             <button
@@ -264,7 +287,7 @@ export default function App() {
             </button>
           </div>
         )}
-        {!loading && !loadError && (
+        {view === "board" && !loading && !loadError && (
           <Board
             tasks={filter ? sortedTasks.filter((t) => t.assignee === filter) : sortedTasks}
             summaryCards={summaryCards}

@@ -465,12 +465,18 @@ export function recordLlmCall(row: {
 export function metrics() {
   const total = db
     .prepare(
-      "SELECT COUNT(*) AS calls, COALESCE(SUM(prompt_tokens),0) AS pt, COALESCE(SUM(completion_tokens),0) AS ct, COALESCE(AVG(elapsed_ms),0) AS avgMs FROM llm_calls"
+      "SELECT COUNT(*) AS calls, COALESCE(SUM(prompt_tokens),0) AS pt, COALESCE(SUM(completion_tokens),0) AS ct, COALESCE(SUM(cached_tokens),0) AS cached, COALESCE(AVG(elapsed_ms),0) AS avgMs FROM llm_calls"
     )
     .get() as any;
   const byModel = db
     .prepare(
-      "SELECT model, COUNT(*) AS calls, SUM(prompt_tokens) AS pt, SUM(completion_tokens) AS ct, CAST(AVG(elapsed_ms) AS INTEGER) AS avgMs FROM llm_calls GROUP BY model"
+      "SELECT model, COUNT(*) AS calls, SUM(prompt_tokens) AS pt, SUM(completion_tokens) AS ct, SUM(cached_tokens) AS cached, CAST(AVG(elapsed_ms) AS INTEGER) AS avgMs FROM llm_calls GROUP BY model ORDER BY calls DESC"
+    )
+    .all();
+  // 用途別: 「対話は固定・要約は品質ルーティング・定型はコスト優先」の使い分けが数字で見える (#21)
+  const byPurpose = db
+    .prepare(
+      "SELECT purpose, COUNT(*) AS calls, SUM(prompt_tokens) AS pt, SUM(completion_tokens) AS ct, SUM(cached_tokens) AS cached, CAST(AVG(elapsed_ms) AS INTEGER) AS avgMs, COUNT(DISTINCT routed_model) AS models FROM llm_calls GROUP BY purpose ORDER BY calls DESC"
     )
     .all();
   const recent = db.prepare("SELECT * FROM llm_calls ORDER BY id DESC LIMIT 20").all();
@@ -478,8 +484,44 @@ export function metrics() {
     totalCalls: total.calls,
     promptTokens: total.pt,
     completionTokens: total.ct,
+    cachedTokens: total.cached,
     avgElapsedMs: Math.round(total.avgMs),
     byModel,
+    byPurpose,
     recent,
   };
+}
+
+/** オーディットログ (#33): 会話・LLM呼び出し・割り振り履歴の時系列閲覧用 */
+export function auditLog() {
+  const chat = (
+    db.prepare("SELECT id, role, content, task_id, created_at FROM chat_messages ORDER BY id DESC LIMIT 100").all() as any[]
+  ).map((r) => ({
+    id: r.id,
+    role: r.role,
+    content: String(r.content).slice(0, 200),
+    taskId: r.task_id ?? null,
+    createdAt: r.created_at,
+  }));
+  const llm = (
+    db
+      .prepare(
+        "SELECT id, purpose, model, routed_model, prompt_tokens, completion_tokens, cached_tokens, elapsed_ms, created_at FROM llm_calls ORDER BY id DESC LIMIT 100"
+      )
+      .all() as any[]
+  ).map((r) => ({
+    id: r.id,
+    purpose: r.purpose,
+    model: r.model,
+    routedModel: r.routed_model,
+    promptTokens: r.prompt_tokens,
+    completionTokens: r.completion_tokens,
+    cachedTokens: r.cached_tokens,
+    elapsedMs: r.elapsed_ms,
+    createdAt: r.created_at,
+  }));
+  const assignments = (
+    db.prepare("SELECT id, task_title, assignee, note, created_at FROM assignment_history ORDER BY id DESC LIMIT 50").all() as any[]
+  ).map((r) => ({ id: r.id, taskTitle: r.task_title, assignee: r.assignee, note: r.note, createdAt: r.created_at }));
+  return { chat, llm, assignments };
 }

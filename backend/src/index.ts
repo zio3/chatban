@@ -9,6 +9,7 @@ import { hooks } from "./hooks.js";
 import { log } from "./log.js";
 import { buildMcpServer } from "./mcp.js";
 import {
+  auditLog,
   createTask,
   deleteTask,
   getTask,
@@ -197,6 +198,11 @@ app.post("/api/tasks/:id/chat", async (req, res) => {
 
 app.get("/api/metrics", (_req, res) => {
   res.json(metrics());
+});
+
+// オーディットログ (#33): 会話・LLM呼び出し・割り振り履歴の閲覧
+app.get("/api/audit", (_req, res) => {
+  res.json(auditLog());
 });
 
 // MCPエンドポイント (Streamable HTTP, stateless: リクエストごとに接続を組み立てる)

@@ -37,6 +37,7 @@ cd backend; npx tsc --noEmit           # 型チェック (frontendも同様)
 
 - **ChatBan自体の改修タスクは ChatBan のボードで管理する**。MCPツール (`mcp__chatban__*`) で登録→担当Claude→実装→review。障害級の問題だけチャット直
 - **完了はreview検収経由 (#57)**: 実装が終わったら status=review に置く (doneにしない)。done は人間 (zio) の検収のみ。Doneは「置き場」でなく「検収の結果」
+- **Reviewに置くとき検収エビデンスを経緯メモに添付する (#66)**: 実測結果・コミットID・スクショ(docs/evidence/)・未検証項目の明示。人間は根拠を見て✓するだけにする
 - **タスク1件 = 1コミット**。コミットメッセージは `#<taskId> <要約>` 形式
 - テストは頼まれなくても積極的に書く。実装がたまったら `test:e2e` を流す
 - 委任割り振りは propose_assignments 経由 (人間の承認を待つ)。直接assigneeを書き換えるのは指名されたときだけ

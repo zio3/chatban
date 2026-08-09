@@ -51,6 +51,7 @@ export default function Chat({
   onOpenTask,
   onSend,
   onStop,
+  onReset,
 }: {
   log: ChatEntry[];
   sending: boolean;
@@ -61,6 +62,7 @@ export default function Chat({
   onOpenTask: (id: number) => void;
   onSend: (message: string) => void;
   onStop: () => void;
+  onReset: () => void;
 }) {
   const [input, setInput] = useState("");
   const [logHeight, setLogHeight] = useState(() => {
@@ -113,6 +115,16 @@ export default function Chat({
             <div className="h-1 w-10 rounded-full bg-slate-300 group-hover:bg-indigo-400" />
           </div>
           <div className="relative" style={{ height: logHeight }}>
+            {/* 🆕 F5せずに初期状態(チップ+AI提案)へ戻す。表示とLLM文脈のリセットでDBの記録は残る */}
+            {log.length > 0 && (
+              <button
+                onClick={onReset}
+                title="会話をリセットして最初の提案に戻る (記録は監査ログに残ります)"
+                className="absolute right-3 top-2 z-10 rounded-full bg-slate-100 px-2.5 py-0.5 text-xs text-slate-500 hover:bg-slate-200"
+              >
+                🆕 新しい会話
+              </button>
+            )}
             <div ref={scrollRef} className="h-full space-y-2 overflow-y-auto px-4 py-3">
               {log.map((e, i) => (
                 <div key={i} className={`flex ${e.role === "user" ? "justify-end" : "justify-start"}`}>

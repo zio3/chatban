@@ -171,7 +171,7 @@ export default function App() {
 
   // ✨AI提案チップ (#75): ボードの文脈を読んだ提案を非同期で追加 (固定チップは即時表示の保険)
   const [aiSuggestions, setAiSuggestions] = useState<Suggestion[]>([]);
-  useEffect(() => {
+  const fetchAiSuggestions = useCallback(() => {
     fetch("/api/suggestions")
       .then((r) => r.json())
       .then((d) =>
@@ -184,6 +184,17 @@ export default function App() {
       )
       .catch(() => {});
   }, []);
+  useEffect(() => {
+    fetchAiSuggestions();
+  }, [fetchAiSuggestions]);
+
+  // 🆕 新しい会話: F5せずにチャットを初期状態(チップ+AI提案)へ戻す (#72追補)
+  const resetChat = useCallback(() => {
+    mainChat.stop();
+    mainChat.setLog([]);
+    setAiSuggestions([]);
+    fetchAiSuggestions();
+  }, [mainChat.stop, mainChat.setLog, fetchAiSuggestions]);
 
   // 「何を話しかければいいか分からない人」向けのユースケース導線。ボード状態で出し分ける
   const suggestions: Suggestion[] = [];
@@ -329,6 +340,7 @@ export default function App() {
         onOpenTask={openTask}
         onSend={mainChat.send}
         onStop={mainChat.stop}
+        onReset={resetChat}
       />
       </div>
       {detailTask && (

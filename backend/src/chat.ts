@@ -1,15 +1,13 @@
 import type OpenAI from "openai";
 import { compactArchive } from "./archive.js";
+import { getBoardPromptSection } from "./promptState.js";
 import {
   assignmentHistory,
   createProposal,
   createTask,
   deleteTask,
-  getProjectContext,
   getTask,
   listPendingProposals,
-  listSummaryCards,
-  listTasks,
   memberLoads,
   resolveProposal,
   setProjectContext,
@@ -303,12 +301,9 @@ async function execTool(name: string, args: any, uiActions: UiAction[], events: 
 }
 
 function buildSystemPrompt(taskFocus?: ReturnType<typeof getTask>): string {
-  const tasks = listTasks();
   const loads = memberLoads();
   const history = assignmentHistory();
   const pending = listPendingProposals();
-  const projectContext = getProjectContext();
-  const summaryCards = listSummaryCards();
   // キャッシュ友好の並び: 静的な内容(人格/ルール/思想)を先頭に固定し、動的な内容(索引/履歴/カード)を末尾へ。
   // プロンプトキャッシュはプレフィックス一致なので、先頭が安定しているほどヒット部分が伸びる。
   return [
@@ -340,18 +335,10 @@ function buildSystemPrompt(taskFocus?: ReturnType<typeof getTask>): string {
     "- 優先したい → 並び順 (「これ上にして」) で表現する",
     "断るときは設計理由 (語彙が固定だから一言が正確に通じる) を一言添える。",
     "",
-    // ---- ここから動的セクション (毎ターン変わりうる。キャッシュ対象外になる想定) ----
-    `## 今日: ${new Date().toLocaleDateString("ja-JP", { year: "numeric", month: "2-digit", day: "2-digit", weekday: "short" })}`,
-    projectContext ? `## プロジェクトの前提情報 (全員共有)\n${projectContext}\n` : "",
-    "## ボードの索引 (status: todo=未着手, inprogress=作業中, review=レビュー中, done=完了)",
-    "タイトルは要約品質で書かれている。詳細(割り振り理由・経緯メモ)が必要なら get_task_details で取る。完了タスクは自動アーカイブされここには載らない。",
-    JSON.stringify(tasks.map((t) => ({ id: t.id, title: t.title, status: t.status, assignee: t.assignee, ...(t.lane ? { lane: t.lane } : {}), ...(t.due ? { due: t.due } : {}), ...(t.context ? { hasContext: true } : {}) }))),
-    "",
-    summaryCards.length
-      ? `## アーカイブ要約 (過去の完了の蒸留。過去の作業について聞かれたらここを参照)\n${JSON.stringify(
-          summaryCards.map((c) => ({ id: c.id, title: c.title, elements: c.elements.map((e) => e.text) }))
-        )}`
-      : "",
+    // ---- ここから動的セクション ----
+    // #50: ボード状態は「基準スナップショット+変更イベント追記」でプレフィックスを安定させる (promptState.ts)。
+    // 温かい間はバイト不変のまま伸びるのでキャッシュが基準部分まで効く。TTL超過時のみ再ベースライン。
+    getBoardPromptSection(),
     "",
     "## メンバーと現在の担当タスク数(未完了)",
     JSON.stringify(loads),

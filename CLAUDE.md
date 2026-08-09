@@ -35,8 +35,9 @@ cd backend; npx tsc --noEmit           # 型チェック (frontendも同様)
 
 ## 開発運用 (ドッグフーディング)
 
-- **ChatBan自体の改修タスクは ChatBan のボードで管理する**。MCPツール (`mcp__chatban__*`) で登録→担当Claude→実装→done。障害級の問題だけチャット直
-- **タスクdone = 1コミット**。コミットメッセージは `#<taskId> <要約>` 形式
+- **ChatBan自体の改修タスクは ChatBan のボードで管理する**。MCPツール (`mcp__chatban__*`) で登録→担当Claude→実装→review。障害級の問題だけチャット直
+- **完了はreview検収経由 (#57)**: 実装が終わったら status=review に置く (doneにしない)。done は人間 (zio) の検収のみ。Doneは「置き場」でなく「検収の結果」
+- **タスク1件 = 1コミット**。コミットメッセージは `#<taskId> <要約>` 形式
 - テストは頼まれなくても積極的に書く。実装がたまったら `test:e2e` を流す
 - 委任割り振りは propose_assignments 経由 (人間の承認を待つ)。直接assigneeを書き換えるのは指名されたときだけ
 - デバッグは `backend/logs/chatban-YYYY-MM-DD.log` (リクエスト/LLM往復/ツール実行/切断が全部残る)

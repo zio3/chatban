@@ -8,6 +8,7 @@ const backend = process.env.BACKEND_URL ?? "http://localhost:8787";
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   server: {
+    host: true, // #64: スマホ実機からLAN経由でアクセスできるように (http://<PCのIP>:5173)
     proxy: {
       "/api": backend,
       "/socket.io": { target: backend, ws: true },

@@ -406,6 +406,34 @@ const TOOL_LABELS: Record<string, string> = {
   resolve_proposals: "提案を承認/却下",
 };
 
+/** AI提案チップ (#75): ボードの文脈から「いま価値のある操作」を提案する。
+ * チャットと同一のシステムプロンプト+ツール定義で呼ぶことで、キャッシュ済みプレフィックスに相乗りする */
+export async function generateSuggestions(): Promise<{ label: string; message: string }[]> {
+  const res = await chatCompletion("suggest", MODELS.main, {
+    messages: [
+      { role: "system", content: buildSystemPrompt() },
+      {
+        role: "user",
+        content:
+          'ボードの現状を読んで、いまユーザーにとって価値のある操作を最大3つ提案して。ツールは呼ばない。出力はJSON配列のみ: [{"label":"絵文字+15字以内の短文","message":"チャットにそのまま投げる依頼文"}]。期限接近・依存解除・検収たまり・未割り当てなど文脈が根拠のものを優先。',
+      },
+    ],
+    tools,
+  });
+  const text = res.choices[0].message.content ?? "";
+  const m = text.match(/\[[\s\S]*\]/);
+  if (!m) return [];
+  try {
+    const arr = JSON.parse(m[0]);
+    if (!Array.isArray(arr)) return [];
+    return arr
+      .filter((s: any) => typeof s?.label === "string" && typeof s?.message === "string")
+      .slice(0, 3);
+  } catch {
+    return [];
+  }
+}
+
 export async function runChatTurn(
   userMessage: string,
   history: { role: "user" | "assistant"; content: string }[],

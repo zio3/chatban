@@ -245,15 +245,16 @@ export default function Chat({
                   </div>
                 </div>
               )}
-              {/* リコメンドチップはログの流れの中に置く (会話の次の一手として提示) */}
-              {suggestions.length > 0 && (
-                <div className="flex flex-wrap items-center gap-2 pt-1">
+              {/* リコメンドチップは会話が始まる前だけ表示 (押した瞬間チャットが始まり消える #75)。
+                  固定チップ=即時 / ✨AI提案=非同期でちょい後に合流 */}
+              {log.length === 0 && suggestions.length > 0 && (
+                <div className="flex flex-wrap items-center gap-2.5 pt-2">
                   {suggestions.map((s, i) => (
                     <button
                       key={i}
                       disabled={sending}
                       onClick={() => onSend(s.message)}
-                      className="rounded-full border border-indigo-200 bg-indigo-50 px-3 py-1.5 text-xs text-indigo-700 hover:bg-indigo-100 disabled:opacity-40"
+                      className="rounded-2xl border border-indigo-200 bg-indigo-50 px-4 py-2.5 text-sm font-medium text-indigo-700 shadow-sm hover:bg-indigo-100 disabled:opacity-40"
                     >
                       {s.label}
                     </button>

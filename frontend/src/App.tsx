@@ -169,6 +169,22 @@ export default function App() {
     api.resolveProposal(id, action).catch(() => api.board().then((b) => setProposals(b.proposals)));
   }, []);
 
+  // ✨AI提案チップ (#75): ボードの文脈を読んだ提案を非同期で追加 (固定チップは即時表示の保険)
+  const [aiSuggestions, setAiSuggestions] = useState<Suggestion[]>([]);
+  useEffect(() => {
+    fetch("/api/suggestions")
+      .then((r) => r.json())
+      .then((d) =>
+        setAiSuggestions(
+          ((d.suggestions ?? []) as { label: string; message: string }[]).map((s) => ({
+            label: `✨ ${s.label}`,
+            message: s.message,
+          }))
+        )
+      )
+      .catch(() => {});
+  }, []);
+
   // 「何を話しかければいいか分からない人」向けのユースケース導線。ボード状態で出し分ける
   const suggestions: Suggestion[] = [];
   const unassigned = tasks.filter((t) => t.status !== "done" && !t.assignee);
@@ -188,6 +204,7 @@ export default function App() {
   if (summaryCards.length >= 2) {
     suggestions.push({ label: `🧹 要約カード${summaryCards.length}枚を整頓`, message: "過去ログを整頓して" });
   }
+  suggestions.push(...aiSuggestions);
 
   const sortedTasks = [...tasks].sort((a, b) => a.sort - b.sort || a.id - b.id);
 

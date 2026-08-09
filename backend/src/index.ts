@@ -5,7 +5,7 @@ import express from "express";
 import { Server } from "socket.io";
 import { onTaskReopened, onTasksCompleted } from "./archive.js";
 import { fetchBillingUsage } from "./llm.js";
-import { runChatTurn } from "./chat.js";
+import { generateSuggestions, runChatTurn } from "./chat.js";
 import { hooks } from "./hooks.js";
 import { log } from "./log.js";
 import { buildMcpServer } from "./mcp.js";
@@ -207,6 +207,16 @@ app.get("/api/metrics", async (_req, res) => {
 // オーディットログ (#33): 会話・LLM呼び出し・割り振り履歴の閲覧
 app.get("/api/audit", (_req, res) => {
   res.json(auditLog());
+});
+
+// AI提案チップ (#75): ボードの文脈から「いま価値のある操作」を最大3つ。失敗時は空配列 (固定チップが保険)
+app.get("/api/suggestions", async (_req, res) => {
+  try {
+    res.json({ suggestions: await generateSuggestions() });
+  } catch (e: any) {
+    log("chat", `suggestions failed: ${e?.message ?? e}`);
+    res.json({ suggestions: [] });
+  }
 });
 
 // プロジェクト前提情報の閲覧 (#73)。編集はチャット経由のみ (update_project_context)

@@ -254,15 +254,25 @@ export default function TaskDetailPanel({
           >
             +
           </button>
-          <input
+          {/* #76: Enter=送信 / Shift+Enter=改行 */}
+          <textarea
             value={input}
-            onChange={(e) => setInput(e.target.value)}
+            rows={1}
+            onChange={(e) => {
+              setInput(e.target.value);
+              e.target.style.height = "auto";
+              e.target.style.height = `${Math.min(e.target.scrollHeight, 150)}px`;
+            }}
             onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.nativeEvent.isComposing) submit();
+              if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+                e.preventDefault();
+                submit();
+                (e.target as HTMLTextAreaElement).style.height = "auto";
+              }
             }}
             onPaste={(e) => atts.addFromPaste(e)}
-            placeholder={`#${task.id} について話す…`}
-            className="min-w-0 flex-1 rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-indigo-500"
+            placeholder={`#${task.id} について話す… (Shift+Enterで改行)`}
+            className="min-w-0 flex-1 resize-none rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-indigo-500"
           />
           <button
             onClick={submit}

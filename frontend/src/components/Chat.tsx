@@ -76,7 +76,13 @@ export default function Chat({
     return saved >= 120 ? saved : 240;
   });
   const scrollRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+
+  // #76: 複数行入力。textareaを内容に合わせて伸ばす (最大~6行)
+  function autoResize(el: HTMLTextAreaElement) {
+    el.style.height = "auto";
+    el.style.height = `${Math.min(el.scrollHeight, 150)}px`;
+  }
 
   // スプリッター: 上端をドラッグしてログ欄の高さを調整 (localStorageに保存)
   function startResize(e: React.PointerEvent) {
@@ -106,6 +112,9 @@ export default function Chat({
     const text = input.trim();
     if (!text || sending) return;
     setInput("");
+    if (inputRef.current) {
+      inputRef.current.style.height = "auto";
+    }
     onSend(text, atts.attachments.length > 0 ? atts.attachments : undefined);
     atts.clear();
   }
@@ -332,16 +341,24 @@ export default function Chat({
               >
                 +
               </button>
-              <input
+              {/* #76: Enter=送信 / Shift+Enter=改行 (AIチャット作法) */}
+              <textarea
                 ref={inputRef}
                 value={input}
-                onChange={(e) => setInput(e.target.value)}
+                rows={1}
+                onChange={(e) => {
+                  setInput(e.target.value);
+                  autoResize(e.target);
+                }}
                 onKeyDown={(e) => {
-                  if (e.key === "Enter" && !e.nativeEvent.isComposing) submit();
+                  if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+                    e.preventDefault();
+                    submit();
+                  }
                 }}
                 onPaste={(e) => atts.addFromPaste(e)}
-                placeholder="ボードに話しかける…（例: 候補挙げて / スクショやPDFも貼れます）"
-                className="min-w-0 flex-1 bg-transparent px-1 py-1.5 text-sm outline-none"
+                placeholder="ボードに話しかける… (Shift+Enterで改行 / スクショやPDFも貼れます)"
+                className="min-w-0 flex-1 resize-none bg-transparent px-1 py-1.5 text-sm outline-none"
               />
               <button
                 onClick={submit}

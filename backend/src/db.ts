@@ -81,6 +81,11 @@ try {
 } catch {
   /* already exists */
 }
+try {
+  db.exec("ALTER TABLE tasks ADD COLUMN context TEXT");
+} catch {
+  /* already exists */
+}
 db.exec(`
 CREATE TABLE IF NOT EXISTS summary_cards (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -126,6 +131,7 @@ function rowToTask(r: any): Task {
     status: r.status,
     assignee: r.assignee,
     reason: r.reason,
+    context: r.context ?? null,
     lane: r.lane ?? null,
     sort: r.sort ?? r.id,
     createdAt: r.created_at,
@@ -147,14 +153,14 @@ export function getTask(id: number): Task | undefined {
 
 export function updateTask(
   id: number,
-  patch: Partial<Pick<Task, "title" | "status" | "assignee" | "reason" | "sort" | "lane">>
+  patch: Partial<Pick<Task, "title" | "status" | "assignee" | "reason" | "sort" | "lane" | "context">>
 ): Task | undefined {
   const cur = getTask(id);
   if (!cur) return undefined;
   const next = { ...cur, ...patch };
   db.prepare(
-    "UPDATE tasks SET title = ?, status = ?, assignee = ?, reason = ?, sort = ?, lane = ?, updated_at = datetime('now', 'localtime') WHERE id = ?"
-  ).run(next.title, next.status, next.assignee, next.reason, next.sort, next.lane, id);
+    "UPDATE tasks SET title = ?, status = ?, assignee = ?, reason = ?, sort = ?, lane = ?, context = ?, updated_at = datetime('now', 'localtime') WHERE id = ?"
+  ).run(next.title, next.status, next.assignee, next.reason, next.sort, next.lane, next.context, id);
   if (patch.assignee && patch.assignee !== cur.assignee) {
     db.prepare("INSERT INTO assignment_history (task_title, assignee, note) VALUES (?, ?, ?)").run(
       next.title,

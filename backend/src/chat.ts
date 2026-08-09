@@ -6,6 +6,7 @@ import {
   createTask,
   deleteTask,
   getProjectContext,
+  getTask,
   listPendingProposals,
   listSummaryCards,
   listTasks,
@@ -37,7 +38,7 @@ const tools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
     type: "function",
     function: {
       name: "create_tasks",
-      description: "タスクをボードに追加する(複数可)。ユーザーが登録を指示したときだけ使う。候補を出すだけの段階では使わない",
+      description: "タスクをボードに追加する(複数可)",
       parameters: {
         type: "object",
         properties: {
@@ -62,8 +63,7 @@ const tools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
     type: "function",
     function: {
       name: "update_tasks",
-      description:
-        "既存タスクの状態・担当・タイトルを更新する(複数可)。指名割り振り(「1は佐藤に」)や完了報告(「1終わりました」→status=done)に使う",
+      description: "既存タスクの状態・担当・タイトル等を更新する(複数可)",
       parameters: {
         type: "object",
         properties: {
@@ -107,8 +107,7 @@ const tools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
     type: "function",
     function: {
       name: "propose_assignments",
-      description:
-        "担当未定タスクの割り振り案を提案する。委任(「いい感じに振っといて」)のときに使う。直接assigneeを書き換えず、必ずこの提案を経由して人間の承認を待つ。理由には現在の負荷や過去の類似タスク履歴を根拠として書く",
+      description: "割り振り案を提案する(人間の承認で確定)。理由には負荷・履歴の根拠を書く",
       parameters: {
         type: "object",
         properties: {
@@ -132,9 +131,35 @@ const tools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
   {
     type: "function",
     function: {
+      name: "get_task_details",
+      description: "タスクの詳細(割り振り理由・経緯メモ・日付)を取得する",
+      parameters: {
+        type: "object",
+        properties: { ids: { type: "array", items: { type: "integer" } } },
+        required: ["ids"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "update_task_context",
+      description: "タスクの経緯メモを上書き更新する(既存をget_task_detailsで読みマージした全文を渡す)",
+      parameters: {
+        type: "object",
+        properties: {
+          id: { type: "integer" },
+          text: { type: "string", description: "新しいcontext全文" },
+        },
+        required: ["id", "text"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
       name: "compact_archive",
-      description:
-        "確認済み(全要素チェック済み)の要約カードを1枚に統合する(「ログ整頓して」)。生データから再要約するので情報は薄まらない",
+      description: "確認済みの要約カードを1枚に統合する",
       parameters: { type: "object", properties: {} },
     },
   },
@@ -201,6 +226,16 @@ async function execTool(name: string, args: any, uiActions: UiAction[], events: 
       events.add("proposals");
       return { ok: true, proposals: created };
     }
+    case "get_task_details": {
+      const details = (args.ids as number[]).map((id) => getTask(id) ?? { id, error: "not found" });
+      return { tasks: details };
+    }
+    case "update_task_context": {
+      const updated = updateTask(args.id, { context: args.text ?? "" });
+      if (!updated) return { error: `task #${args.id} not found` };
+      events.add("board");
+      return { ok: true, id: updated.id };
+    }
     case "compact_archive": {
       try {
         const result = await compactArchive();
@@ -234,9 +269,9 @@ function buildSystemPrompt(): string {
     "あなたはチームのタスク管理ボード「ChatBan」のアシスタント。日本語で簡潔に応答する。",
     "",
     projectContext ? `## プロジェクトの前提情報 (全員共有)\n${projectContext}\n` : "",
-    "## ボードの状態 (status: todo=未着手, inprogress=作業中, review=レビュー中, done=完了)",
-    "完了タスクは自動でアーカイブされ要約カードに畳まれる。以下のボードには未アーカイブ分のみ載っている。",
-    JSON.stringify(tasks),
+    "## ボードの索引 (status: todo=未着手, inprogress=作業中, review=レビュー中, done=完了)",
+    "タイトルは要約品質で書かれている。詳細(割り振り理由・経緯メモ)が必要なら get_task_details で取る。完了タスクは自動アーカイブされここには載らない。",
+    JSON.stringify(tasks.map((t) => ({ id: t.id, title: t.title, status: t.status, assignee: t.assignee, ...(t.lane ? { lane: t.lane } : {}), ...(t.context ? { hasContext: true } : {}) }))),
     "",
     summaryCards.length
       ? `## アーカイブ要約 (過去の完了の蒸留。過去の作業について聞かれたらここを参照)\n${JSON.stringify(
@@ -248,7 +283,7 @@ function buildSystemPrompt(): string {
     JSON.stringify(loads),
     "",
     "## 過去の割り振り履歴 (類似タスクの参考にする)",
-    JSON.stringify(history),
+    JSON.stringify(history.slice(0, 10).map((h) => ({ t: h.taskTitle.slice(0, 30), a: h.assignee }))),
     "",
     pending.length ? `## 承認待ちの割り振り提案\n${JSON.stringify(pending)}` : "",
     "## 行動ルール",
@@ -260,6 +295,7 @@ function buildSystemPrompt(): string {
     "- 「終わりました」等の完了報告は該当タスクを status=done に更新。発言者名が分かればその人のタスクを優先して曖昧参照を解決する。",
     "- 「◯◯さんの分だけ見せて」は set_view を使う。",
     "- チーム共通の前提・決まりごと(締切、方針、用語など)を伝えられたら update_project_context で前提情報に反映する。",
+    "- 特定タスクの経緯・決定事項・補足(「#22は◯◯方式でいくことにした」等)は update_task_context でそのタスクの経緯メモに記録する。",
     "- 「ログ整頓して」は compact_archive を使う。完了タスクのアーカイブは自動なので手動操作は不要。",
     "- 削除と却下は文脈で使い分ける: 誤登録・重複・ダミー(「消して」「間違えた」)は delete_tasks。やらない決定(「見送り」「却下」「やらないことにした」)は削除せず update_tasks で status=done にし、reason に却下の根拠を書く (決定として要約アーカイブに残る)。どちらか曖昧なら削除せず確認する。",
     "- 操作後は結果を一言で報告する。長い説明はしない。",
@@ -284,6 +320,8 @@ const TOOL_LABELS: Record<string, string> = {
   set_view: "ビューを切替",
   update_project_context: "前提情報を更新",
   compact_archive: "過去ログを整頓",
+  get_task_details: "タスク詳細を取得",
+  update_task_context: "経緯メモを更新",
 };
 
 export async function runChatTurn(

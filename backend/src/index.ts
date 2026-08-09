@@ -31,7 +31,7 @@ const PORT = Number(process.env.PORT ?? 8787);
 
 const app = express();
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: "25mb" })); // #68: 添付(画像/PDFのbase64)を受けるため拡大
 
 const server = http.createServer(app);
 const io = new Server(server, { cors: { origin: "*" } });
@@ -128,11 +128,14 @@ app.post("/api/proposals/:id/:action", (req, res) => {
 
 let chatSeq = 0;
 app.post("/api/chat", async (req, res) => {
-  const { message, history, speaker } = req.body ?? {};
+  const { message, history, speaker, attachments } = req.body ?? {};
   if (!message) return res.status(400).json({ error: "message required" });
   const id = ++chatSeq;
   const t0 = Date.now();
-  log("chat", `#${id} REQ${speaker ? ` [${speaker}]` : ""} "${String(message).slice(0, 120)}" (history=${history?.length ?? 0})`);
+  log(
+    "chat",
+    `#${id} REQ${speaker ? ` [${speaker}]` : ""} "${String(message).slice(0, 120)}" (history=${history?.length ?? 0}${attachments?.length ? ` attachments=${attachments.length}` : ""})`
+  );
   // クライアント切断もログに残す (再起動巻き添え・ブラウザ側中断の追跡用)
   res.on("close", () => {
     if (!res.writableEnded) log("chat", `#${id} CLIENT DISCONNECTED after ${Date.now() - t0}ms`);
@@ -147,10 +150,11 @@ app.post("/api/chat", async (req, res) => {
       },
       (label) => io.emit("chat:progress", { label }), // 応答完了前の逐次フィードバック
       undefined,
-      speaker
+      speaker,
+      attachments
     );
-    // 会話ログはサーバーに永続化する (受領ブリーフィングの素材 + リロードで消えない)
-    saveChatMessage("user", message);
+    // 会話ログはサーバーに永続化する (添付は原本を保存せず名前だけ記録 #68)
+    saveChatMessage("user", message + (attachments?.length ? ` [添付: ${attachments.map((a: any) => a.name).join(", ")}]` : ""));
     saveChatMessage("assistant", result.reply, result.trace, result.usage);
     log(
       "chat",
@@ -171,7 +175,7 @@ app.get("/api/chat/log", (req, res) => {
 // タスク専用チャット (#24): 対象タスクの全詳細をシステムプロンプトに注入し、会話はtask_id付きで分離保存
 app.post("/api/tasks/:id/chat", async (req, res) => {
   const taskId = Number(req.params.id);
-  const { message, history, speaker } = req.body ?? {};
+  const { message, history, speaker, attachments } = req.body ?? {};
   if (!message) return res.status(400).json({ error: "message required" });
   const id = ++chatSeq;
   const t0 = Date.now();
@@ -186,9 +190,16 @@ app.post("/api/tasks/:id/chat", async (req, res) => {
       },
       (label) => io.emit("chat:progress", { label, taskId }),
       taskId,
-      speaker
+      speaker,
+      attachments
     );
-    saveChatMessage("user", message, undefined, undefined, taskId);
+    saveChatMessage(
+      "user",
+      message + (attachments?.length ? ` [添付: ${attachments.map((a: any) => a.name).join(", ")}]` : ""),
+      undefined,
+      undefined,
+      taskId
+    );
     saveChatMessage("assistant", result.reply, result.trace, result.usage, taskId);
     log("chat", `#${id} OK ${Date.now() - t0}ms rounds=${result.usage.rounds} tools=[${result.trace.map((t) => t.tool).join(",")}]`);
     res.json(result);

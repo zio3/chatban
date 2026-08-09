@@ -34,24 +34,26 @@ export const api = {
     message: string,
     history: { role: "user" | "assistant"; content: string }[],
     signal?: AbortSignal,
-    speaker?: string
+    speaker?: string,
+    attachments?: { kind: "image" | "pdf"; name: string; dataUrl: string }[]
   ) =>
     fetch(`/api/tasks/${taskId}/chat`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message, history, speaker }),
+      body: JSON.stringify({ message, history, speaker, attachments }),
       signal,
     }).then((r) => json<ChatResponse>(r)),
   chat: (
     message: string,
     history: { role: "user" | "assistant"; content: string }[],
     signal?: AbortSignal,
-    speaker?: string
+    speaker?: string,
+    attachments?: { kind: "image" | "pdf"; name: string; dataUrl: string }[]
   ) =>
     fetch("/api/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message, history, speaker }),
+      body: JSON.stringify({ message, history, speaker, attachments }),
       signal,
     }).then((r) => json<ChatResponse>(r)),
 };

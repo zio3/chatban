@@ -2,7 +2,9 @@ import { useEffect, useRef, useState } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { api } from "../api";
+import { useAttachments } from "../hooks/useAttachments";
 import { useChatTurn } from "../hooks/useChatTurn";
+import AttachmentTray from "./AttachmentTray";
 import ThinkingIndicator from "./ThinkingIndicator";
 import type { ChatEntry, Task } from "../types";
 
@@ -44,12 +46,15 @@ export default function TaskDetailPanel({
 
   // タスク専用チャット (#24)。ライフサイクルは共有フック (#23/#28/#29/#30)
   const chat = useChatTurn({
-    request: (m, h, signal) => api.taskChat(task.id, m, h, signal, currentUser),
+    request: (m, h, signal, attachments) => api.taskChat(task.id, m, h, signal, currentUser, attachments),
     progressTaskId: task.id,
   });
   const { setLog } = chat;
   const [input, setInput] = useState("");
   const logRef = useRef<HTMLDivElement>(null);
+  // #68: 添付 (貼り付け / +ボタン)。原本非保存の蒸留型
+  const atts = useAttachments();
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     setLog([]);
@@ -64,7 +69,8 @@ export default function TaskDetailPanel({
     const text = input.trim();
     if (!text || chat.sending) return;
     setInput("");
-    chat.send(text);
+    chat.send(text, atts.attachments.length > 0 ? atts.attachments : undefined);
+    atts.clear();
   }
 
   // 左端ドラッグで幅調整 (localStorageに保存)
@@ -227,13 +233,34 @@ export default function TaskDetailPanel({
             </div>
           ))}
         </div>
-        <div className="flex gap-2 px-3 pb-3">
+        <div className="px-3 pb-3">
+          <AttachmentTray attachments={atts.attachments} error={atts.error} onRemove={atts.remove} />
+          <div className="flex gap-2">
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            accept="image/*,application/pdf"
+            className="hidden"
+            onChange={(e) => {
+              if (e.target.files) atts.addFiles(e.target.files);
+              e.target.value = "";
+            }}
+          />
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            title="画像/PDFを添付 (貼り付けも可)"
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-slate-200 text-lg text-slate-500 hover:bg-slate-300"
+          >
+            +
+          </button>
           <input
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === "Enter" && !e.nativeEvent.isComposing) submit();
             }}
+            onPaste={(e) => atts.addFromPaste(e)}
             placeholder={`#${task.id} について話す…`}
             className="min-w-0 flex-1 rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-indigo-500"
           />
@@ -244,6 +271,7 @@ export default function TaskDetailPanel({
           >
             送信
           </button>
+          </div>
         </div>
       </section>
     </aside>

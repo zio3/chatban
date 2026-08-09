@@ -84,4 +84,6 @@ export interface ChatEntry {
   error?: boolean;
   /** 失敗した元メッセージ (再送ボタン用) */
   retryText?: string;
+  /** 添付の表示用メタ (#68)。原本は保持しない */
+  attachments?: { kind: "image" | "pdf"; name: string }[];
 }

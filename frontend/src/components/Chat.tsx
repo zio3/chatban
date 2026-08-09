@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { useAttachments, type Attachment } from "../hooks/useAttachments";
+import AttachmentTray from "./AttachmentTray";
 import ThinkingIndicator from "./ThinkingIndicator";
 import type { ChatEntry, Proposal } from "../types";
 
@@ -60,11 +62,15 @@ export default function Chat({
   proposals: Proposal[];
   onResolveProposal: (id: number, action: "approve" | "reject") => void;
   onOpenTask: (id: number) => void;
-  onSend: (message: string) => void;
+  onSend: (message: string, attachments?: Attachment[]) => void;
   onStop: () => void;
   onReset: () => void;
 }) {
   const [input, setInput] = useState("");
+  // #68: 添付 (D&D / クリップボード貼り付け / +ボタン)。原本非保存の蒸留型
+  const atts = useAttachments();
+  const [dragOver, setDragOver] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [logHeight, setLogHeight] = useState(() => {
     const saved = Number(localStorage.getItem("chatban.logHeight"));
     return saved >= 120 ? saved : 240;
@@ -100,11 +106,29 @@ export default function Chat({
     const text = input.trim();
     if (!text || sending) return;
     setInput("");
-    onSend(text);
+    onSend(text, atts.attachments.length > 0 ? atts.attachments : undefined);
+    atts.clear();
   }
 
   return (
-    <section className="shrink-0 border-t border-slate-200 bg-white">
+    <section
+      className={`relative shrink-0 border-t border-slate-200 bg-white ${dragOver ? "ring-2 ring-inset ring-indigo-400" : ""}`}
+      onDragOver={(e) => {
+        e.preventDefault();
+        setDragOver(true);
+      }}
+      onDragLeave={() => setDragOver(false)}
+      onDrop={(e) => {
+        e.preventDefault();
+        setDragOver(false);
+        atts.addFiles(e.dataTransfer.files);
+      }}
+    >
+      {dragOver && (
+        <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center bg-indigo-50/80 text-sm font-bold text-indigo-600">
+          ここにドロップ (画像 / PDF)
+        </div>
+      )}
       <div>
         <div className="min-h-0">
           <div
@@ -181,7 +205,18 @@ export default function Chat({
                         </Markdown>
                       </div>
                     ) : (
-                      renderUserText(e.content, onOpenTask)
+                      <>
+                        {e.attachments && e.attachments.length > 0 && (
+                          <div className="mb-1 flex flex-wrap gap-1">
+                            {e.attachments.map((a, j) => (
+                              <span key={j} className="rounded bg-indigo-500/60 px-1.5 py-0.5 text-[10px]">
+                                {a.kind === "image" ? "🖼" : "📄"} {a.name}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                        {renderUserText(e.content, onOpenTask)}
+                      </>
                     )}
                     {e.trace && e.trace.length > 0 && (
                       <div className="mt-1.5 flex flex-wrap gap-1">
@@ -275,10 +310,28 @@ export default function Chat({
               )}
             </div>
           </div>
-          {/* 入力欄はClaude/ChatGPT作法: 角丸ピル+先頭の「+」で新しい会話 (#72)。音声入口は撤去済み(#20却下) */}
+          {/* 入力欄はClaude/ChatGPT作法: 角丸ピル+先頭の「+」=ファイル添付 (#68)。新規会話はログ右上の🆕 */}
           <div className="border-t border-slate-100 px-4 py-3">
+            <AttachmentTray attachments={atts.attachments} error={atts.error} onRemove={atts.remove} />
             <div className="flex items-center gap-1.5 rounded-2xl border border-slate-300 bg-white px-2 py-1.5 focus-within:border-indigo-500">
-              {/* 先頭の「+」枠はファイル添付の意味論なので #68(ファイル受け入れ)のために温存。新規会話はログ右上の🆕 */}
+              <input
+                ref={fileInputRef}
+                type="file"
+                multiple
+                accept="image/*,application/pdf"
+                className="hidden"
+                onChange={(e) => {
+                  if (e.target.files) atts.addFiles(e.target.files);
+                  e.target.value = "";
+                }}
+              />
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                title="画像/PDFを添付 (貼り付け・ドロップも可)。原本は保存されず、AIが読んだ内容だけが残ります"
+                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-lg text-slate-500 hover:bg-slate-100"
+              >
+                +
+              </button>
               <input
                 ref={inputRef}
                 value={input}
@@ -286,7 +339,8 @@ export default function Chat({
                 onKeyDown={(e) => {
                   if (e.key === "Enter" && !e.nativeEvent.isComposing) submit();
                 }}
-                placeholder="ボードに話しかける…（例: 候補挙げて / いい感じに振っといて）"
+                onPaste={(e) => atts.addFromPaste(e)}
+                placeholder="ボードに話しかける…（例: 候補挙げて / スクショやPDFも貼れます）"
                 className="min-w-0 flex-1 bg-transparent px-1 py-1.5 text-sm outline-none"
               />
               <button

@@ -10,11 +10,18 @@ const TIMEOUT_MS = 90_000;
  * 1つの状態機械としてまとめ、メインチャットとタスクチャットで共用する。
  * 停止はクライアント側破棄のみ (サーバーのLLMループは走り切り、結果はボードに反映される)。
  */
+export interface TurnAttachment {
+  kind: "image" | "pdf";
+  name: string;
+  dataUrl: string;
+}
+
 export function useChatTurn(opts: {
   request: (
     message: string,
     history: { role: "user" | "assistant"; content: string }[],
-    signal: AbortSignal
+    signal: AbortSignal,
+    attachments?: TurnAttachment[]
   ) => Promise<ChatResponse>;
   /** chat:progress を拾う対象。null=メインチャット / number=そのタスクのチャット */
   progressTaskId?: number | null;
@@ -52,14 +59,22 @@ export function useChatTurn(opts: {
     return () => window.clearInterval(id);
   }, [sending]);
 
-  const send = useCallback(async (message: string) => {
+  const send = useCallback(async (message: string, attachments?: TurnAttachment[]) => {
     const text = message.trim();
     if (!text || abortRef.current) return;
     const history = logRef.current
       .filter((e) => !e.pending && !e.error)
       .map((e) => ({ role: e.role, content: e.content }));
     setSending(true);
-    setLog((prev) => [...prev, { role: "user", content: text }, { role: "assistant", content: "考え中…", pending: true }]);
+    setLog((prev) => [
+      ...prev,
+      {
+        role: "user",
+        content: text,
+        ...(attachments?.length ? { attachments: attachments.map((a) => ({ kind: a.kind, name: a.name })) } : {}),
+      },
+      { role: "assistant", content: "考え中…", pending: true },
+    ]);
     const controller = new AbortController();
     abortRef.current = controller;
     stopReasonRef.current = null;
@@ -68,7 +83,7 @@ export function useChatTurn(opts: {
       controller.abort();
     }, TIMEOUT_MS);
     try {
-      const res = await optsRef.current.request(text, history, controller.signal);
+      const res = await optsRef.current.request(text, history, controller.signal, attachments);
       setLog((prev) => [
         ...prev.filter((e) => !e.pending),
         { role: "assistant", content: res.reply || "(操作を実行しました)", trace: res.trace, usage: res.usage },

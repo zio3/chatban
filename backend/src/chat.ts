@@ -356,6 +356,7 @@ function buildSystemPrompt(taskFocus?: ReturnType<typeof getTask>): string {
     "- ボードから退場するもの(完了・却下)は必ずReviewを通り、人間の検収チェックで確定する。チャットからdoneへ直行する経路は存在しない。",
     "- 「後回し」「今はやらない」「凍結後で」は却下ではない: update_tasks で lane を \"later\" にするだけ。status は変えない (done にするとアーカイブに吸い込まれる)。デモに必要なら lane を \"demo\" に。",
     "- 「金曜まで」「明日まで」等の期限表現は今日の日付から YYYY-MM-DD に解決して due に入れる。期限が近い/過ぎたタスクはレポートや割り振り提案で優先的に言及する。",
+    "- 画像やPDFが添付されたら内容を読み取って会話・操作に活かす。重要な情報(バグの症状、決定事項、資料の要点)はタスクの context や前提情報に文字で蒸留して記録する。ファイル原本はどこにも保存されないため、後から参照が必要な内容は必ず文字にして残す。",
     "- 「#AはB待ち」「Bが終わってから」等の依存表現は blocked_by に依存先IDを登録する(複数可)。索引の dep がそれ。依存先が未完了のタスクは割り振り提案の対象にせず、レポートでは「#N待ち」と添える。",
     "- 操作後は結果を一言で報告する。長い説明はしない。",
     "",
@@ -406,6 +407,23 @@ const TOOL_LABELS: Record<string, string> = {
   resolve_proposals: "提案を承認/却下",
 };
 
+// #68: 添付は「保存しない蒸留型」— 画像もPDFもそのままLLMに渡し(前処理なし、原本はどこにも残さない)、
+// 重要な情報はAIが context / 前提情報に文字で蒸留する (Doneアーカイブ・チャット揮発化と同じ思想)。
+// PDFはOpenAIのfileコンテンツパート直投げがOrcaRouter経由で通ることを実測済み (gpt-5.4-miniはfile入力対応)
+export interface ChatAttachment {
+  kind: "image" | "pdf";
+  name: string;
+  dataUrl: string;
+}
+
+function buildAttachmentParts(attachments: ChatAttachment[]): OpenAI.Chat.Completions.ChatCompletionContentPart[] {
+  return attachments.map((a) =>
+    a.kind === "image"
+      ? { type: "image_url", image_url: { url: a.dataUrl } }
+      : ({ type: "file", file: { filename: a.name, file_data: a.dataUrl } } as any)
+  );
+}
+
 /** AI提案チップ (#75): ボードの文脈から「いま価値のある操作」を提案する。
  * チャットと同一のシステムプロンプト+ツール定義で呼ぶことで、キャッシュ済みプレフィックスに相乗りする */
 export async function generateSuggestions(): Promise<{ label: string; message: string }[]> {
@@ -440,12 +458,22 @@ export async function runChatTurn(
   onEvent: (kind: "board" | "proposals") => void,
   onProgress?: (label: string) => void,
   taskFocusId?: number,
-  speaker?: string
+  speaker?: string,
+  attachments?: ChatAttachment[]
 ): Promise<ChatResult> {
   const t0 = Date.now();
   const taskFocus = taskFocusId != null ? getTask(taskFocusId) : undefined;
+  // #68: 添付はそのままコンテンツパートでLLMへ (画像=vision / PDF=file直投げ)。原本は保存しない
+  const fileParts = attachments && attachments.length > 0 ? buildAttachmentParts(attachments) : [];
   // #14: なりすまし切替の記名。発言者が分かると「終わりました」等の曖昧参照が解決できる
-  const userContent = speaker ? `[発言者: ${speaker}] ${userMessage}` : userMessage;
+  const baseText =
+    (speaker ? `[発言者: ${speaker}] ` : "") +
+    userMessage +
+    (fileParts.length > 0
+      ? `\n[添付${fileParts.length}件 (${attachments!.map((a) => a.name).join(", ")}) — 内容を読み取って活用すること]`
+      : "");
+  const userContent: OpenAI.Chat.Completions.ChatCompletionUserMessageParam["content"] =
+    fileParts.length > 0 ? [{ type: "text", text: baseText }, ...fileParts] : baseText;
   const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
     { role: "system", content: buildSystemPrompt(taskFocus) },
     ...history.slice(-20),

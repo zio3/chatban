@@ -39,7 +39,7 @@ export default function App() {
 
   // メインチャット: ライフサイクル(送信/考え中/停止/タイムアウト/再送)は共有フックに集約 (#23/#28/#29/#30)
   const mainChat = useChatTurn({
-    request: (m, h, signal) => api.chat(m, h, signal, currentUserRef.current),
+    request: (m, h, signal, attachments) => api.chat(m, h, signal, currentUserRef.current, attachments),
     onResponse: (res) => {
       for (const a of res.uiActions) {
         if (a.type === "set_filter") setFilter(a.assignee);

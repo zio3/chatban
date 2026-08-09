@@ -167,27 +167,39 @@ export function getTask(id: number): Task | undefined {
   return r ? rowToTask(r) : undefined;
 }
 
-export function updateTask(
-  id: number,
-  patch: Partial<Pick<Task, "title" | "status" | "assignee" | "reason" | "sort" | "lane" | "context" | "due">>
-): Task | undefined {
-  const cur = getTask(id);
-  if (!cur) return undefined;
-  const next = { ...cur, ...patch };
-  db.prepare(
-    "UPDATE tasks SET title = ?, status = ?, assignee = ?, reason = ?, sort = ?, lane = ?, context = ?, due = ?, updated_at = datetime('now', 'localtime') WHERE id = ?"
-  ).run(next.title, next.status, next.assignee, next.reason, next.sort, next.lane, next.context, next.due, id);
-  if (patch.assignee && patch.assignee !== cur.assignee) {
-    db.prepare("INSERT INTO assignment_history (task_title, assignee, note) VALUES (?, ?, ?)").run(
-      next.title,
-      patch.assignee,
-      patch.reason ?? null
-    );
-  }
+export type TaskPatch = Partial<Pick<Task, "title" | "status" | "assignee" | "reason" | "sort" | "lane" | "context" | "due">>;
+
+/** 複数タスクの一括更新 (#60)。完了遷移はまとめて1回だけ通知する (要約再生成のバッチ化)。
+ * 単一更新もこの関数の長さ1ケースとして扱う — Doneへ入るルートはここ1本 */
+export function updateTasks(patches: { id: number; patch: TaskPatch }[]): (Task | undefined)[] {
+  const completed: number[] = [];
+  const reopened: number[] = [];
+  const results = patches.map(({ id, patch }) => {
+    const cur = getTask(id);
+    if (!cur) return undefined;
+    const next = { ...cur, ...patch };
+    db.prepare(
+      "UPDATE tasks SET title = ?, status = ?, assignee = ?, reason = ?, sort = ?, lane = ?, context = ?, due = ?, updated_at = datetime('now', 'localtime') WHERE id = ?"
+    ).run(next.title, next.status, next.assignee, next.reason, next.sort, next.lane, next.context, next.due, id);
+    if (patch.assignee && patch.assignee !== cur.assignee) {
+      db.prepare("INSERT INTO assignment_history (task_title, assignee, note) VALUES (?, ?, ?)").run(
+        next.title,
+        patch.assignee,
+        patch.reason ?? null
+      );
+    }
+    if (cur.status !== "done" && next.status === "done") completed.push(id);
+    else if (cur.status === "done" && next.status !== "done") reopened.push(id);
+    return getTask(id);
+  });
   // 完了/再開の遷移をアプリ層に通知 (Doneアーカイブ+要約の再生成トリガー)
-  if (cur.status !== "done" && next.status === "done") hooks.taskCompleted?.(id);
-  else if (cur.status === "done" && next.status !== "done") hooks.taskReopened?.(id);
-  return getTask(id);
+  if (completed.length > 0) hooks.tasksCompleted?.(completed);
+  for (const id of reopened) hooks.taskReopened?.(id);
+  return results;
+}
+
+export function updateTask(id: number, patch: TaskPatch): Task | undefined {
+  return updateTasks([{ id, patch }])[0];
 }
 
 export function deleteTask(id: number): boolean {

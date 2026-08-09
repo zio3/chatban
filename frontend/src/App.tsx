@@ -132,13 +132,12 @@ export default function App() {
     });
   }, []);
   const commitApproved = useCallback(() => {
-    tasks
-      .filter((t) => t.status === "review" && approvedIds.has(t.id))
-      .forEach((t) =>
-        api.updateTask(t.id, { status: "done" }).catch((e) => {
-          setToast({ message: `検収に失敗しました: ${e?.message ?? e}` });
-        })
-      );
+    const ids = tasks.filter((t) => t.status === "review" && approvedIds.has(t.id)).map((t) => t.id);
+    if (ids.length === 0) return;
+    // 複数前提の一括確定API (#60): N件でも要約再生成は1回
+    api.approveTasks(ids).catch((e) => {
+      setToast({ message: `検収に失敗しました: ${e?.message ?? e}` });
+    });
     setApprovedIds(new Set());
   }, [tasks, approvedIds]);
 

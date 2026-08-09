@@ -16,6 +16,12 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(patch),
     }).then((r) => json<Task>(r)),
+  approveTasks: (ids: number[]) =>
+    fetch("/api/tasks/approve", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ids }),
+    }).then((r) => json<{ ok: boolean }>(r)),
   resolveProposal: (id: number, action: "approve" | "reject") =>
     fetch(`/api/proposals/${id}/${action}`, { method: "POST" }).then((r) => json<Proposal>(r)),
   chatLog: (taskId?: number) =>

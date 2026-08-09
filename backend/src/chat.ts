@@ -14,6 +14,7 @@ import {
   resolveProposal,
   setProjectContext,
   updateTask,
+  updateTasks,
 } from "./db.js";
 import { chatCompletion, MODELS } from "./llm.js";
 import { log } from "./log.js";
@@ -231,15 +232,19 @@ async function execTool(name: string, args: any, uiActions: UiAction[], events: 
       return { ok: true, created };
     }
     case "update_tasks": {
-      const updated = (args.updates as any[]).map((u) =>
-        updateTask(u.id, {
-          ...(u.title !== undefined ? { title: u.title } : {}),
-          ...(u.status !== undefined ? { status: u.status as TaskStatus } : {}),
-          ...(u.assignee !== undefined ? { assignee: u.assignee } : {}),
-          ...(u.reason !== undefined ? { reason: u.reason } : {}),
-          ...(u.lane !== undefined ? { lane: u.lane } : {}),
-          ...(u.due !== undefined ? { due: u.due } : {}),
-        })
+      // 一括更新は db 層でまとめて処理 (完了遷移の通知=要約再生成が1回で済む #60)
+      const updated = updateTasks(
+        (args.updates as any[]).map((u) => ({
+          id: u.id,
+          patch: {
+            ...(u.title !== undefined ? { title: u.title } : {}),
+            ...(u.status !== undefined ? { status: u.status as TaskStatus } : {}),
+            ...(u.assignee !== undefined ? { assignee: u.assignee } : {}),
+            ...(u.reason !== undefined ? { reason: u.reason } : {}),
+            ...(u.lane !== undefined ? { lane: u.lane } : {}),
+            ...(u.due !== undefined ? { due: u.due } : {}),
+          },
+        }))
       );
       events.add("board");
       return { ok: true, updated };

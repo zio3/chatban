@@ -11,7 +11,7 @@ import {
   memberLoads,
   metrics,
   setProjectContext,
-  updateTask,
+  updateTasks,
 } from "./db.js";
 import type { TaskStatus } from "./types.js";
 
@@ -75,16 +75,20 @@ export function buildMcpServer(onEvent: (kind: "board" | "proposals") => void): 
       },
     },
     async ({ updates }) => {
-      const updated = updates.map((u) =>
-        updateTask(u.id, {
-          ...(u.title !== undefined ? { title: u.title } : {}),
-          ...(u.status !== undefined ? { status: u.status as TaskStatus } : {}),
-          ...(u.assignee !== undefined ? { assignee: u.assignee } : {}),
-          ...(u.reason !== undefined ? { reason: u.reason } : {}),
-          ...(u.lane !== undefined ? { lane: u.lane } : {}),
-          ...(u.context !== undefined ? { context: u.context } : {}),
-          ...(u.due !== undefined ? { due: u.due } : {}),
-        })
+      // 一括更新は db 層でまとめて処理 (完了遷移の通知=要約再生成が1回で済む #60)
+      const updated = updateTasks(
+        updates.map((u) => ({
+          id: u.id,
+          patch: {
+            ...(u.title !== undefined ? { title: u.title } : {}),
+            ...(u.status !== undefined ? { status: u.status as TaskStatus } : {}),
+            ...(u.assignee !== undefined ? { assignee: u.assignee } : {}),
+            ...(u.reason !== undefined ? { reason: u.reason } : {}),
+            ...(u.lane !== undefined ? { lane: u.lane } : {}),
+            ...(u.context !== undefined ? { context: u.context } : {}),
+            ...(u.due !== undefined ? { due: u.due } : {}),
+          },
+        }))
       );
       onEvent("board");
       return text({ ok: true, updated });

@@ -20,6 +20,7 @@ import {
   resolveProposal,
   saveChatMessage,
   updateTask,
+  updateTasks,
 } from "./db.js";
 
 const PORT = Number(process.env.PORT ?? 8787);
@@ -46,24 +47,14 @@ function archiveJobDelta(delta: number) {
 }
 
 // 完了→即アーカイブ+要約合流 (E2E等ではAUTO_ARCHIVE=0で無効化)
-// #60: 一括検収でN件同時にdoneが来るため、少し待って束ね、要約再生成(LLM呼び出し)を1回にする
-const COMPLETED_DEBOUNCE_MS = 2500;
-let pendingCompleted: number[] = [];
-let completedTimer: NodeJS.Timeout | null = null;
+// #60: 完了は常にバッチで届く (単一done=長さ1)。N件一括検収でも要約再生成(LLM呼び出し)は1回
 if (process.env.AUTO_ARCHIVE !== "0") {
-  hooks.taskCompleted = (taskId) => {
+  hooks.tasksCompleted = (taskIds) => {
     archiveJobDelta(1);
-    pendingCompleted.push(taskId);
-    if (completedTimer) clearTimeout(completedTimer);
-    completedTimer = setTimeout(() => {
-      const ids = pendingCompleted;
-      pendingCompleted = [];
-      completedTimer = null;
-      onTasksCompleted(ids)
-        .then(() => broadcastBoard())
-        .catch((e) => log("archive", `tasksCompleted [${ids.join(",")}] failed: ${e?.message ?? e}`))
-        .finally(() => archiveJobDelta(-ids.length));
-    }, COMPLETED_DEBOUNCE_MS);
+    onTasksCompleted(taskIds)
+      .then(() => broadcastBoard())
+      .catch((e) => log("archive", `tasksCompleted [${taskIds.join(",")}] failed: ${e?.message ?? e}`))
+      .finally(() => archiveJobDelta(-1));
   };
   hooks.taskReopened = (taskId) => {
     archiveJobDelta(1);
@@ -89,6 +80,15 @@ app.post("/api/tasks", (req, res) => {
   const task = createTask(title, status ?? "todo", assignee ?? null, reason ?? null);
   broadcastBoard();
   res.json(task);
+});
+
+// 一括検収 (#57/#60): Review→Doneの確定。複数前提の1ルート (単一もここを通る)
+app.post("/api/tasks/approve", (req, res) => {
+  const ids = (req.body?.ids ?? []) as number[];
+  if (!Array.isArray(ids) || ids.length === 0) return res.status(400).json({ error: "ids required" });
+  const updated = updateTasks(ids.map((id) => ({ id, patch: { status: "done" as const } })));
+  broadcastBoard();
+  res.json({ ok: true, updated });
 });
 
 app.patch("/api/tasks/:id", (req, res) => {

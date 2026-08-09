@@ -120,15 +120,27 @@ export default function App() {
     }, 60);
   }, []);
 
-  // Review→Doneの検収 (#57)。Doneへの唯一のUI経路 (D&Dは禁止、他はチャット承認のみ)
-  const approveTask = useCallback((id: number) => {
-    api.updateTask(id, { status: "done" }).catch((e) => {
-      setToast({ message: `検収に失敗しました: ${e?.message ?? e}` });
+  // Review→Doneの検収 (#57)。カードの検収OKチェックはマーキングのみで、
+  // 「検収済みN件をDoneへ」ボタンで初めて確定する (Doneへの唯一のUI経路。D&Dは禁止)
+  const [approvedIds, setApprovedIds] = useState<Set<number>>(new Set());
+  const toggleApproved = useCallback((id: number) => {
+    setApprovedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
     });
   }, []);
-  const approveAllReview = useCallback(() => {
-    tasks.filter((t) => t.status === "review").forEach((t) => approveTask(t.id));
-  }, [tasks, approveTask]);
+  const commitApproved = useCallback(() => {
+    tasks
+      .filter((t) => t.status === "review" && approvedIds.has(t.id))
+      .forEach((t) =>
+        api.updateTask(t.id, { status: "done" }).catch((e) => {
+          setToast({ message: `検収に失敗しました: ${e?.message ?? e}` });
+        })
+      );
+    setApprovedIds(new Set());
+  }, [tasks, approvedIds]);
 
   const toggleSummaryElement = useCallback((cardId: number, index: number, checked: boolean) => {
     setSummaryCards((prev) =>
@@ -226,8 +238,9 @@ export default function App() {
             onMove={moveTask}
             onToggleSummaryElement={toggleSummaryElement}
             onOpenTask={openTask}
-            onApprove={approveTask}
-            onApproveAll={approveAllReview}
+            approvedIds={approvedIds}
+            onToggleApproved={toggleApproved}
+            onCommitApproved={commitApproved}
           />
         )}
       </main>

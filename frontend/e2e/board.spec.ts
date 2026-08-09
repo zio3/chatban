@@ -117,12 +117,18 @@ test("DoneへはD&Dで移動できない (検収ボタン経由のみ) (#57)", a
   expect(await getTaskStatus(id)).toBe("todo");
 });
 
-test("Review列の検収ボタンでdoneになる (#57)", async ({ page }) => {
+test("Review列: 検収OKチェック→一括確定でdoneになる (チェックだけでは動かない) (#57)", async ({ page }) => {
   const id = await createTask("E2E: 検収テスト", "review");
   await page.goto("/");
   await expect(page.getByTestId("column-review").getByTestId(`task-card-${id}`)).toBeVisible();
 
-  await page.getByTestId(`approve-${id}`).click();
+  // チェックはマーキングのみ (Reviewに留まる)
+  await page.getByTestId(`approve-${id}`).check();
+  await expect(page.getByTestId("column-review").getByTestId(`task-card-${id}`)).toBeVisible();
+  expect(await getTaskStatus(id)).toBe("review");
+
+  // 一括確定ボタンでdoneへ
+  await page.getByTestId("approve-commit").click();
   await expect(page.getByTestId("column-done").getByTestId(`task-card-${id}`)).toBeVisible();
   await expect.poll(() => getTaskStatus(id)).toBe("done");
 });

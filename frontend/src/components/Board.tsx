@@ -23,19 +23,21 @@ function TaskCard({
   task,
   overlay = false,
   onOpen,
-  onApprove,
+  approved,
+  onToggleApproved,
 }: {
   task: Task;
   overlay?: boolean;
   onOpen?: (id: number) => void;
-  /** Review列のみ: 1クリック検収→done (#57) */
-  onApprove?: (id: number) => void;
+  /** Review列のみ: 検収OKマーク状態 (#57)。Doneへの確定は列ヘッダーの一括ボタンで行う */
+  approved?: boolean;
+  onToggleApproved?: (id: number) => void;
 }) {
   return (
     <div
       data-testid={`task-card-${task.id}`}
       onClick={() => onOpen?.(task.id)}
-      className={`rounded-lg border border-slate-200 bg-white p-2.5 shadow-sm ${overlay ? "rotate-2 shadow-lg" : ""} ${onOpen ? "cursor-pointer hover:border-indigo-300" : ""}`}
+      className={`rounded-lg border bg-white p-2.5 shadow-sm ${approved ? "border-emerald-400 ring-1 ring-emerald-300" : "border-slate-200"} ${overlay ? "rotate-2 shadow-lg" : ""} ${onOpen ? "cursor-pointer hover:border-indigo-300" : ""}`}
     >
       <div className="flex items-start justify-between gap-2">
         <span className="text-sm font-medium leading-snug">
@@ -55,18 +57,23 @@ function TaskCard({
         )}
       </div>
       {task.reason && <p className="mt-1.5 text-xs text-slate-500">💡 {task.reason}</p>}
-      {onApprove && (
+      {onToggleApproved && (
         <label
           onClick={(e) => e.stopPropagation()}
-          className="mt-2 flex cursor-pointer items-center gap-2 rounded-md border border-emerald-200 bg-emerald-50 px-2.5 py-1.5 text-xs font-medium text-emerald-700 hover:bg-emerald-100"
+          className={`mt-2 flex cursor-pointer items-center gap-2 rounded-md border px-2.5 py-1.5 text-xs font-medium ${
+            approved
+              ? "border-emerald-400 bg-emerald-100 text-emerald-800"
+              : "border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
+          }`}
         >
           <input
             type="checkbox"
             data-testid={`approve-${task.id}`}
-            onChange={() => onApprove(task.id)}
+            checked={!!approved}
+            onChange={() => onToggleApproved(task.id)}
             className="h-5 w-5 accent-emerald-600"
           />
-          検収OK → Done
+          検収OK
         </label>
       )}
     </div>
@@ -76,11 +83,13 @@ function TaskCard({
 function SortableCard({
   task,
   onOpen,
-  onApprove,
+  approved,
+  onToggleApproved,
 }: {
   task: Task;
   onOpen: (id: number) => void;
-  onApprove?: (id: number) => void;
+  approved?: boolean;
+  onToggleApproved?: (id: number) => void;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: task.id });
   return (
@@ -91,7 +100,7 @@ function SortableCard({
       style={{ transform: CSS.Transform.toString(transform), transition }}
       className={`cursor-grab touch-none ${isDragging ? "opacity-30" : ""}`}
     >
-      <TaskCard task={task} onOpen={onOpen} onApprove={onApprove} />
+      <TaskCard task={task} onOpen={onOpen} approved={approved} onToggleApproved={onToggleApproved} />
     </div>
   );
 }
@@ -150,8 +159,9 @@ function Column({
   archiveWorking,
   onToggleSummaryElement,
   onOpenTask,
-  onApprove,
-  onApproveAll,
+  approvedIds,
+  onToggleApproved,
+  onCommitApproved,
 }: {
   col: (typeof COLUMNS)[number];
   tasks: Task[];
@@ -159,8 +169,10 @@ function Column({
   archiveWorking?: boolean;
   onToggleSummaryElement?: (cardId: number, index: number, checked: boolean) => void;
   onOpenTask: (id: number) => void;
-  onApprove?: (id: number) => void;
-  onApproveAll?: () => void;
+  /** Review列のみ: 検収OKマークの集合と一括確定 (#57) */
+  approvedIds?: Set<number>;
+  onToggleApproved?: (id: number) => void;
+  onCommitApproved?: () => void;
 }) {
   // Doneは「置き場」でなく「検収の結果」: D&Dでは到達できない (#57)
   const { setNodeRef, isOver } = useDroppable({ id: col.key, disabled: col.key === "done" });
@@ -174,13 +186,14 @@ function Column({
       <div className="flex items-center justify-between px-1">
         <h2 className="text-xs font-bold uppercase tracking-wide text-slate-500">{col.label}</h2>
         <span className="flex items-center gap-1.5">
-          {onApproveAll && tasks.length > 0 && (
+          {onCommitApproved && tasks.length > 0 && (
             <button
-              data-testid="approve-all"
-              onClick={onApproveAll}
-              className="rounded-md bg-emerald-600 px-2 py-0.5 text-[10px] font-medium text-white hover:bg-emerald-700"
+              data-testid="approve-commit"
+              onClick={onCommitApproved}
+              disabled={!approvedIds || approvedIds.size === 0}
+              className="rounded-md bg-emerald-600 px-2 py-0.5 text-[10px] font-medium text-white hover:bg-emerald-700 disabled:opacity-40"
             >
-              ✓ まとめてDone
+              ✓ 検収済み{approvedIds?.size ?? 0}件をDoneへ
             </button>
           )}
           <span data-testid={`count-${col.key}`} className="rounded-full bg-slate-200 px-1.5 text-xs text-slate-500">
@@ -206,7 +219,13 @@ function Column({
           .map((c) => <SummaryCardView key={c.id} card={c} onToggle={onToggleSummaryElement} />)}
       <SortableContext items={tasks.map((t) => t.id)} strategy={verticalListSortingStrategy}>
         {tasks.map((t) => (
-          <SortableCard key={t.id} task={t} onOpen={onOpenTask} onApprove={onApprove} />
+          <SortableCard
+            key={t.id}
+            task={t}
+            onOpen={onOpenTask}
+            approved={approvedIds?.has(t.id)}
+            onToggleApproved={onToggleApproved}
+          />
         ))}
         {tasks.length === 0 && (
           <p className="rounded-lg border border-dashed border-slate-200 py-4 text-center text-xs text-slate-400">
@@ -225,8 +244,9 @@ export default function Board({
   onMove,
   onToggleSummaryElement,
   onOpenTask,
-  onApprove,
-  onApproveAll,
+  approvedIds,
+  onToggleApproved,
+  onCommitApproved,
 }: {
   tasks: Task[];
   summaryCards: SummaryCard[];
@@ -234,8 +254,9 @@ export default function Board({
   onMove: (move: MovePayload) => void;
   onToggleSummaryElement: (cardId: number, index: number, checked: boolean) => void;
   onOpenTask: (id: number) => void;
-  onApprove: (id: number) => void;
-  onApproveAll: () => void;
+  approvedIds: Set<number>;
+  onToggleApproved: (id: number) => void;
+  onCommitApproved: () => void;
 }) {
   const [active, setActive] = useState<Task | null>(null);
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
@@ -282,8 +303,9 @@ export default function Board({
             archiveWorking={col.key === "done" ? archiveWorking : undefined}
             onToggleSummaryElement={col.key === "done" ? onToggleSummaryElement : undefined}
             onOpenTask={onOpenTask}
-            onApprove={col.key === "review" ? onApprove : undefined}
-            onApproveAll={col.key === "review" ? onApproveAll : undefined}
+            approvedIds={col.key === "review" ? approvedIds : undefined}
+            onToggleApproved={col.key === "review" ? onToggleApproved : undefined}
+            onCommitApproved={col.key === "review" ? onCommitApproved : undefined}
           />
         ))}
       </div>

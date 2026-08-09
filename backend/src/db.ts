@@ -500,6 +500,22 @@ export function metrics() {
   };
 }
 
+/** 全ログExport (#83): 検証利用向けのフルダンプ。全テーブルをもれなく生のまま出す (期間指定は将来必要になったら) */
+export function exportAll() {
+  const all = (table: string) => db.prepare(`SELECT * FROM ${table} ORDER BY id`).all();
+  return {
+    exportedAt: new Date().toLocaleString("ja-JP"),
+    tasks: all("tasks"), // アーカイブ済み含む全件
+    summaryCards: all("summary_cards"),
+    chatMessages: all("chat_messages"), // trace/usage含む生データ
+    llmCalls: all("llm_calls"),
+    assignmentHistory: all("assignment_history"),
+    proposals: all("proposals"),
+    members: all("members"),
+    projectContext: db.prepare("SELECT * FROM project_context WHERE id = 1").get() ?? null,
+  };
+}
+
 /** オーディットログ (#33): 会話・LLM呼び出し・割り振り履歴の時系列閲覧用 */
 export function auditLog() {
   const chat = (

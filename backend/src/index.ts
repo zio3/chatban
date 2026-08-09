@@ -13,6 +13,7 @@ import {
   auditLog,
   createTask,
   deleteTask,
+  exportAll,
   getProjectContextRow,
   getTask,
   listChatMessages,
@@ -228,6 +229,13 @@ app.get("/api/suggestions", async (_req, res) => {
     log("chat", `suggestions failed: ${e?.message ?? e}`);
     res.json({ suggestions: [] });
   }
+});
+
+// 全ログExport (#83): 全テーブルのフルダンプをJSONダウンロード (検証利用)
+app.get("/api/audit/export", (_req, res) => {
+  const stamp = new Date().toISOString().slice(0, 19).replace(/[-:T]/g, "").slice(0, 14);
+  res.setHeader("Content-Disposition", `attachment; filename="chatban-audit-${stamp}.json"`);
+  res.json(exportAll());
 });
 
 // プロジェクト前提情報の閲覧 (#73)。編集はチャット経由のみ (update_project_context)

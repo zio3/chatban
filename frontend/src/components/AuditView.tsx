@@ -39,7 +39,7 @@ export default function AuditView() {
 
   return (
     <div className="mx-auto max-w-4xl space-y-4 p-6">
-      <div className="flex gap-2">
+      <div className="flex items-center gap-2">
         {TABS.map((t) => (
           <button
             key={t.key}
@@ -49,6 +49,14 @@ export default function AuditView() {
             {t.label}
           </button>
         ))}
+        {/* #83: 全テーブルのフルダンプ (検証利用)。表示は直近だけだがExportはもれなく全件 */}
+        <a
+          href="/api/audit/export"
+          download
+          className="ml-auto rounded-full border border-slate-300 bg-white px-3 py-1 text-sm text-slate-600 hover:bg-slate-100"
+        >
+          ⬇ 全ログExport (JSON)
+        </a>
       </div>
 
       {tab === "chat" && (

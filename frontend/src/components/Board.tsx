@@ -221,6 +221,7 @@ function Column({
       title={col.key === "done" ? "Doneへは検収ボタンかチャットの承認からのみ移動できます" : undefined}
       className={`flex min-h-40 flex-col gap-2 rounded-xl border-t-4 ${col.accent} bg-slate-50 p-2 ${isOver ? "ring-2 ring-indigo-400" : ""}`}
     >
+      {/* #71: Done列は生タスクが常駐しない(検収→即アーカイブ)ので、バッジは蒸留済み総数を出す */}
       <div className="flex items-center justify-between px-1">
         <h2 className="text-xs font-bold uppercase tracking-wide text-slate-500">{col.label}</h2>
         <span className="flex items-center gap-1.5">
@@ -235,7 +236,9 @@ function Column({
             </button>
           )}
           <span data-testid={`count-${col.key}`} className="rounded-full bg-slate-200 px-1.5 text-xs text-slate-500">
-            {tasks.length}
+            {col.key === "done" && summaryCards
+              ? `📦 ${summaryCards.reduce((n, c) => n + c.taskIds.length, 0) + tasks.length}`
+              : tasks.length}
           </span>
         </span>
       </div>
@@ -265,7 +268,7 @@ function Column({
             openIds={openIds}
           />
         ))}
-        {tasks.length === 0 && (
+        {tasks.length === 0 && !(summaryCards && summaryCards.length > 0) && (
           <p className="rounded-lg border border-dashed border-slate-200 py-4 text-center text-xs text-slate-400">
             タスクなし
           </p>

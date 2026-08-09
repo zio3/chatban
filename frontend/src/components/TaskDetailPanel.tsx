@@ -3,7 +3,6 @@ import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { api } from "../api";
 import { useChatTurn } from "../hooks/useChatTurn";
-import { useVoiceInput } from "../hooks/useVoiceInput";
 import ThinkingIndicator from "./ThinkingIndicator";
 import type { ChatEntry, Task } from "../types";
 
@@ -51,8 +50,6 @@ export default function TaskDetailPanel({
   const { setLog } = chat;
   const [input, setInput] = useState("");
   const logRef = useRef<HTMLDivElement>(null);
-  // #20: 音声入力 (Ctrl+Space または 🎤 でトグル)
-  const voice = useVoiceInput((t) => setInput(t));
 
   useEffect(() => {
     setLog([]);
@@ -236,23 +233,10 @@ export default function TaskDetailPanel({
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === "Enter" && !e.nativeEvent.isComposing) submit();
-              if (e.ctrlKey && e.code === "Space") {
-                e.preventDefault();
-                voice.toggle(input);
-              }
             }}
             placeholder={`#${task.id} について話す…`}
             className="min-w-0 flex-1 rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-indigo-500"
           />
-          {voice.supported && (
-            <button
-              onClick={() => voice.toggle(input)}
-              title="音声入力 (Ctrl+Space)"
-              className={`rounded-xl px-2.5 py-2 text-sm ${voice.listening ? "animate-pulse bg-red-600 text-white" : "bg-slate-200 hover:bg-slate-300"}`}
-            >
-              🎤
-            </button>
-          )}
           <button
             onClick={submit}
             disabled={chat.sending || !input.trim()}

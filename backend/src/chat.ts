@@ -11,6 +11,7 @@ import {
   listSummaryCards,
   listTasks,
   memberLoads,
+  resolveProposal,
   setProjectContext,
   updateTask,
 } from "./db.js";
@@ -131,6 +132,22 @@ const tools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
   {
     type: "function",
     function: {
+      name: "resolve_proposals",
+      description:
+        "承認待ちの割り振り提案を承認/却下する(「全部承認」「#24は却下」等)。taskIdsを省略すると承認待ち全件が対象",
+      parameters: {
+        type: "object",
+        properties: {
+          action: { type: "string", enum: ["approve", "reject"] },
+          taskIds: { type: "array", items: { type: "integer" }, description: "対象タスクID。省略で全承認待ち" },
+        },
+        required: ["action"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
       name: "get_task_details",
       description: "タスクの詳細(割り振り理由・経緯メモ・日付)を取得する",
       parameters: {
@@ -226,6 +243,17 @@ async function execTool(name: string, args: any, uiActions: UiAction[], events: 
       events.add("proposals");
       return { ok: true, proposals: created };
     }
+    case "resolve_proposals": {
+      const pending = listPendingProposals();
+      const targets = args.taskIds?.length
+        ? pending.filter((p) => (args.taskIds as number[]).includes(p.taskId))
+        : pending;
+      if (targets.length === 0) return { ok: false, error: "対象の承認待ち提案がありません" };
+      const resolved = targets.map((p) => resolveProposal(p.id, args.action === "approve" ? "approved" : "rejected"));
+      events.add("proposals");
+      if (args.action === "approve") events.add("board");
+      return { ok: true, action: args.action, resolved: resolved.map((p) => ({ taskId: p?.taskId, assignee: p?.assignee })) };
+    }
     case "get_task_details": {
       const details = (args.ids as number[]).map((id) => getTask(id) ?? { id, error: "not found" });
       return { tasks: details };
@@ -276,6 +304,7 @@ function buildSystemPrompt(): string {
     "- create_tasks / update_tasks の報告では、必ず割り当てられたタスクID を「#12として登録しました」の形式で明記する (ユーザーは以後この番号で参照する)。",
     "- 「Nは◯◯に」のような指名は update_tasks で即実行してよい (reason は「指名」)。",
     "- 「いい感じに振っといて」のような委任は propose_assignments を使う。勝手に assignee を確定しない。理由には負荷と履歴を必ず引用する。",
+    "- 提案への「承認」「全部承認で」「#Nは却下」は resolve_proposals を使う。update_tasks で直接 assignee を書いて代用しない (提案が残留してUIに表示され続ける)。",
     "- 「終わりました」等の完了報告は該当タスクを status=done に更新。発言者名が分かればその人のタスクを優先して曖昧参照を解決する。",
     "- 「◯◯さんの分だけ見せて」は set_view を使う。",
     "- チーム共通の前提・決まりごと(締切、方針、用語など)を伝えられたら update_project_context で前提情報に反映する。",
@@ -326,6 +355,7 @@ const TOOL_LABELS: Record<string, string> = {
   compact_archive: "過去ログを整頓",
   get_task_details: "タスク詳細を取得",
   update_task_context: "経緯メモを更新",
+  resolve_proposals: "提案を承認/却下",
 };
 
 export async function runChatTurn(

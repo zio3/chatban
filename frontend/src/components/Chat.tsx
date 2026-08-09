@@ -13,6 +13,7 @@ const TOOL_LABELS: Record<string, string> = {
   compact_archive: "ログ整頓",
   get_task_details: "詳細取得",
   update_task_context: "経緯メモ更新",
+  resolve_proposals: "提案を承認/却下",
 };
 
 export interface Suggestion {

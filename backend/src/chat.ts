@@ -237,6 +237,15 @@ async function execTool(name: string, args: any, uiActions: UiAction[], events: 
       return { ok: true, created };
     }
     case "update_tasks": {
+      // #69: LLMはdoneに直行できない。「承認」「解決で」等の拡大解釈で検収を飛ばす事故が
+      // 実際に起きたため、プロンプトでなくコードで塞ぐ。doneへの唯一の扉は人間の検収UI
+      const coerced: number[] = [];
+      for (const u of args.updates as any[]) {
+        if (u.status === "done") {
+          u.status = "review";
+          coerced.push(u.id);
+        }
+      }
       // 一括更新は db 層でまとめて処理 (完了遷移の通知=要約再生成が1回で済む #60)
       const updated = updateTasks(
         (args.updates as any[]).map((u) => {
@@ -260,7 +269,13 @@ async function execTool(name: string, args: any, uiActions: UiAction[], events: 
         })
       );
       events.add("board");
-      return { ok: true, updated };
+      return {
+        ok: true,
+        updated,
+        ...(coerced.length > 0
+          ? { note: `#${coerced.join(", #")} は done を指定されましたが review に置きました。done への確定はボードの検収チェック(人間)のみが行えます。その旨をユーザーに伝えてください` }
+          : {}),
+      };
     }
     case "delete_tasks": {
       const results = (args.ids as number[]).map((id) => ({ id, deleted: deleteTask(id) }));
@@ -332,13 +347,13 @@ function buildSystemPrompt(taskFocus?: ReturnType<typeof getTask>): string {
     "- 「いい感じに振っといて」のような委任は propose_assignments を使う。勝手に assignee を確定しない。理由には負荷と履歴を必ず引用する。",
     "- 提案への「承認」「全部承認で」「#Nは却下」は resolve_proposals を使う。update_tasks で直接 assignee を書いて代用しない (提案が残留してUIに表示され続ける)。",
     "- 「終わりました」等の完了報告は status=review に置き、「Reviewに置いたので確認OKなら承認を」と一言返す。勝手に done にしない (doneは検収済みの意味で、即アーカイブされる)。発言者名が分かればその人のタスクを優先して曖昧参照を解決する。",
-    "- done にしてよいのは人間の承認・明示指示のみ: 「承認」「検収OK」「#N doneにして」「Reviewの分まとめてdoneで」等。報告者本人が「レビュー不要」「些末だからdoneで」と明示した場合も直行してよい。",
+    "- あなたは done に変更できない (ツールが受け付けず review に置き換わる)。完了・却下・承認はすべて status=review に置き、done への確定はボードのReview列の検収チェック(人間の操作)だけが行う。「doneにして」「まとめて承認」と言われたら review に置いた上で「確定はReview列の検収チェックからお願いします」と案内する。",
     "- 「◯◯さんの分だけ見せて」は set_view を使う。",
     "- チーム共通の前提・決まりごと(締切、方針、用語など)を伝えられたら update_project_context で前提情報に反映する。",
     "- 特定タスクの経緯・決定事項・補足(「#22は◯◯方式でいくことにした」等)は update_task_context でそのタスクの経緯メモに記録する。",
     "- 「ログ整頓して」は compact_archive を使う。完了タスクのアーカイブは自動なので手動操作は不要。",
     "- 削除と却下は文脈で使い分ける: 誤登録・重複・ダミー(「消して」「間違えた」)は delete_tasks。やらない決定(「見送り」「却下」「やらないことにした」)は削除せず update_tasks で status=review + rejected=true にし、reason に却下の根拠を書いて「却下としてReviewに置きました。検収で確定します」と返す (検収後、決定として要約アーカイブに残る)。どちらか曖昧なら操作せず確認する。",
-    "- ボードから退場するもの(完了・却下)は必ずReviewを通る。done へ直行してよいのは人間の明示(「doneまで行っちゃって」等)だけ。",
+    "- ボードから退場するもの(完了・却下)は必ずReviewを通り、人間の検収チェックで確定する。チャットからdoneへ直行する経路は存在しない。",
     "- 「後回し」「今はやらない」「凍結後で」は却下ではない: update_tasks で lane を \"later\" にするだけ。status は変えない (done にするとアーカイブに吸い込まれる)。デモに必要なら lane を \"demo\" に。",
     "- 「金曜まで」「明日まで」等の期限表現は今日の日付から YYYY-MM-DD に解決して due に入れる。期限が近い/過ぎたタスクはレポートや割り振り提案で優先的に言及する。",
     "- 「#AはB待ち」「Bが終わってから」等の依存表現は blocked_by に依存先IDを登録する(複数可)。索引の dep がそれ。依存先が未完了のタスクは割り振り提案の対象にせず、レポートでは「#N待ち」と添える。",

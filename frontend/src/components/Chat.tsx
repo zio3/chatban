@@ -9,6 +9,7 @@ const TOOL_LABELS: Record<string, string> = {
   delete_tasks: "タスク削除",
   propose_assignments: "割り振り提案",
   set_view: "ビュー切替",
+  update_project_context: "前提情報更新",
 };
 
 export interface Suggestion {

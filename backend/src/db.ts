@@ -34,6 +34,11 @@ CREATE TABLE IF NOT EXISTS assignment_history (
   note TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
 );
+CREATE TABLE IF NOT EXISTS project_context (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  text TEXT NOT NULL DEFAULT '',
+  updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
+);
 CREATE TABLE IF NOT EXISTS chat_messages (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   role TEXT NOT NULL,
@@ -208,6 +213,17 @@ export function resolveProposal(id: number, status: "approved" | "rejected"): Pr
     updateTask(p.taskId, { assignee: p.assignee, reason: p.reason });
   }
   return p;
+}
+
+export function getProjectContext(): string {
+  const r = db.prepare("SELECT text FROM project_context WHERE id = 1").get() as { text: string } | undefined;
+  return r?.text ?? "";
+}
+
+export function setProjectContext(text: string) {
+  db.prepare(
+    "INSERT INTO project_context (id, text, updated_at) VALUES (1, ?, datetime('now', 'localtime')) ON CONFLICT(id) DO UPDATE SET text = excluded.text, updated_at = excluded.updated_at"
+  ).run(text);
 }
 
 export function saveChatMessage(role: "user" | "assistant", content: string, trace?: unknown, usage?: unknown) {

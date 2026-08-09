@@ -4,9 +4,11 @@ import {
   createProposal,
   createTask,
   deleteTask,
+  getProjectContext,
   listPendingProposals,
   listTasks,
   memberLoads,
+  setProjectContext,
   updateTask,
 } from "./db.js";
 import { chatCompletion, MODELS } from "./llm.js";
@@ -128,6 +130,21 @@ const tools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
   {
     type: "function",
     function: {
+      name: "update_project_context",
+      description:
+        "プロジェクトの前提情報(全員共有、システムプロンプトに常時含まれる)を上書き更新する。既存内容を踏まえ、ユーザーの要望を反映した新しい全文を渡す",
+      parameters: {
+        type: "object",
+        properties: {
+          text: { type: "string", description: "新しい前提情報の全文" },
+        },
+        required: ["text"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
       name: "set_view",
       description: "ボードの表示フィルタを切り替える(「鈴木さんの分だけ見せて」など)。assigneeにnullを渡すと全員表示に戻す",
       parameters: {
@@ -173,6 +190,10 @@ function execTool(name: string, args: any, uiActions: UiAction[], events: Set<st
       events.add("proposals");
       return { ok: true, proposals: created };
     }
+    case "update_project_context": {
+      setProjectContext(args.text ?? "");
+      return { ok: true };
+    }
     case "set_view": {
       uiActions.push({ type: "set_filter", assignee: args.assignee ?? null });
       return { ok: true };
@@ -187,9 +208,11 @@ function buildSystemPrompt(): string {
   const loads = memberLoads();
   const history = assignmentHistory();
   const pending = listPendingProposals();
+  const projectContext = getProjectContext();
   return [
     "あなたはチームのタスク管理ボード「ChatBan」のアシスタント。日本語で簡潔に応答する。",
     "",
+    projectContext ? `## プロジェクトの前提情報 (全員共有)\n${projectContext}\n` : "",
     "## ボードの状態 (status: todo=未着手, inprogress=作業中, review=レビュー中, done=完了)",
     JSON.stringify(tasks),
     "",
@@ -201,11 +224,14 @@ function buildSystemPrompt(): string {
     "",
     pending.length ? `## 承認待ちの割り振り提案\n${JSON.stringify(pending)}` : "",
     "## 行動ルール",
-    "- タスク候補を求められたら、まずテキストで候補を提示するだけ。「登録して」と言われてから create_tasks を使う。",
+    "- タスクにすべき発言(「〜を追加して」「〜やらないと」「タスク: 〜」等)は確認を挟まず即 create_tasks で登録する。テンポ優先。",
+    "- ただし「候補を挙げて」「相談したい」のような明示的な相談モードのときだけは、登録せずテキストで候補を提示する。",
+    "- create_tasks / update_tasks の報告では、必ず割り当てられたタスクID を「#12として登録しました」の形式で明記する (ユーザーは以後この番号で参照する)。",
     "- 「Nは◯◯に」のような指名は update_tasks で即実行してよい (reason は「指名」)。",
     "- 「いい感じに振っといて」のような委任は propose_assignments を使う。勝手に assignee を確定しない。理由には負荷と履歴を必ず引用する。",
     "- 「終わりました」等の完了報告は該当タスクを status=done に更新。発言者名が分かればその人のタスクを優先して曖昧参照を解決する。",
     "- 「◯◯さんの分だけ見せて」は set_view を使う。",
+    "- チーム共通の前提・決まりごと(締切、方針、用語など)を伝えられたら update_project_context で前提情報に反映する。",
     "- 操作後は結果を一言で報告する。長い説明はしない。",
   ]
     .filter(Boolean)
@@ -218,6 +244,7 @@ const TOOL_LABELS: Record<string, string> = {
   delete_tasks: "タスクを削除",
   propose_assignments: "割り振りを検討",
   set_view: "ビューを切替",
+  update_project_context: "前提情報を更新",
 };
 
 export async function runChatTurn(

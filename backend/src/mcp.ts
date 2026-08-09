@@ -4,11 +4,13 @@ import {
   createProposal,
   createTask,
   deleteTask,
+  getProjectContext,
   listMembers,
   listPendingProposals,
   listTasks,
   memberLoads,
   metrics,
+  setProjectContext,
   updateTask,
 } from "./db.js";
 import type { TaskStatus } from "./types.js";
@@ -120,6 +122,24 @@ export function buildMcpServer(onEvent: (kind: "board" | "proposals") => void): 
     "list_members",
     { description: "メンバー一覧(スキル情報つき)を取得する" },
     async () => text({ members: listMembers() })
+  );
+
+  server.registerTool(
+    "get_project_context",
+    { description: "プロジェクトの前提情報(全員共有、チャットのシステムプロンプトに常時含まれる)を取得する" },
+    async () => text({ text: getProjectContext() })
+  );
+
+  server.registerTool(
+    "update_project_context",
+    {
+      description: "プロジェクトの前提情報を上書き更新する(全文を渡す)",
+      inputSchema: { text: z.string() },
+    },
+    async ({ text: t }) => {
+      setProjectContext(t);
+      return text({ ok: true });
+    }
   );
 
   server.registerTool(

@@ -57,6 +57,7 @@ const tools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
                 title: { type: "string" },
                 assignee: { type: "string", description: "担当者名。未定なら省略" },
                 reason: { type: "string", description: "その担当にした理由。指名時は「指名」など" },
+                context: { type: "string", description: "登録に至った経緯・会話で出た論点・決まったこと。相談や議論の流れから登録するときは必ず書く (タイトルだけでは背景が失われる)" },
                 due: { type: "string", description: "期限 YYYY-MM-DD。相対表現は今日の日付から解決" },
                 blocked_by: { type: "array", items: { type: "integer" }, description: "依存先タスクID(これらが終わるまで着手不可)" },
               },
@@ -228,6 +229,7 @@ async function execTool(name: string, args: any, uiActions: UiAction[], events: 
       const created = (args.tasks as any[]).map((t) => {
         const task = createTask(t.title, "todo", t.assignee ?? null, t.reason ?? null);
         const extra = {
+          ...(t.context ? { context: t.context } : {}),
           ...(t.due ? { due: t.due } : {}),
           ...(t.blocked_by?.length ? { blockedBy: t.blocked_by } : {}),
         };
@@ -344,7 +346,7 @@ function buildSystemPrompt(taskFocus?: ReturnType<typeof getTask>): string {
     "- 質問・意見募集・感想(「どう思う?」「いいのかな?」「なんで〜?」、画像やPDFを見せての問いかけ等)は相談。タスク化せず、内容に踏み込んで会話で応える。タスクにする価値がありそうなら会話の末尾に「タスクに積みますか?」と一言添えるだけにし、登録は次のユーザー発言を待つ。",
     "- 依頼か相談か迷ったら相談として扱う (誤登録の削除コストより会話で受ける方が安い)。",
     "- create_tasks / update_tasks の報告では、必ず割り当てられたタスクID を「#12として登録しました」の形式で明記する (ユーザーは以後この番号で参照する)。",
-    "- 相談・議論の流れからタスクを登録したときは、同じターン内で続けて update_task_context を呼び、そのタスクの経緯メモに「登録に至った経緯・会話で出た論点・決まったこと」を要約して記録する (タイトルだけでは背景が失われる)。経緯のない単発の明確な依頼では不要。",
+    "- 相談・議論の流れからタスクを登録するときは、create_tasks の context に登録に至った経緯を要約して入れる。経緯のない単発の明確な依頼では省略可。",
     "- 「Nは◯◯に」のような指名は update_tasks で即実行してよい (reason は「指名」)。",
     "- 「いい感じに振っといて」のような委任は propose_assignments を使う。勝手に assignee を確定しない。理由には負荷と履歴を必ず引用する。",
     "- 提案への「承認」「全部承認で」「#Nは却下」は resolve_proposals を使う。update_tasks で直接 assignee を書いて代用しない (提案が残留してUIに表示され続ける)。",

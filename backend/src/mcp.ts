@@ -42,14 +42,16 @@ export function buildMcpServer(onEvent: (kind: "board" | "proposals") => void): 
             status: STATUS.optional().describe("省略時はtodo"),
             assignee: z.string().optional().describe("担当者名。未定なら省略"),
             reason: z.string().optional().describe("担当理由"),
+            context: z.string().optional().describe("登録に至った経緯・論点・決定事項 (経緯メモの初期値)"),
           })
         ),
       },
     },
     async ({ tasks }) => {
-      const created = tasks.map((t) =>
-        createTask(t.title, (t.status ?? "todo") as TaskStatus, t.assignee ?? null, t.reason ?? null)
-      );
+      const created = tasks.map((t) => {
+        const task = createTask(t.title, (t.status ?? "todo") as TaskStatus, t.assignee ?? null, t.reason ?? null);
+        return t.context ? updateTasks([{ id: task.id, patch: { context: t.context } }])[0] : task;
+      });
       onEvent("board");
       return text({ ok: true, created });
     }

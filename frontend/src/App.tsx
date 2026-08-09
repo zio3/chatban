@@ -23,10 +23,18 @@ export default function App() {
   const [toast, setToast] = useState<Toast | null>(null);
   const [detailTaskId, setDetailTaskId] = useState<number | null>(null);
   const [archiveWorking, setArchiveWorking] = useState(false);
+  // #14: なりすまし切替 (デモモード)。認証なしで「いま自分は誰か」を選び、チャット発言に記名される
+  const [currentUser, setCurrentUser] = useState(() => localStorage.getItem("chatban.currentUser") || "zio");
+  const currentUserRef = useRef(currentUser);
+  currentUserRef.current = currentUser;
+  const switchUser = (name: string) => {
+    setCurrentUser(name);
+    localStorage.setItem("chatban.currentUser", name);
+  };
 
   // メインチャット: ライフサイクル(送信/考え中/停止/タイムアウト/再送)は共有フックに集約 (#23/#28/#29/#30)
   const mainChat = useChatTurn({
-    request: (m, h, signal) => api.chat(m, h, signal),
+    request: (m, h, signal) => api.chat(m, h, signal, currentUserRef.current),
     onResponse: (res) => {
       for (const a of res.uiActions) {
         if (a.type === "set_filter") setFilter(a.assignee);
@@ -191,6 +199,13 @@ export default function App() {
           >
             全員
           </button>
+          {/* #11: なりすまし中のユーザーでワンクリック自分フィルタ */}
+          <button
+            onClick={() => setFilter(currentUser)}
+            className={`rounded-full px-3 py-1 ${filter === currentUser ? "bg-slate-900 text-white" : "bg-indigo-100 text-indigo-700 hover:bg-indigo-200"}`}
+          >
+            👤 自分の
+          </button>
           {members.map((m) => (
             <button
               key={m.id}
@@ -200,6 +215,22 @@ export default function App() {
               {m.name}
             </button>
           ))}
+          {/* #14: なりすまし切替 (デモモード)。選んだ人としてチャットに記名される */}
+          <label className="ml-3 flex items-center gap-1.5 rounded-full border border-slate-300 bg-white px-3 py-1 text-xs text-slate-600">
+            なりきり
+            <select
+              data-testid="impersonate-select"
+              value={currentUser}
+              onChange={(e) => switchUser(e.target.value)}
+              className="bg-transparent font-bold text-slate-900 outline-none"
+            >
+              {members.map((m) => (
+                <option key={m.id} value={m.name}>
+                  {m.name}
+                </option>
+              ))}
+            </select>
+          </label>
         </div>
       </header>
       <main className="min-h-0 flex-1 overflow-auto p-3">
@@ -248,6 +279,7 @@ export default function App() {
         <TaskDetailPanel
           task={detailTask}
           archived={detailArchived}
+          currentUser={currentUser}
           onClose={() => {
             setDetailTaskId(null);
             lastDetailTaskRef.current = undefined;

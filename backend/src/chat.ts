@@ -396,14 +396,17 @@ export async function runChatTurn(
   history: { role: "user" | "assistant"; content: string }[],
   onEvent: (kind: "board" | "proposals") => void,
   onProgress?: (label: string) => void,
-  taskFocusId?: number
+  taskFocusId?: number,
+  speaker?: string
 ): Promise<ChatResult> {
   const t0 = Date.now();
   const taskFocus = taskFocusId != null ? getTask(taskFocusId) : undefined;
+  // #14: なりすまし切替の記名。発言者が分かると「終わりました」等の曖昧参照が解決できる
+  const userContent = speaker ? `[発言者: ${speaker}] ${userMessage}` : userMessage;
   const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
     { role: "system", content: buildSystemPrompt(taskFocus) },
     ...history.slice(-20),
-    { role: "user", content: userMessage },
+    { role: "user", content: userContent },
   ];
   const trace: ToolTrace[] = [];
   const uiActions: UiAction[] = [];

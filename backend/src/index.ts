@@ -117,11 +117,11 @@ app.post("/api/proposals/:id/:action", (req, res) => {
 
 let chatSeq = 0;
 app.post("/api/chat", async (req, res) => {
-  const { message, history } = req.body ?? {};
+  const { message, history, speaker } = req.body ?? {};
   if (!message) return res.status(400).json({ error: "message required" });
   const id = ++chatSeq;
   const t0 = Date.now();
-  log("chat", `#${id} REQ "${String(message).slice(0, 120)}" (history=${history?.length ?? 0})`);
+  log("chat", `#${id} REQ${speaker ? ` [${speaker}]` : ""} "${String(message).slice(0, 120)}" (history=${history?.length ?? 0})`);
   // クライアント切断もログに残す (再起動巻き添え・ブラウザ側中断の追跡用)
   res.on("close", () => {
     if (!res.writableEnded) log("chat", `#${id} CLIENT DISCONNECTED after ${Date.now() - t0}ms`);
@@ -134,7 +134,9 @@ app.post("/api/chat", async (req, res) => {
         if (kind === "board") broadcastBoard();
         else broadcastProposals();
       },
-      (label) => io.emit("chat:progress", { label }) // 応答完了前の逐次フィードバック
+      (label) => io.emit("chat:progress", { label }), // 応答完了前の逐次フィードバック
+      undefined,
+      speaker
     );
     // 会話ログはサーバーに永続化する (受領ブリーフィングの素材 + リロードで消えない)
     saveChatMessage("user", message);
@@ -158,11 +160,11 @@ app.get("/api/chat/log", (req, res) => {
 // タスク専用チャット (#24): 対象タスクの全詳細をシステムプロンプトに注入し、会話はtask_id付きで分離保存
 app.post("/api/tasks/:id/chat", async (req, res) => {
   const taskId = Number(req.params.id);
-  const { message, history } = req.body ?? {};
+  const { message, history, speaker } = req.body ?? {};
   if (!message) return res.status(400).json({ error: "message required" });
   const id = ++chatSeq;
   const t0 = Date.now();
-  log("chat", `#${id} TASK-CHAT(task=${taskId}) REQ "${String(message).slice(0, 120)}"`);
+  log("chat", `#${id} TASK-CHAT(task=${taskId})${speaker ? ` [${speaker}]` : ""} REQ "${String(message).slice(0, 120)}"`);
   try {
     const result = await runChatTurn(
       message,
@@ -172,7 +174,8 @@ app.post("/api/tasks/:id/chat", async (req, res) => {
         else broadcastProposals();
       },
       (label) => io.emit("chat:progress", { label, taskId }),
-      taskId
+      taskId,
+      speaker
     );
     saveChatMessage("user", message, undefined, undefined, taskId);
     saveChatMessage("assistant", result.reply, result.trace, result.usage, taskId);

@@ -28,18 +28,29 @@ export const api = {
     fetch(`/api/chat/log${taskId != null ? `?taskId=${taskId}` : ""}`).then((r) =>
       json<{ messages: { role: "user" | "assistant"; content: string; trace?: unknown; usage?: unknown }[] }>(r)
     ),
-  taskChat: (taskId: number, message: string, history: { role: "user" | "assistant"; content: string }[], signal?: AbortSignal) =>
+  taskChat: (
+    taskId: number,
+    message: string,
+    history: { role: "user" | "assistant"; content: string }[],
+    signal?: AbortSignal,
+    speaker?: string
+  ) =>
     fetch(`/api/tasks/${taskId}/chat`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message, history }),
+      body: JSON.stringify({ message, history, speaker }),
       signal,
     }).then((r) => json<ChatResponse>(r)),
-  chat: (message: string, history: { role: "user" | "assistant"; content: string }[], signal?: AbortSignal) =>
+  chat: (
+    message: string,
+    history: { role: "user" | "assistant"; content: string }[],
+    signal?: AbortSignal,
+    speaker?: string
+  ) =>
     fetch("/api/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message, history }),
+      body: JSON.stringify({ message, history, speaker }),
       signal,
     }).then((r) => json<ChatResponse>(r)),
 };

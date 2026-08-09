@@ -1,0 +1,130 @@
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { z } from "zod";
+import {
+  createProposal,
+  createTask,
+  deleteTask,
+  listMembers,
+  listPendingProposals,
+  listTasks,
+  memberLoads,
+  metrics,
+  updateTask,
+} from "./db.js";
+import type { TaskStatus } from "./types.js";
+
+const STATUS = z.enum(["todo", "inprogress", "review", "done"]);
+
+function text(data: unknown) {
+  return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] };
+}
+
+// MCPクライアント(Claude Code等)向けのサーバー。変更系は onEvent でUIへブロードキャストする
+export function buildMcpServer(onEvent: (kind: "board" | "proposals") => void): McpServer {
+  const server = new McpServer({ name: "chatban", version: "0.1.0" });
+
+  server.registerTool(
+    "list_tasks",
+    { description: "かんばんボードの全タスクとメンバー(負荷つき)を取得する" },
+    async () => text({ tasks: listTasks(), members: memberLoads(), pendingProposals: listPendingProposals() })
+  );
+
+  server.registerTool(
+    "create_tasks",
+    {
+      description: "タスクをボードに追加する(複数可)。UIにはリアルタイム反映される",
+      inputSchema: {
+        tasks: z.array(
+          z.object({
+            title: z.string(),
+            status: STATUS.optional().describe("省略時はtodo"),
+            assignee: z.string().optional().describe("担当者名。未定なら省略"),
+            reason: z.string().optional().describe("担当理由"),
+          })
+        ),
+      },
+    },
+    async ({ tasks }) => {
+      const created = tasks.map((t) =>
+        createTask(t.title, (t.status ?? "todo") as TaskStatus, t.assignee ?? null, t.reason ?? null)
+      );
+      onEvent("board");
+      return text({ ok: true, created });
+    }
+  );
+
+  server.registerTool(
+    "update_tasks",
+    {
+      description: "既存タスクの状態・担当・タイトル・理由を更新する(複数可)",
+      inputSchema: {
+        updates: z.array(
+          z.object({
+            id: z.number().int(),
+            title: z.string().optional(),
+            status: STATUS.optional(),
+            assignee: z.string().nullable().optional(),
+            reason: z.string().optional(),
+          })
+        ),
+      },
+    },
+    async ({ updates }) => {
+      const updated = updates.map((u) =>
+        updateTask(u.id, {
+          ...(u.title !== undefined ? { title: u.title } : {}),
+          ...(u.status !== undefined ? { status: u.status as TaskStatus } : {}),
+          ...(u.assignee !== undefined ? { assignee: u.assignee } : {}),
+          ...(u.reason !== undefined ? { reason: u.reason } : {}),
+        })
+      );
+      onEvent("board");
+      return text({ ok: true, updated });
+    }
+  );
+
+  server.registerTool(
+    "delete_tasks",
+    {
+      description: "タスクを削除する(複数可)",
+      inputSchema: { ids: z.array(z.number().int()) },
+    },
+    async ({ ids }) => {
+      const results = ids.map((id) => ({ id, deleted: deleteTask(id) }));
+      onEvent("board");
+      return text({ ok: true, results });
+    }
+  );
+
+  server.registerTool(
+    "propose_assignments",
+    {
+      description:
+        "割り振り案を提案する(人間がUI上で承認すると確定)。理由には負荷・履歴などの根拠を書く",
+      inputSchema: {
+        proposals: z.array(
+          z.object({ taskId: z.number().int(), assignee: z.string(), reason: z.string() })
+        ),
+      },
+    },
+    async ({ proposals }) => {
+      const created = proposals.map((p) => createProposal(p.taskId, p.assignee, p.reason));
+      onEvent("proposals");
+      return text({ ok: true, proposals: created });
+    }
+  );
+
+  server.registerTool(
+    "list_members",
+    { description: "メンバー一覧(スキル情報つき)を取得する" },
+    async () => text({ members: listMembers() })
+  );
+
+  server.registerTool(
+    "get_metrics",
+    { description: "LLM呼び出しのコスト計測サマリー(トークン数・レイテンシ)を取得する" },
+    async () => text(metrics())
+  );
+
+  return server;
+}

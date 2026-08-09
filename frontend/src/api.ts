@@ -1,0 +1,25 @@
+import type { ChatResponse, Member, Proposal, Task, TaskStatus } from "./types";
+
+async function json<T>(res: Response): Promise<T> {
+  if (!res.ok) throw new Error(`${res.status}: ${await res.text()}`);
+  return res.json();
+}
+
+export const api = {
+  board: () =>
+    fetch("/api/board").then((r) => json<{ tasks: Task[]; members: Member[]; proposals: Proposal[] }>(r)),
+  updateTask: (id: number, patch: Partial<Pick<Task, "title" | "assignee" | "reason" | "sort">> & { status?: TaskStatus }) =>
+    fetch(`/api/tasks/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch),
+    }).then((r) => json<Task>(r)),
+  resolveProposal: (id: number, action: "approve" | "reject") =>
+    fetch(`/api/proposals/${id}/${action}`, { method: "POST" }).then((r) => json<Proposal>(r)),
+  chat: (message: string, history: { role: "user" | "assistant"; content: string }[]) =>
+    fetch("/api/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message, history }),
+    }).then((r) => json<ChatResponse>(r)),
+};

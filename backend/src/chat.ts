@@ -1,0 +1,255 @@
+import type OpenAI from "openai";
+import {
+  assignmentHistory,
+  createProposal,
+  createTask,
+  deleteTask,
+  listPendingProposals,
+  listTasks,
+  memberLoads,
+  updateTask,
+} from "./db.js";
+import { chatCompletion, MODELS } from "./llm.js";
+import { log } from "./log.js";
+import type { TaskStatus, UiAction } from "./types.js";
+
+export interface ToolTrace {
+  tool: string;
+  input: unknown;
+  result: unknown;
+}
+
+export interface ChatResult {
+  reply: string;
+  trace: ToolTrace[];
+  uiActions: UiAction[];
+  usage: { promptTokens: number; completionTokens: number; rounds: number; elapsedMs: number };
+}
+
+const STATUS_VALUES = ["todo", "inprogress", "review", "done"];
+
+const tools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
+  {
+    type: "function",
+    function: {
+      name: "create_tasks",
+      description: "タスクをボードに追加する(複数可)。ユーザーが登録を指示したときだけ使う。候補を出すだけの段階では使わない",
+      parameters: {
+        type: "object",
+        properties: {
+          tasks: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                title: { type: "string" },
+                assignee: { type: "string", description: "担当者名。未定なら省略" },
+                reason: { type: "string", description: "その担当にした理由。指名時は「指名」など" },
+              },
+              required: ["title"],
+            },
+          },
+        },
+        required: ["tasks"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "update_tasks",
+      description:
+        "既存タスクの状態・担当・タイトルを更新する(複数可)。指名割り振り(「1は佐藤に」)や完了報告(「1終わりました」→status=done)に使う",
+      parameters: {
+        type: "object",
+        properties: {
+          updates: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                id: { type: "integer" },
+                title: { type: "string" },
+                status: { type: "string", enum: STATUS_VALUES },
+                assignee: { type: "string" },
+                reason: { type: "string", description: "担当変更の理由" },
+              },
+              required: ["id"],
+            },
+          },
+        },
+        required: ["updates"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "delete_tasks",
+      description: "タスクを削除する(複数可)",
+      parameters: {
+        type: "object",
+        properties: { ids: { type: "array", items: { type: "integer" } } },
+        required: ["ids"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "propose_assignments",
+      description:
+        "担当未定タスクの割り振り案を提案する。委任(「いい感じに振っといて」)のときに使う。直接assigneeを書き換えず、必ずこの提案を経由して人間の承認を待つ。理由には現在の負荷や過去の類似タスク履歴を根拠として書く",
+      parameters: {
+        type: "object",
+        properties: {
+          proposals: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                taskId: { type: "integer" },
+                assignee: { type: "string" },
+                reason: { type: "string", description: "負荷・履歴・スキルに基づく理由" },
+              },
+              required: ["taskId", "assignee", "reason"],
+            },
+          },
+        },
+        required: ["proposals"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "set_view",
+      description: "ボードの表示フィルタを切り替える(「鈴木さんの分だけ見せて」など)。assigneeにnullを渡すと全員表示に戻す",
+      parameters: {
+        type: "object",
+        properties: {
+          assignee: { type: ["string", "null"], description: "絞り込む担当者名。全員表示はnull" },
+        },
+        required: ["assignee"],
+      },
+    },
+  },
+];
+
+function execTool(name: string, args: any, uiActions: UiAction[], events: Set<string>): unknown {
+  switch (name) {
+    case "create_tasks": {
+      const created = (args.tasks as any[]).map((t) =>
+        createTask(t.title, "todo", t.assignee ?? null, t.reason ?? null)
+      );
+      events.add("board");
+      return { ok: true, created };
+    }
+    case "update_tasks": {
+      const updated = (args.updates as any[]).map((u) =>
+        updateTask(u.id, {
+          ...(u.title !== undefined ? { title: u.title } : {}),
+          ...(u.status !== undefined ? { status: u.status as TaskStatus } : {}),
+          ...(u.assignee !== undefined ? { assignee: u.assignee } : {}),
+          ...(u.reason !== undefined ? { reason: u.reason } : {}),
+        })
+      );
+      events.add("board");
+      return { ok: true, updated };
+    }
+    case "delete_tasks": {
+      const results = (args.ids as number[]).map((id) => ({ id, deleted: deleteTask(id) }));
+      events.add("board");
+      return { ok: true, results };
+    }
+    case "propose_assignments": {
+      const created = (args.proposals as any[]).map((p) => createProposal(p.taskId, p.assignee, p.reason));
+      events.add("proposals");
+      return { ok: true, proposals: created };
+    }
+    case "set_view": {
+      uiActions.push({ type: "set_filter", assignee: args.assignee ?? null });
+      return { ok: true };
+    }
+    default:
+      return { error: `unknown tool: ${name}` };
+  }
+}
+
+function buildSystemPrompt(): string {
+  const tasks = listTasks();
+  const loads = memberLoads();
+  const history = assignmentHistory();
+  const pending = listPendingProposals();
+  return [
+    "あなたはチームのタスク管理ボード「ChatBan」のアシスタント。日本語で簡潔に応答する。",
+    "",
+    "## ボードの状態 (status: todo=未着手, inprogress=作業中, review=レビュー中, done=完了)",
+    JSON.stringify(tasks),
+    "",
+    "## メンバーと現在の担当タスク数(未完了)",
+    JSON.stringify(loads),
+    "",
+    "## 過去の割り振り履歴 (類似タスクの参考にする)",
+    JSON.stringify(history),
+    "",
+    pending.length ? `## 承認待ちの割り振り提案\n${JSON.stringify(pending)}` : "",
+    "## 行動ルール",
+    "- タスク候補を求められたら、まずテキストで候補を提示するだけ。「登録して」と言われてから create_tasks を使う。",
+    "- 「Nは◯◯に」のような指名は update_tasks で即実行してよい (reason は「指名」)。",
+    "- 「いい感じに振っといて」のような委任は propose_assignments を使う。勝手に assignee を確定しない。理由には負荷と履歴を必ず引用する。",
+    "- 「終わりました」等の完了報告は該当タスクを status=done に更新。発言者名が分かればその人のタスクを優先して曖昧参照を解決する。",
+    "- 「◯◯さんの分だけ見せて」は set_view を使う。",
+    "- 操作後は結果を一言で報告する。長い説明はしない。",
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+export async function runChatTurn(
+  userMessage: string,
+  history: { role: "user" | "assistant"; content: string }[],
+  onEvent: (kind: "board" | "proposals") => void
+): Promise<ChatResult> {
+  const t0 = Date.now();
+  const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
+    { role: "system", content: buildSystemPrompt() },
+    ...history.slice(-20),
+    { role: "user", content: userMessage },
+  ];
+  const trace: ToolTrace[] = [];
+  const uiActions: UiAction[] = [];
+  const usage = { promptTokens: 0, completionTokens: 0, rounds: 0, elapsedMs: 0 };
+  let reply = "";
+
+  for (let round = 0; round < 8; round++) {
+    const res = await chatCompletion("chat", MODELS.main, { messages, tools });
+    usage.rounds++;
+    usage.promptTokens += res.usage?.prompt_tokens ?? 0;
+    usage.completionTokens += res.usage?.completion_tokens ?? 0;
+    const msg = res.choices[0].message;
+    messages.push(msg);
+    if (msg.tool_calls?.length) {
+      const events = new Set<string>();
+      for (const tc of msg.tool_calls) {
+        if (tc.type !== "function") continue;
+        let args: any = {};
+        try {
+          args = JSON.parse(tc.function.arguments || "{}");
+        } catch {
+          /* 引数パース失敗時は空で実行し、エラーはツール結果に出る */
+        }
+        log("tool", `${tc.function.name} ${tc.function.arguments?.slice(0, 200)}`);
+        const result = execTool(tc.function.name, args, uiActions, events as Set<string>);
+        trace.push({ tool: tc.function.name, input: args, result });
+        messages.push({ role: "tool", tool_call_id: tc.id, content: JSON.stringify(result) });
+      }
+      for (const e of events) onEvent(e as "board" | "proposals");
+      continue;
+    }
+    reply = typeof msg.content === "string" ? msg.content : "";
+    break;
+  }
+  usage.elapsedMs = Date.now() - t0;
+  return { reply, trace, uiActions, usage };
+}

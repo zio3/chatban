@@ -1,0 +1,127 @@
+import http from "node:http";
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import cors from "cors";
+import express from "express";
+import { Server } from "socket.io";
+import { runChatTurn } from "./chat.js";
+import { log } from "./log.js";
+import { buildMcpServer } from "./mcp.js";
+import {
+  createTask,
+  deleteTask,
+  listMembers,
+  listPendingProposals,
+  listTasks,
+  metrics,
+  resolveProposal,
+  updateTask,
+} from "./db.js";
+
+const PORT = Number(process.env.PORT ?? 8787);
+
+const app = express();
+app.use(cors());
+app.use(express.json());
+
+const server = http.createServer(app);
+const io = new Server(server, { cors: { origin: "*" } });
+
+function broadcastBoard() {
+  io.emit("board:changed", { tasks: listTasks() });
+}
+function broadcastProposals() {
+  io.emit("proposals:changed", { proposals: listPendingProposals() });
+}
+
+app.get("/api/board", (_req, res) => {
+  res.json({ tasks: listTasks(), members: listMembers(), proposals: listPendingProposals() });
+});
+
+app.post("/api/tasks", (req, res) => {
+  const { title, status, assignee, reason } = req.body ?? {};
+  if (!title) return res.status(400).json({ error: "title required" });
+  const task = createTask(title, status ?? "todo", assignee ?? null, reason ?? null);
+  broadcastBoard();
+  res.json(task);
+});
+
+app.patch("/api/tasks/:id", (req, res) => {
+  const task = updateTask(Number(req.params.id), req.body ?? {});
+  if (!task) return res.status(404).json({ error: "not found" });
+  broadcastBoard();
+  res.json(task);
+});
+
+app.delete("/api/tasks/:id", (req, res) => {
+  const ok = deleteTask(Number(req.params.id));
+  if (!ok) return res.status(404).json({ error: "not found" });
+  broadcastBoard();
+  res.json({ ok: true });
+});
+
+app.post("/api/proposals/:id/:action", (req, res) => {
+  const action = req.params.action;
+  if (action !== "approve" && action !== "reject") return res.status(400).json({ error: "bad action" });
+  const p = resolveProposal(Number(req.params.id), action === "approve" ? "approved" : "rejected");
+  if (!p) return res.status(404).json({ error: "not found" });
+  broadcastProposals();
+  if (action === "approve") broadcastBoard();
+  res.json(p);
+});
+
+let chatSeq = 0;
+app.post("/api/chat", async (req, res) => {
+  const { message, history } = req.body ?? {};
+  if (!message) return res.status(400).json({ error: "message required" });
+  const id = ++chatSeq;
+  const t0 = Date.now();
+  log("chat", `#${id} REQ "${String(message).slice(0, 120)}" (history=${history?.length ?? 0})`);
+  // クライアント切断もログに残す (再起動巻き添え・ブラウザ側中断の追跡用)
+  res.on("close", () => {
+    if (!res.writableEnded) log("chat", `#${id} CLIENT DISCONNECTED after ${Date.now() - t0}ms`);
+  });
+  try {
+    const result = await runChatTurn(message, history ?? [], (kind) => {
+      if (kind === "board") broadcastBoard();
+      else broadcastProposals();
+    });
+    log(
+      "chat",
+      `#${id} OK ${Date.now() - t0}ms rounds=${result.usage.rounds} tools=[${result.trace.map((t) => t.tool).join(",")}] reply=${result.reply.length}ch`
+    );
+    res.json(result);
+  } catch (e: any) {
+    log("chat", `#${id} FAILED ${Date.now() - t0}ms: ${e?.message ?? e}`);
+    res.status(500).json({ error: e?.message ?? "chat failed" });
+  }
+});
+
+app.get("/api/metrics", (_req, res) => {
+  res.json(metrics());
+});
+
+// MCPエンドポイント (Streamable HTTP, stateless: リクエストごとに接続を組み立てる)
+app.post("/mcp", async (req, res) => {
+  const mcpServer = buildMcpServer((kind) => {
+    if (kind === "board") broadcastBoard();
+    else broadcastProposals();
+  });
+  const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
+  res.on("close", () => {
+    transport.close();
+    mcpServer.close();
+  });
+  try {
+    await mcpServer.connect(transport);
+    await transport.handleRequest(req, res, req.body);
+  } catch (e) {
+    console.error("mcp error:", e);
+    if (!res.headersSent) res.status(500).json({ error: "mcp failed" });
+  }
+});
+app.get("/mcp", (_req, res) => res.status(405).json({ error: "stateless server: POST only" }));
+app.delete("/mcp", (_req, res) => res.status(405).json({ error: "stateless server: POST only" }));
+
+server.listen(PORT, () => {
+  console.log(`ChatBan backend listening on http://localhost:${PORT}`);
+});

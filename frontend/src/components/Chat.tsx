@@ -190,12 +190,30 @@ export default function Chat({
                         ))}
                       </div>
                     )}
-                    {e.usage && (
-                      <p className="mt-1 text-[10px] text-slate-400">
-                        {(e.usage.elapsedMs / 1000).toFixed(1)}s · {e.usage.promptTokens + e.usage.completionTokens}tk ·{" "}
-                        {e.usage.rounds}round
-                      </p>
-                    )}
+                    {e.usage &&
+                      (e.usage.calls?.length ? (
+                        // クリックでルーティング詳細 (実際に使われたモデル・キャッシュヒット) を展開 (#31)
+                        <details className="mt-1 text-[10px] text-slate-400">
+                          <summary className="cursor-pointer select-none hover:text-slate-600">
+                            {(e.usage.elapsedMs / 1000).toFixed(1)}s · {e.usage.promptTokens + e.usage.completionTokens}
+                            tk · {e.usage.rounds}round
+                          </summary>
+                          <div className="mt-1 space-y-0.5 rounded bg-slate-200/60 px-1.5 py-1 font-mono">
+                            {e.usage.calls.map((c, j) => (
+                              <p key={j}>
+                                {j + 1}. {c.model} · in {c.promptTokens}tk
+                                {c.cachedTokens > 0 && ` (cache ${c.cachedTokens})`} · out {c.completionTokens}tk ·{" "}
+                                {(c.elapsedMs / 1000).toFixed(1)}s
+                              </p>
+                            ))}
+                          </div>
+                        </details>
+                      ) : (
+                        <p className="mt-1 text-[10px] text-slate-400">
+                          {(e.usage.elapsedMs / 1000).toFixed(1)}s · {e.usage.promptTokens + e.usage.completionTokens}tk ·{" "}
+                          {e.usage.rounds}round
+                        </p>
+                      ))}
                   </div>
                 </div>
               ))}

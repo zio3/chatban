@@ -29,7 +29,14 @@ export interface ChatResult {
   reply: string;
   trace: ToolTrace[];
   uiActions: UiAction[];
-  usage: { promptTokens: number; completionTokens: number; rounds: number; elapsedMs: number };
+  usage: {
+    promptTokens: number;
+    completionTokens: number;
+    rounds: number;
+    elapsedMs: number;
+    /* LLM往復ごとのルーティング詳細 (#31): 実際に使われたモデル・トークン・キャッシュヒット */
+    calls: { model: string; promptTokens: number; completionTokens: number; cachedTokens: number; elapsedMs: number }[];
+  };
 }
 
 const STATUS_VALUES = ["todo", "inprogress", "review", "done"];
@@ -385,14 +392,22 @@ export async function runChatTurn(
   ];
   const trace: ToolTrace[] = [];
   const uiActions: UiAction[] = [];
-  const usage = { promptTokens: 0, completionTokens: 0, rounds: 0, elapsedMs: 0 };
+  const usage: ChatResult["usage"] = { promptTokens: 0, completionTokens: 0, rounds: 0, elapsedMs: 0, calls: [] };
   let reply = "";
 
   for (let round = 0; round < 8; round++) {
+    const c0 = Date.now();
     const res = await chatCompletion("chat", MODELS.main, { messages, tools });
     usage.rounds++;
     usage.promptTokens += res.usage?.prompt_tokens ?? 0;
     usage.completionTokens += res.usage?.completion_tokens ?? 0;
+    usage.calls.push({
+      model: res.model ?? MODELS.main,
+      promptTokens: res.usage?.prompt_tokens ?? 0,
+      completionTokens: res.usage?.completion_tokens ?? 0,
+      cachedTokens: (res.usage as any)?.prompt_tokens_details?.cached_tokens ?? 0,
+      elapsedMs: Date.now() - c0,
+    });
     const msg = res.choices[0].message;
     messages.push(msg);
     if (msg.tool_calls?.length) {

@@ -58,7 +58,14 @@ export interface ChatResponse {
   reply: string;
   trace: ToolTrace[];
   uiActions: UiAction[];
-  usage: { promptTokens: number; completionTokens: number; rounds: number; elapsedMs: number };
+  usage: {
+    promptTokens: number;
+    completionTokens: number;
+    rounds: number;
+    elapsedMs: number;
+    /** LLM往復ごとのルーティング詳細 (#31)。過去ログには無い場合がある */
+    calls?: { model: string; promptTokens: number; completionTokens: number; cachedTokens: number; elapsedMs: number }[];
+  };
 }
 
 export interface ChatEntry {

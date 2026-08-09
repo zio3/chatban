@@ -275,25 +275,29 @@ export default function Chat({
               )}
             </div>
           </div>
-          {/* #20却下: アプリ内音声入力の入口は撤去 (OSの音声入力で足りる)。useVoiceInputフックは温存 */}
-          <div className="flex gap-2 border-t border-slate-100 px-4 py-3">
-            <input
-              ref={inputRef}
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.nativeEvent.isComposing) submit();
-              }}
-              placeholder="ボードに話しかける…（例: 候補挙げて / いい感じに振っといて）"
-              className="flex-1 rounded-xl border border-slate-300 px-4 py-2.5 text-sm outline-none focus:border-indigo-500"
-            />
-            <button
-              onClick={submit}
-              disabled={sending || !input.trim()}
-              className="rounded-xl bg-indigo-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-40"
-            >
-              送信
-            </button>
+          {/* 入力欄はClaude/ChatGPT作法: 角丸ピル+先頭の「+」で新しい会話 (#72)。音声入口は撤去済み(#20却下) */}
+          <div className="border-t border-slate-100 px-4 py-3">
+            <div className="flex items-center gap-1.5 rounded-2xl border border-slate-300 bg-white px-2 py-1.5 focus-within:border-indigo-500">
+              {/* 先頭の「+」枠はファイル添付の意味論なので #68(ファイル受け入れ)のために温存。新規会話はログ右上の🆕 */}
+              <input
+                ref={inputRef}
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.nativeEvent.isComposing) submit();
+                }}
+                placeholder="ボードに話しかける…（例: 候補挙げて / いい感じに振っといて）"
+                className="min-w-0 flex-1 bg-transparent px-1 py-1.5 text-sm outline-none"
+              />
+              <button
+                onClick={submit}
+                disabled={sending || !input.trim()}
+                title="送信"
+                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-indigo-600 text-white disabled:opacity-30"
+              >
+                ↑
+              </button>
+            </div>
           </div>
         </div>
       </div>

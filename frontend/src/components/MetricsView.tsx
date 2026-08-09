@@ -1,31 +1,13 @@
 import { useEffect, useState } from "react";
 
-// #21: OrcaRouter利用状況の簡易ダッシュボード。/api/metrics の集計をそのまま表示する
+// #21 (zio方針 8/9): コスト表示は「こんだけやったけど、いくらでした」だけ。
+// トークン量はモデル単価が数百倍散らばるため金額の代理にならない — 金額は請求APIの実費のみを正とする。
+// 用途別/モデル別/リクエスト毎の内訳テーブルは意図的に持たない (必要ならOrcaRouterコンソールへ)
 interface Metrics {
   totalCalls: number;
   promptTokens: number;
   completionTokens: number;
-  cachedTokens: number;
-  avgElapsedMs: number;
-  byModel: { model: string; calls: number; pt: number; ct: number; cached: number; avgMs: number }[];
-  byPurpose: { purpose: string; calls: number; pt: number; ct: number; cached: number; avgMs: number; models: number }[];
-  recent: {
-    id: number;
-    purpose: string;
-    model: string;
-    routed_model: string | null;
-    prompt_tokens: number;
-    completion_tokens: number;
-    cached_tokens: number;
-    elapsed_ms: number;
-    created_at: string;
-  }[];
-  /** OrcaRouter請求サマリー (#21)。外部API失敗時はnull */
   billing: { totalUsageUsd: number } | null;
-}
-
-function kt(n: number): string {
-  return n >= 10000 ? `${(n / 1000).toFixed(1)}k` : String(n);
 }
 
 export default function MetricsView() {
@@ -42,126 +24,25 @@ export default function MetricsView() {
   if (error) return <p className="p-6 text-sm text-red-600">読み込み失敗: {error}</p>;
   if (!data) return <p className="p-6 text-sm text-slate-400">読み込み中…</p>;
 
-  const cacheRate = data.promptTokens > 0 ? Math.round((data.cachedTokens / data.promptTokens) * 100) : 0;
+  const totalTokens = data.promptTokens + data.completionTokens;
+  const tokenLabel = totalTokens >= 1_000_000 ? `${(totalTokens / 1_000_000).toFixed(1)}M` : `${Math.round(totalTokens / 1000)}k`;
 
   return (
-    <div className="mx-auto max-w-4xl space-y-6 p-6">
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
-        {[
-          {
-            label: "実費 (OrcaRouter請求)",
-            value: data.billing ? `$${data.billing.totalUsageUsd.toFixed(2)}` : "—",
-            hint: data.billing ? `約${Math.round(data.billing.totalUsageUsd * 150)}円` : "取得失敗",
-          },
-          { label: "総呼び出し", value: String(data.totalCalls) },
-          { label: "入力トークン", value: kt(data.promptTokens) },
-          { label: "キャッシュヒット率", value: `${cacheRate}%` },
-          { label: "平均レイテンシ", value: `${(data.avgElapsedMs / 1000).toFixed(1)}s` },
-        ].map((c) => (
-          <div key={c.label} className="rounded-xl border border-slate-200 bg-white p-4">
-            <p className="text-xs text-slate-400">{c.label}</p>
-            <p className="mt-1 text-2xl font-bold">{c.value}</p>
-            {"hint" in c && c.hint && <p className="text-[10px] text-slate-400">{c.hint}</p>}
-          </div>
-        ))}
+    <div className="mx-auto flex max-w-xl flex-col items-center gap-6 p-10">
+      <div className="w-full rounded-2xl border border-slate-200 bg-white p-8 text-center shadow-sm">
+        <p className="text-sm text-slate-500">ここまでのAI利用</p>
+        <p className="mt-2 text-3xl font-bold tracking-tight">
+          {data.totalCalls}回 <span className="text-lg font-normal text-slate-400">/ {tokenLabel} tokens</span>
+        </p>
+        <p className="mt-6 text-sm text-slate-500">かかったお金</p>
+        <p className="mt-2 text-5xl font-bold tracking-tight text-emerald-700">
+          {data.billing ? `$${data.billing.totalUsageUsd.toFixed(2)}` : "—"}
+        </p>
+        {data.billing && (
+          <p className="mt-1 text-sm text-slate-400">約{Math.round(data.billing.totalUsageUsd * 150)}円 (OrcaRouter請求実額・マークアップなし)</p>
+        )}
       </div>
-      <p className="text-xs text-slate-400">
-        実費はOrcaRouter課金APIの累計 (ワークスペース全体・マークアップなし)。リクエスト単位の$内訳はAPI非提供のためOrcaRouterコンソール参照。
-      </p>
-
-      <section>
-        <h2 className="mb-2 text-sm font-bold text-slate-600">用途別 (対話=固定 / 要約=品質ルーティング / 定型=コスト優先)</h2>
-        <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white">
-          <table className="w-full text-left text-xs">
-            <thead className="border-b border-slate-100 text-slate-400">
-              <tr>
-                <th className="px-3 py-2">purpose</th>
-                <th className="px-3 py-2 text-right">calls</th>
-                <th className="px-3 py-2 text-right">入力tk</th>
-                <th className="px-3 py-2 text-right">出力tk</th>
-                <th className="px-3 py-2 text-right">cache</th>
-                <th className="px-3 py-2 text-right">平均秒</th>
-                <th className="px-3 py-2 text-right">経由モデル数</th>
-              </tr>
-            </thead>
-            <tbody>
-              {data.byPurpose.map((p) => (
-                <tr key={p.purpose} className="border-b border-slate-50">
-                  <td className="px-3 py-2 font-medium">{p.purpose}</td>
-                  <td className="px-3 py-2 text-right">{p.calls}</td>
-                  <td className="px-3 py-2 text-right">{kt(p.pt)}</td>
-                  <td className="px-3 py-2 text-right">{kt(p.ct)}</td>
-                  <td className="px-3 py-2 text-right">{kt(p.cached)}</td>
-                  <td className="px-3 py-2 text-right">{(p.avgMs / 1000).toFixed(1)}</td>
-                  <td className="px-3 py-2 text-right">{p.models}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </section>
-
-      <section>
-        <h2 className="mb-2 text-sm font-bold text-slate-600">指定モデル別</h2>
-        <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white">
-          <table className="w-full text-left text-xs">
-            <thead className="border-b border-slate-100 text-slate-400">
-              <tr>
-                <th className="px-3 py-2">model</th>
-                <th className="px-3 py-2 text-right">calls</th>
-                <th className="px-3 py-2 text-right">入力tk</th>
-                <th className="px-3 py-2 text-right">出力tk</th>
-                <th className="px-3 py-2 text-right">cache</th>
-                <th className="px-3 py-2 text-right">平均秒</th>
-              </tr>
-            </thead>
-            <tbody>
-              {data.byModel.map((m) => (
-                <tr key={m.model} className="border-b border-slate-50">
-                  <td className="px-3 py-2 font-mono">{m.model}</td>
-                  <td className="px-3 py-2 text-right">{m.calls}</td>
-                  <td className="px-3 py-2 text-right">{kt(m.pt)}</td>
-                  <td className="px-3 py-2 text-right">{kt(m.ct)}</td>
-                  <td className="px-3 py-2 text-right">{kt(m.cached)}</td>
-                  <td className="px-3 py-2 text-right">{(m.avgMs / 1000).toFixed(1)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </section>
-
-      <section>
-        <h2 className="mb-2 text-sm font-bold text-slate-600">直近の呼び出し (ルーティング先つき)</h2>
-        <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white">
-          <table className="w-full text-left text-xs">
-            <thead className="border-b border-slate-100 text-slate-400">
-              <tr>
-                <th className="px-3 py-2">時刻</th>
-                <th className="px-3 py-2">purpose</th>
-                <th className="px-3 py-2">routed</th>
-                <th className="px-3 py-2 text-right">in/out tk</th>
-                <th className="px-3 py-2 text-right">cache</th>
-                <th className="px-3 py-2 text-right">秒</th>
-              </tr>
-            </thead>
-            <tbody>
-              {data.recent.map((r) => (
-                <tr key={r.id} className="border-b border-slate-50">
-                  <td className="px-3 py-2 text-slate-400">{r.created_at.slice(11)}</td>
-                  <td className="px-3 py-2">{r.purpose}</td>
-                  <td className="px-3 py-2 font-mono">{r.routed_model ?? "-"}</td>
-                  <td className="px-3 py-2 text-right">
-                    {kt(r.prompt_tokens)}/{kt(r.completion_tokens)}
-                  </td>
-                  <td className="px-3 py-2 text-right">{kt(r.cached_tokens)}</td>
-                  <td className="px-3 py-2 text-right">{(r.elapsed_ms / 1000).toFixed(1)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </section>
+      <p className="text-xs text-slate-400">内訳が必要なときは OrcaRouter コンソール (orcarouter.ai/console) へ</p>
     </div>
   );
 }

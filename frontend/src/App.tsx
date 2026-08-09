@@ -45,7 +45,6 @@ export default function App() {
       }
     },
   });
-  const setMainLog = mainChat.setLog;
 
   const reload = useCallback(async () => {
     setLoading(true);
@@ -65,8 +64,8 @@ export default function App() {
 
   useEffect(() => {
     reload();
-    // サーバー保存された会話履歴を復元 (リロードで消えない)
-    api.chatLog().then((r) => setMainLog(r.messages as ChatEntry[])).catch(() => {});
+    // #72: メインチャットはリロードで新規 (会話は作業記憶。重要事項はプロジェクト前提/タスク経緯メモに
+    // 蒸留されて残り、生ログはDB保存済みで📜監査タブから見える)。タスクチャットは経緯ログなので復元維持
     const onBoard = (p: { tasks: Task[]; summaryCards?: SummaryCard[] }) => {
       setTasks(p.tasks);
       if (p.summaryCards) setSummaryCards(p.summaryCards);
@@ -82,7 +81,7 @@ export default function App() {
       socket.off("proposals:changed", onProposals);
       socket.off("archive:working", onArchive);
     };
-  }, [reload, setMainLog]);
+  }, [reload]);
 
   // 列内挿入位置から新しいsort値を計算 (前後の中間値。端は±1)
   const moveTask = useCallback((move: MovePayload) => {

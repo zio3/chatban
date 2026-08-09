@@ -13,20 +13,14 @@ const STATUS_LABELS: Record<string, { label: string; cls: string }> = {
 
 export default function TaskDetailPanel({
   task,
-  pinned,
-  onTogglePin,
   onClose,
   onJumpToBoard,
 }: {
   task: Task;
-  /** true: 常駐ドック(メインを押し出す) / false: オーバーレイ(外クリックで閉じる) */
-  pinned: boolean;
-  onTogglePin: () => void;
   onClose: () => void;
   onJumpToBoard: (id: number) => void;
 }) {
   const status = STATUS_LABELS[task.status];
-  const panelRef = useRef<HTMLElement>(null);
   const [width, setWidth] = useState(() => {
     const saved = Number(localStorage.getItem("chatban.panelWidth"));
     return saved >= 320 ? saved : 400;
@@ -69,16 +63,6 @@ export default function TaskDetailPanel({
     }
   }, [input, sending, task.id]);
 
-  // パネル外クリックで閉じる (📌固定中は無効)
-  useEffect(() => {
-    function onPointerDown(e: PointerEvent) {
-      if (pinned) return;
-      if (panelRef.current && !panelRef.current.contains(e.target as Node)) onClose();
-    }
-    document.addEventListener("pointerdown", onPointerDown);
-    return () => document.removeEventListener("pointerdown", onPointerDown);
-  }, [pinned, onClose]);
-
   // 左端ドラッグで幅調整 (localStorageに保存)
   function startResize(e: React.PointerEvent) {
     e.preventDefault();
@@ -99,14 +83,9 @@ export default function TaskDetailPanel({
 
   return (
     <aside
-      ref={panelRef}
       data-testid="task-detail-panel"
       style={{ width }}
-      className={
-        pinned
-          ? "relative flex h-full max-w-full shrink-0 flex-col border-l border-slate-200 bg-white"
-          : "fixed inset-y-0 right-0 z-40 flex max-w-full flex-col border-l border-slate-200 bg-white shadow-xl"
-      }
+      className="relative flex h-full max-w-full shrink-0 flex-col border-l border-slate-200 bg-white"
     >
       {/* 幅スプリッター */}
       <div
@@ -122,18 +101,13 @@ export default function TaskDetailPanel({
           <p className="text-xs text-slate-400">#{task.id}</p>
           <h2 className="text-base font-bold leading-snug">{task.title}</h2>
         </div>
-        <div className="flex shrink-0 items-center gap-1">
-          <button
-            onClick={onTogglePin}
-            title={pinned ? "固定を解除 (オーバーレイに戻す)" : "この枠を常駐させる (メインを押し出して固定)"}
-            className={`rounded-md px-2 py-1 text-sm ${pinned ? "bg-indigo-100 text-indigo-600" : "text-slate-400 hover:bg-slate-100"}`}
-          >
-            📌
-          </button>
-          <button onClick={onClose} className="rounded-md px-2 py-1 text-slate-400 hover:bg-slate-100" title="閉じる">
-            ✕
-          </button>
-        </div>
+        <button
+          onClick={onClose}
+          className="shrink-0 rounded-md px-2 py-1 text-slate-400 hover:bg-slate-100"
+          title="閉じる"
+        >
+          ✕
+        </button>
       </header>
 
       <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-4 py-3">

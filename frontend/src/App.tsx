@@ -205,7 +205,7 @@ export default function App() {
   return (
     <div className="flex h-full bg-slate-100 text-slate-900">
       <div className="flex min-w-0 flex-1 flex-col">
-      <header className="flex items-center justify-between border-b border-slate-200 bg-white px-4 py-2">
+      <header className="flex flex-wrap items-center justify-between gap-y-1.5 border-b border-slate-200 bg-white px-4 py-2">
         <div className="flex items-baseline gap-3">
           <h1 className="text-lg font-bold tracking-tight">ChatBan</h1>
           <span className="text-xs text-slate-500">会話がそのままタスク管理になる</span>
@@ -227,7 +227,7 @@ export default function App() {
             ))}
           </span>
         </div>
-        <div className="flex items-center gap-1 text-sm">
+        <div className="flex flex-wrap items-center gap-1 text-sm">
           <button
             onClick={() => setFilter(null)}
             className={`rounded-full px-3 py-1 ${filter === null ? "bg-slate-900 text-white" : "bg-slate-200 hover:bg-slate-300"}`}

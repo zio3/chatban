@@ -331,7 +331,8 @@ export default function Board({
 
   return (
     <DndContext sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
-      <div className="grid grid-cols-4 gap-3">
+      {/* #64: スマホは横スクロールで4列を維持 (かんばんの比喩を崩さない) */}
+      <div className="grid min-w-[880px] grid-cols-4 gap-3">
         {COLUMNS.map((col) => (
           <Column
             key={col.key}

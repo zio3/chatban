@@ -34,6 +34,14 @@ export default function TaskDetailPanel({
     const saved = Number(localStorage.getItem("chatban.panelWidth"));
     return saved >= 320 ? saved : 400;
   });
+  // #64: スマホでは幅指定をやめて全画面オーバーレイにする
+  const [isWide, setIsWide] = useState(() => window.matchMedia("(min-width: 640px)").matches);
+  useEffect(() => {
+    const mq = window.matchMedia("(min-width: 640px)");
+    const onChange = () => setIsWide(mq.matches);
+    mq.addEventListener("change", onChange);
+    return () => mq.removeEventListener("change", onChange);
+  }, []);
 
   // タスク専用チャット (#24)。ライフサイクルは共有フック (#23/#28/#29/#30)
   const chat = useChatTurn({
@@ -83,17 +91,23 @@ export default function TaskDetailPanel({
   return (
     <aside
       data-testid="task-detail-panel"
-      style={{ width }}
-      className="relative flex h-full max-w-full shrink-0 flex-col border-l border-slate-200 bg-white"
+      style={isWide ? { width } : undefined}
+      className={
+        isWide
+          ? "relative flex h-full max-w-full shrink-0 flex-col border-l border-slate-200 bg-white"
+          : "fixed inset-0 z-40 flex flex-col bg-white"
+      }
     >
-      {/* 幅スプリッター */}
-      <div
-        onPointerDown={startResize}
-        title="ドラッグで幅を調整"
-        className="group absolute inset-y-0 left-0 z-10 flex w-2 cursor-col-resize items-center justify-center hover:bg-indigo-50"
-      >
-        <div className="h-10 w-1 rounded-full bg-slate-200 group-hover:bg-indigo-400" />
-      </div>
+      {/* 幅スプリッター (スマホの全画面時は不要) */}
+      {isWide && (
+        <div
+          onPointerDown={startResize}
+          title="ドラッグで幅を調整"
+          className="group absolute inset-y-0 left-0 z-10 flex w-2 cursor-col-resize items-center justify-center hover:bg-indigo-50"
+        >
+          <div className="h-10 w-1 rounded-full bg-slate-200 group-hover:bg-indigo-400" />
+        </div>
+      )}
 
       <header className="flex items-start justify-between gap-2 border-b border-slate-100 py-3 pl-4 pr-3">
         <div className="min-w-0">

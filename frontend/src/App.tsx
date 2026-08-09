@@ -3,6 +3,7 @@ import { api } from "./api";
 import AuditView from "./components/AuditView";
 import Board, { type MovePayload } from "./components/Board";
 import Chat, { type Suggestion } from "./components/Chat";
+import ContextView from "./components/ContextView";
 import MetricsView from "./components/MetricsView";
 import TaskDetailPanel from "./components/TaskDetailPanel";
 import { useChatTurn } from "./hooks/useChatTurn";
@@ -26,7 +27,7 @@ export default function App() {
   const [detailTaskId, setDetailTaskId] = useState<number | null>(null);
   const [archiveWorking, setArchiveWorking] = useState(false);
   // #21/#33: ボード以外の閲覧ビューへの遷移 (簡易タブ)
-  const [view, setView] = useState<"board" | "metrics" | "audit">("board");
+  const [view, setView] = useState<"board" | "context" | "metrics" | "audit">("board");
   // #14: なりすまし切替 (デモモード)。認証なしで「いま自分は誰か」を選び、チャット発言に記名される
   const [currentUser, setCurrentUser] = useState(() => localStorage.getItem("chatban.currentUser") || "zio");
   const currentUserRef = useRef(currentUser);
@@ -212,6 +213,7 @@ export default function App() {
             {(
               [
                 { key: "board", label: "ボード" },
+                { key: "context", label: "📋 前提" },
                 { key: "metrics", label: "📊 コスト" },
                 { key: "audit", label: "📜 監査" },
               ] as const
@@ -268,6 +270,7 @@ export default function App() {
         </div>
       </header>
       <main className="min-h-0 flex-1 overflow-auto p-3">
+        {view === "context" && <ContextView />}
         {view === "metrics" && <MetricsView />}
         {view === "audit" && <AuditView />}
         {view === "board" && loading && (

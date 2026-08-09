@@ -13,6 +13,7 @@ import {
   auditLog,
   createTask,
   deleteTask,
+  getProjectContextRow,
   getTask,
   listChatMessages,
   listMembers,
@@ -206,6 +207,11 @@ app.get("/api/metrics", async (_req, res) => {
 // オーディットログ (#33): 会話・LLM呼び出し・割り振り履歴の閲覧
 app.get("/api/audit", (_req, res) => {
   res.json(auditLog());
+});
+
+// プロジェクト前提情報の閲覧 (#73)。編集はチャット経由のみ (update_project_context)
+app.get("/api/project-context", (_req, res) => {
+  res.json(getProjectContextRow());
 });
 
 // MCPエンドポイント (Streamable HTTP, stateless: リクエストごとに接続を組み立てる)

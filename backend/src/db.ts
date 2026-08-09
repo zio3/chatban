@@ -404,6 +404,14 @@ export function getProjectContext(): string {
   return r?.text ?? "";
 }
 
+/** 前提情報の閲覧用 (#73): 最終更新日時つき */
+export function getProjectContextRow(): { text: string; updatedAt: string | null } {
+  const r = db.prepare("SELECT text, updated_at FROM project_context WHERE id = 1").get() as
+    | { text: string; updated_at: string }
+    | undefined;
+  return { text: r?.text ?? "", updatedAt: r?.updated_at ?? null };
+}
+
 export function setProjectContext(text: string) {
   db.prepare(
     "INSERT INTO project_context (id, text, updated_at) VALUES (1, ?, datetime('now', 'localtime')) ON CONFLICT(id) DO UPDATE SET text = excluded.text, updated_at = excluded.updated_at"

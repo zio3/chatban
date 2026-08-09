@@ -173,7 +173,13 @@ export default function App() {
 
   const sortedTasks = [...tasks].sort((a, b) => a.sort - b.sort || a.id - b.id);
 
-  const detailTask = detailTaskId !== null ? tasks.find((t) => t.id === detailTaskId) : undefined;
+  // パネルで開いているタスクが完了→アーカイブでtasksから消えても、パネルは最後のスナップショットで
+  // 開き続ける (#53: AIの「完了にしました」返答が見えないまま消えるのを防ぐ)。閉じるのは✕のみ
+  const foundDetailTask = detailTaskId !== null ? tasks.find((t) => t.id === detailTaskId) : undefined;
+  const lastDetailTaskRef = useRef<Task | undefined>(undefined);
+  if (foundDetailTask) lastDetailTaskRef.current = foundDetailTask;
+  const detailTask = detailTaskId !== null ? foundDetailTask ?? lastDetailTaskRef.current : undefined;
+  const detailArchived = detailTaskId !== null && !foundDetailTask && !!detailTask;
 
   return (
     <div className="flex h-full bg-slate-100 text-slate-900">
@@ -239,7 +245,15 @@ export default function App() {
       />
       </div>
       {detailTask && (
-        <TaskDetailPanel task={detailTask} onClose={() => setDetailTaskId(null)} onJumpToBoard={jumpToBoard} />
+        <TaskDetailPanel
+          task={detailTask}
+          archived={detailArchived}
+          onClose={() => {
+            setDetailTaskId(null);
+            lastDetailTaskRef.current = undefined;
+          }}
+          onJumpToBoard={jumpToBoard}
+        />
       )}
       {toast && (
         <div

@@ -13,10 +13,13 @@ const STATUS_LABELS: Record<string, { label: string; cls: string }> = {
 
 export default function TaskDetailPanel({
   task,
+  archived,
   onClose,
   onJumpToBoard,
 }: {
   task: Task;
+  /** true: タスクは完了→アーカイブ済み (表示は最後のスナップショット) */
+  archived?: boolean;
   onClose: () => void;
   onJumpToBoard: (id: number) => void;
 }) {
@@ -111,6 +114,11 @@ export default function TaskDetailPanel({
       </header>
 
       <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-4 py-3">
+        {archived && (
+          <div className="rounded-lg bg-emerald-50 px-3 py-2 text-xs text-emerald-700">
+            ✅ このタスクは完了し、Doneの要約カードにアーカイブされました
+          </div>
+        )}
         <div className="flex flex-wrap items-center gap-2 text-sm">
           <span className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${status.cls}`}>{status.label}</span>
           {task.assignee && (

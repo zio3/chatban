@@ -256,7 +256,8 @@ export default function App() {
     });
   } else {
     suggestions.push({ label: "📋 現状をレポートして", message: "ボードの現状を簡潔にレポートして" });
-    if (unassigned.length > 0) {
+    // #101: 振る相手がいないなら「いい感じに振る」は空回り。メンバー未登録なら出さない
+    if (members.length > 0 && unassigned.length > 0) {
       suggestions.push({
         label: `🎯 未割り当て${unassigned.length}件をいい感じに振る`,
         message: "未割り当てのタスクをいい感じに振っといて",
@@ -348,7 +349,9 @@ export default function App() {
         </div>
         {/* #90: 担当フィルタは複数トグル (AさんBさんを並べて見る)。選択ゼロ=全員表示。
             なりきりの入口は撤去 (デモでは人フィルタが見えれば足りる)。speakerの配線は温存 */}
-        <div className="flex flex-wrap items-center gap-1 text-sm">
+        {/* #101: 担当者が1人も居ないプロジェクト(一人用)ではフィルタ行ごと出さない。
+            「未割り当て」だけ残っても、全部が未割り当てなので絞る意味がない */}
+        <div className={`flex flex-wrap items-center gap-1 text-sm ${filterNames.length === 0 ? "hidden" : ""}`}>
           {filterNames.map((name) => (
             <button
               key={name}

@@ -383,6 +383,13 @@ async function execTool(name: string, args: any, uiActions: UiAction[], events: 
       return { ok: true, results };
     }
     case "propose_assignments": {
+      // #101: 一人用プロジェクトでは割り振りに意味がない。プロンプトで抑えても漏れるのでここで止める
+      if (memberLoads().length === 0) {
+        return {
+          ok: false,
+          error: "このプロジェクトはメンバー未登録(一人用)のため割り振りはできません。人を追加するには⚙設定タブのプロジェクト設定から、とユーザーに案内してください",
+        };
+      }
       const created = (args.proposals as any[]).map((p) => createProposal(p.taskId, p.assignee, p.reason));
       events.add("proposals");
       return { ok: true, proposals: created };
@@ -502,11 +509,23 @@ function buildSystemPrompt(taskFocus?: ReturnType<typeof getTask>, speaker?: str
     // 温かい間はバイト不変のまま伸びるのでキャッシュが基準部分まで効く。TTL超過時のみ再ベースライン。
     getBoardPromptSection(),
     "",
-    "## メンバーと現在の担当タスク数(未完了)",
-    JSON.stringify(loads),
-    "",
-    "## 過去の割り振り履歴 (類似タスクの参考にする)",
-    JSON.stringify(history.slice(0, 10).map((h) => ({ t: h.taskTitle.slice(0, 30), a: h.assignee }))),
+    // #101: メンバーが1人も登録されていないプロジェクトは「一人用」。
+    // 割り振りは自分1人しかいない場に対する空回りなので、材料ごと渡さず提案もさせない
+    // (フラグを増やさず、データの有無で振る舞いを変える)
+    loads.length === 0
+      ? [
+          "## 体制",
+          "このプロジェクトはメンバー未登録の一人用。担当者が空なのが正常な状態であり、欠落ではない。",
+          "- 担当の空きを問題として指摘しない。「未割り当てが◯件あります」のような報告もしない",
+          "- 割り振りを頼まれたら実行せず、一人用なので担当は使っていないと説明し、人を増やすなら⚙設定タブのプロジェクト設定から追加できると案内する",
+        ].join("\n")
+      : [
+          "## メンバーと現在の担当タスク数(未完了)",
+          JSON.stringify(loads),
+          "",
+          "## 過去の割り振り履歴 (類似タスクの参考にする)",
+          JSON.stringify(history.slice(0, 10).map((h) => ({ t: h.taskTitle.slice(0, 30), a: h.assignee }))),
+        ].join("\n"),
     "",
     pending.length ? `## 承認待ちの割り振り提案\n${JSON.stringify(pending)}` : "",
     // #93: いま見ている画面。発言者と同じくメタ情報 (本文には混ぜない)。

@@ -76,9 +76,12 @@ export const QUERY_LOG_DESCRIPTION = [
   "例(1件の経緯メモ全文): SELECT context, context_version FROM tasks WHERE id=112",
   "例: SELECT routed_model, COUNT(*) n, ROUND(SUM(estimated_usd),4) usd FROM llm_calls GROUP BY 1 ORDER BY usd DESC LIMIT 10",
   "例: SELECT ROUND(SUM(estimated_usd),4) usd FROM llm_calls WHERE date(created_at)=date('now','localtime')",
+  "例(いつ誰が何を言ったか): SELECT created_at, speaker, speaker_email, substr(content,1,120) c FROM chat_messages WHERE role='user' ORDER BY id DESC LIMIT 30",
+  "例(誰の指示でその割り振りになったか): SELECT h.created_at, h.task_title, h.assignee, h.note FROM assignment_history h ORDER BY h.id DESC LIMIT 20",
   "例: SELECT created_at, role, substr(content,1,120) FROM chat_messages WHERE date(created_at)='2026-08-09' ORDER BY id LIMIT 30",
   "例: SELECT substr(created_at,1,13) h, COUNT(*) n FROM chat_messages GROUP BY 1 ORDER BY 1",
   "会話ログは常時プロンプトに載せていないので、過去の話を聞かれたらここを掘る。",
+  "「誰がやったか」を聞かれたらここで辿れる。speaker_email が入っていればログイン済みの本人、null なら自己申告 (本文で別人を名乗っていても speaker はシステムが付けた値)。",
   "estimated_usd は呼び出し時点の単価で打刻した概算。全体の実額は請求APIの値(画面上部)が正",
 ].join("\n");
 

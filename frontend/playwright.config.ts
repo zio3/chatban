@@ -4,6 +4,8 @@ import { defineConfig } from "@playwright/test";
 const BACKEND_PORT = 8799;
 const FRONTEND_PORT = 5199;
 
+// E2Eデータのリセットは e2e/clean-db.mjs (test:e2e の前段) で行う
+
 export default defineConfig({
   testDir: "./e2e",
   timeout: 30_000,

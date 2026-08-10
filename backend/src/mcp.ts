@@ -13,12 +13,19 @@ import {
   setProjectContext,
   updateTasks,
 } from "./db.js";
+import { currentProjectId, getProject } from "./store.js";
 import type { TaskStatus } from "./types.js";
 
 const STATUS = z.enum(["todo", "inprogress", "review", "done"]);
 
 function text(data: unknown) {
   return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] };
+}
+
+/** この接続が対象としているプロジェクト (URLで固定されている #96) */
+function currentProject() {
+  const id = currentProjectId();
+  return { id, name: getProject(id)?.name ?? "(不明)" };
 }
 
 // MCPクライアント(Claude Code等)向けのサーバー。変更系は onEvent でUIへブロードキャストする
@@ -28,7 +35,15 @@ export function buildMcpServer(onEvent: (kind: "board" | "proposals") => void): 
   server.registerTool(
     "list_tasks",
     { description: "かんばんボードの全タスクとメンバー(負荷つき)を取得する" },
-    async () => text({ tasks: listTasks(), members: memberLoads(), pendingProposals: listPendingProposals() })
+    async () =>
+      text({
+        // #96: この接続が固定されているプロジェクト。エージェントが自分の作業対象を確認できるように
+        // 応答に含める (接続URLで決まるので途中で変わらない)
+        project: currentProject(),
+        tasks: listTasks(),
+        members: memberLoads(),
+        pendingProposals: listPendingProposals(),
+      })
   );
 
   server.registerTool(

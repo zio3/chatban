@@ -1,5 +1,5 @@
 import { hooks } from "./hooks.js";
-import { activeProjectId, admin, db } from "./store.js";
+import { admin, currentProjectId, db } from "./store.js";
 import type { Member, Proposal, Task, TaskStatus } from "./types.js";
 
 // #86: スキーマ定義とファイルの置き場は store.ts が持つ。
@@ -358,7 +358,7 @@ export function recordLlmCall(row: {
     row.completionTokens,
     row.cachedTokens ?? 0,
     row.elapsedMs,
-    activeProjectId()
+    currentProjectId()
   );
 }
 
@@ -400,7 +400,7 @@ export function exportAll() {
     tasks: all("tasks"), // アーカイブ済み含む全件
     summaryCards: all("summary_cards"),
     chatMessages: all("chat_messages"), // trace/usage含む生データ
-    llmCalls: admin.prepare("SELECT * FROM llm_calls WHERE project_id = ? ORDER BY id").all(activeProjectId()),
+    llmCalls: admin.prepare("SELECT * FROM llm_calls WHERE project_id = ? ORDER BY id").all(currentProjectId()),
     assignmentHistory: all("assignment_history"),
     proposals: all("proposals"),
     members: all("members"),
@@ -426,7 +426,7 @@ export function auditLog() {
       .prepare(
         "SELECT id, purpose, model, routed_model, prompt_tokens, completion_tokens, cached_tokens, elapsed_ms, created_at FROM llm_calls WHERE project_id = ? ORDER BY id DESC LIMIT 100"
       )
-      .all(activeProjectId()) as any[]
+      .all(currentProjectId()) as any[]
   ).map((r) => ({
     id: r.id,
     purpose: r.purpose,

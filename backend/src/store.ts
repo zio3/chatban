@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import Database from "better-sqlite3";
 import { existsSync, mkdirSync, readdirSync, renameSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -222,6 +223,22 @@ export function activeProjectId(): number {
   return first.id;
 }
 
+// #98: 処理単位のプロジェクト上書き。
+// MCPは接続URLでプロジェクトが決まる (#96) ため、「UIが表示中のプロジェクト」とは独立に
+// 「この処理はどのプロジェクトに対するものか」を持てる必要がある。
+const scope = new AsyncLocalStorage<number>();
+
+/** fn の実行中だけ対象プロジェクトを固定する。非同期関数でも await の向こうまで維持される */
+export function withProject<T>(id: number, fn: () => T): T {
+  if (!getProject(id)) throw new Error(`project #${id} not found`);
+  return scope.run(id, fn);
+}
+
+/** いまの処理が対象とするプロジェクト。上書きが無ければUIが表示中のもの */
+export function currentProjectId(): number {
+  return scope.getStore() ?? activeProjectId();
+}
+
 export function setActiveProjectId(id: number): void {
   if (!getProject(id)) throw new Error(`project #${id} not found`);
   admin
@@ -232,9 +249,9 @@ export function setActiveProjectId(id: number): void {
   log("project", `active -> #${id} (${getProject(id)!.name})`);
 }
 
-/** いま操作対象のプロジェクトDB */
+/** いま操作対象のプロジェクトDB (処理単位の上書き > UIが表示中のもの) */
 export function db(): Database.Database {
-  return projectDb(activeProjectId());
+  return projectDb(currentProjectId());
 }
 
 export interface ProjectSummary {

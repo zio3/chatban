@@ -13,6 +13,9 @@ import { resetPromptState } from "./promptState.js";
 import {
   activeProjectId,
   createProjectWithMembers,
+  currentProjectId,
+  getProject,
+  listProjects,
   migrateLegacyDbIfNeeded,
   projectSummaries,
   renameProject,
@@ -20,6 +23,7 @@ import {
   setActiveProjectId,
   setProjectMembers,
   trashProject,
+  withProject,
 } from "./store.js";
 import {
   auditLog,
@@ -73,21 +77,23 @@ function archiveJobDelta(delta: number) {
 
 // 完了→即アーカイブ+要約合流 (E2E等ではAUTO_ARCHIVE=0で無効化)
 // #60: 完了は常にバッチで届く (単一done=長さ1)。N件一括検収でも要約再生成(LLM呼び出し)は1回
+// #98: フックはリクエストが終わった後に走るので、そのままだとプロジェクトのスコープから外れる。
+// 「MCPでプロジェクト3のタスクを完了 → プロジェクト1の要約カードに合流」という静かな事故を防ぐため、
+// 呼ばれた時点(=まだスコープ内)のプロジェクトIDを捕まえ、非同期処理の中で入り直す。
+// UIへの通知は、そのプロジェクトが表示中のときだけ送る (別プロジェクトの画面を汚さない)
 if (process.env.AUTO_ARCHIVE !== "0") {
-  hooks.tasksCompleted = (taskIds) => {
+  const runScoped = (label: string, job: () => Promise<unknown>) => {
+    const projectId = currentProjectId();
     archiveJobDelta(1);
-    onTasksCompleted(taskIds)
-      .then(() => broadcastBoard())
-      .catch((e) => log("archive", `tasksCompleted [${taskIds.join(",")}] failed: ${e?.message ?? e}`))
+    withProject(projectId, job)
+      .then(() => {
+        if (projectId === activeProjectId()) withProject(projectId, async () => broadcastBoard());
+      })
+      .catch((e) => log("archive", `${label} (project #${projectId}) failed: ${e?.message ?? e}`))
       .finally(() => archiveJobDelta(-1));
   };
-  hooks.taskReopened = (taskId) => {
-    archiveJobDelta(1);
-    onTaskReopened(taskId)
-      .then(() => broadcastBoard())
-      .catch((e) => log("archive", `taskReopened #${taskId} failed: ${e?.message ?? e}`))
-      .finally(() => archiveJobDelta(-1));
-  };
+  hooks.tasksCompleted = (taskIds) => runScoped(`tasksCompleted [${taskIds.join(",")}]`, () => onTasksCompleted(taskIds));
+  hooks.taskReopened = (taskId) => runScoped(`taskReopened #${taskId}`, () => onTaskReopened(taskId));
 }
 
 app.get("/api/board", (_req, res) => {
@@ -358,8 +364,21 @@ app.get("/api/project-context", (_req, res) => {
 });
 
 // MCPエンドポイント (Streamable HTTP, stateless: リクエストごとに接続を組み立てる)
-app.post("/mcp", async (req, res) => {
+//
+// #96: 対象プロジェクトは接続URLで固定する。ツールの引数には出さない
+// (引数が増えるほどLLMは迷う)。UIの表示中プロジェクトが変わっても影響を受けないので、
+// 「エージェントが作業中に人間が切り替えて、次の書き込みが別プロジェクトに落ちる」事故が起きない。
+// 複数プロジェクトを扱いたければ .mcp.json のエントリを分ける (ツール名の接頭辞で判別できる)。
+app.post("/mcp/:projectId", async (req, res) => {
+  const projectId = Number(req.params.projectId);
+  const project = Number.isFinite(projectId) ? getProject(projectId) : undefined;
+  if (!project) {
+    log("mcp", `存在しないプロジェクト #${req.params.projectId} への接続を拒否`);
+    return res.status(400).json({ error: `project #${req.params.projectId} not found`, available: projectList() });
+  }
+  // 書き込みはこの接続のプロジェクトに対して行う。UIへの通知は表示中のときだけ
   const mcpServer = buildMcpServer((kind) => {
+    if (projectId !== activeProjectId()) return;
     if (kind === "board") broadcastBoard();
     else broadcastProposals();
   });
@@ -369,15 +388,34 @@ app.post("/mcp", async (req, res) => {
     mcpServer.close();
   });
   try {
-    await mcpServer.connect(transport);
-    await transport.handleRequest(req, res, req.body);
+    await withProject(projectId, async () => {
+      await mcpServer.connect(transport);
+      await transport.handleRequest(req, res, req.body);
+    });
   } catch (e) {
     console.error("mcp error:", e);
     if (!res.headersSent) res.status(500).json({ error: "mcp failed" });
   }
 });
-app.get("/mcp", (_req, res) => res.status(405).json({ error: "stateless server: POST only" }));
-app.delete("/mcp", (_req, res) => res.status(405).json({ error: "stateless server: POST only" }));
+
+const projectList = () => listProjects().map((p) => ({ id: p.id, name: p.name, url: `/mcp/${p.id}` }));
+
+// プロジェクト未指定は受け付けない。フォールバックすると事故の原因が残り続けるため。
+// MCPの接続失敗はクライアント側で潰れて見えなくなるので、直し方をログとレスポンスの両方に出す
+app.post("/mcp", (_req, res) => {
+  log(
+    "mcp",
+    `プロジェクト未指定の接続を拒否しました。.mcp.json の url を http://localhost:${PORT}/mcp/<projectId> にしてください。利用可能: ${listProjects()
+      .map((p) => `#${p.id} ${p.name}`)
+      .join(" / ")}`
+  );
+  res.status(400).json({
+    error: "プロジェクトを指定してください。url を /mcp/<projectId> にしてください",
+    available: projectList(),
+  });
+});
+app.get(["/mcp", "/mcp/:projectId"], (_req, res) => res.status(405).json({ error: "stateless server: POST only" }));
+app.delete(["/mcp", "/mcp/:projectId"], (_req, res) => res.status(405).json({ error: "stateless server: POST only" }));
 
 server.listen(PORT, () => {
   console.log(`ChatBan backend listening on http://localhost:${PORT}`);

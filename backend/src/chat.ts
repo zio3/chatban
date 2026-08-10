@@ -8,6 +8,8 @@ import {
   deleteTask,
   getTask,
   listPendingProposals,
+  listSummaryCards,
+  listTasks,
   memberLoads,
   resolveProposal,
   setProjectContext,
@@ -460,6 +462,9 @@ const SUGGEST_TTL_MS = 5 * 60 * 1000;
 let suggestInflight: Promise<{ label: string; message: string }[]> | null = null;
 
 export async function generateSuggestions(): Promise<{ label: string; message: string }[]> {
+  // 新規プロジェクト(ボードが空)では読むべき文脈が無い。LLMを呼ばずに空で返す
+  // — UI側は「方針を伝える」導線だけを出す (#86)
+  if (listTasks().length === 0 && listSummaryCards().length === 0) return [];
   const systemPrompt = buildSystemPrompt();
   if (suggestCache && suggestCache.key === systemPrompt && Date.now() - suggestCache.at < SUGGEST_TTL_MS) {
     return suggestCache.value;

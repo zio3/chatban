@@ -224,23 +224,34 @@ export default function App() {
   // 「何を話しかければいいか分からない人」向けのユースケース導線。ボード状態で出し分ける
   const suggestions: Suggestion[] = [];
   const unassigned = tasks.filter((t) => t.status !== "done" && !t.assignee);
-  suggestions.push({ label: "📋 現状をレポートして", message: "ボードの現状を簡潔にレポートして" });
-  if (unassigned.length > 0) {
+  // 新規プロジェクト(まだ何も無い)では、レポートも割り振りも中身が無い。
+  // 最初にやるべきは方針を伝えること — 前提情報はAIの振る舞いを決める介入チャネル (#81) なので、
+  // ここを埋めるところから始まるのが自然。チップは1つに絞る
+  const isEmptyBoard = tasks.length === 0 && summaryCards.length === 0;
+  if (isEmptyBoard) {
     suggestions.push({
-      label: `🎯 未割り当て${unassigned.length}件をいい感じに振る`,
-      message: "未割り当てのタスクをいい感じに振っといて",
+      label: "🧭 このプロジェクトの方針を伝える",
+      message: "このプロジェクトの前提や方針を登録したい。何を教えればいい?",
     });
+  } else {
+    suggestions.push({ label: "📋 現状をレポートして", message: "ボードの現状を簡潔にレポートして" });
+    if (unassigned.length > 0) {
+      suggestions.push({
+        label: `🎯 未割り当て${unassigned.length}件をいい感じに振る`,
+        message: "未割り当てのタスクをいい感じに振っといて",
+      });
+    }
+    if (tasks.filter((t) => t.status === "review").length > 0) {
+      suggestions.push({ label: "👀 レビュー待ちをまとめて", message: "レビュー中のタスクの状況をまとめて" });
+    }
+    if (tasks.filter((t) => t.status === "todo").length === 0) {
+      suggestions.push({ label: "💡 次のタスク候補を挙げて", message: "次にやるべきタスクの候補を挙げて" });
+    }
+    if (summaryCards.length >= 2) {
+      suggestions.push({ label: `🧹 要約カード${summaryCards.length}枚を整頓`, message: "過去ログを整頓して" });
+    }
+    suggestions.push(...aiSuggestions);
   }
-  if (tasks.filter((t) => t.status === "review").length > 0) {
-    suggestions.push({ label: "👀 レビュー待ちをまとめて", message: "レビュー中のタスクの状況をまとめて" });
-  }
-  if (tasks.filter((t) => t.status === "todo").length === 0) {
-    suggestions.push({ label: "💡 次のタスク候補を挙げて", message: "次にやるべきタスクの候補を挙げて" });
-  }
-  if (summaryCards.length >= 2) {
-    suggestions.push({ label: `🧹 要約カード${summaryCards.length}枚を整頓`, message: "過去ログを整頓して" });
-  }
-  suggestions.push(...aiSuggestions);
 
   const sortedTasks = [...tasks].sort((a, b) => a.sort - b.sort || a.id - b.id);
   // #90: トグルはメンバー表だけでなく「実際にボードに居る担当者」の和集合から作る。

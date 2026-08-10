@@ -675,3 +675,38 @@ test("MCPは接続URLのプロジェクトしか触れない (#125)", async () =
   const after = (await (await fetch(`${API}/api/tasks/${id}`)).json()) as any;
   expect(after.summary).toBeFalsy();
 });
+
+/** #110: メンバーが居ないプロジェクトは「個人用」扱いで割り振り系ツールが出ない。
+ * 提案まわりのテストはメンバーを用意してから行う */
+async function ensureMembers(names: string[]) {
+  await fetch(`${API}/api/projects/1`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ members: names }),
+  });
+}
+
+test("担当が直接確定したら、そのタスクの承認待ち提案は残さない (#126)", async () => {
+  await ensureMembers(["伊藤", "渡辺"]);
+  const id = await createTask("提案と指名がぶつかるタスク");
+  await mcp("propose_assignments", { proposals: [{ taskId: id, assignee: "伊藤" }] });
+
+  const before = await (await fetch(`${API}/api/board`)).json();
+  expect(before.proposals.some((p: any) => p.taskId === id)).toBe(true);
+
+  // 提案カードが出ている状態で、別の人を名指しで確定する (指名は提案ではない)
+  await mcp("update_tasks", { updates: [{ id, assignee: "渡辺", assign_reason: "佐藤による指名" }] });
+
+  // 提案カードに古い候補が残ると、ボード(渡辺)と食い違って「どちらが有効か」が分からない
+  const after = await (await fetch(`${API}/api/board`)).json();
+  expect(after.proposals.some((p: any) => p.taskId === id)).toBe(false);
+  expect(after.tasks.find((t: any) => t.id === id).assignee).toBe("渡辺");
+});
+
+test("割り振り提案は理由なしでも作れる (根拠が無いなら書かせない) (#126)", async () => {
+  await ensureMembers(["伊藤", "渡辺"]);
+  const id = await createTask("理由なし提案のタスク");
+  const r = await mcp("propose_assignments", { proposals: [{ taskId: id, assignee: "伊藤" }] });
+  expect(r.ok).toBe(true);
+  expect(r.proposals[0].reason).toBeFalsy();
+});

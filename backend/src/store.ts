@@ -121,7 +121,7 @@ CREATE TABLE IF NOT EXISTS proposals (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   task_id INTEGER NOT NULL,
   assignee TEXT NOT NULL,
-  reason TEXT NOT NULL,
+  reason TEXT,
   status TEXT NOT NULL DEFAULT 'pending',
   created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
 );
@@ -209,6 +209,38 @@ CREATE TABLE IF NOT EXISTS summary_cards (
   addColumn("ALTER TABLE project_context ADD COLUMN version INTEGER NOT NULL DEFAULT 1");
   addColumn("ALTER TABLE summary_cards ADD COLUMN settled INTEGER NOT NULL DEFAULT 0");
   addColumn("ALTER TABLE chat_messages ADD COLUMN task_id INTEGER");
+  // #126: 誰の発言かを記録する。監査ログは「何をしたか」だけでなく「誰が言ったか」が要る。
+  // speaker=表示名 / speaker_email=ログイン済みのときだけ入る本人確認済みのアドレス。
+  // 両方持つのは、ログイン必須で展開する場合と、自分ひとりでログインなしで使う場合の
+  // 両睨みにするため — 認証があれば確かな発言者、無ければ自己申告と分かる形で残す
+  // #126: reason を任意にする。裏付けの無い理由を作らせるくらいなら理由なしで提案させたい。
+  // 既存DBの列は NOT NULL のままなので作り直す (提案は承認/却下で消える一時データなので、
+  // pending だけ引き継げば実害がない)
+  try {
+    const notNull = (db.prepare("PRAGMA table_info(proposals)").all() as any[]).some(
+      (c) => c.name === "reason" && c.notnull === 1
+    );
+    if (notNull) {
+      db.exec(`
+CREATE TABLE proposals_new (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  task_id INTEGER NOT NULL,
+  assignee TEXT NOT NULL,
+  reason TEXT,
+  status TEXT NOT NULL DEFAULT 'pending',
+  created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
+);
+INSERT INTO proposals_new (id, task_id, assignee, reason, status, created_at)
+  SELECT id, task_id, assignee, reason, status, created_at FROM proposals;
+DROP TABLE proposals;
+ALTER TABLE proposals_new RENAME TO proposals;`);
+      log("schema", "proposals.reason を任意に作り直しました (#126)");
+    }
+  } catch (e: any) {
+    log("schema", `proposals の作り直しに失敗: ${e?.message ?? e}`);
+  }
+  addColumn("ALTER TABLE chat_messages ADD COLUMN speaker TEXT");
+  addColumn("ALTER TABLE chat_messages ADD COLUMN speaker_email TEXT");
 }
 
 export const admin = open(ADMIN_PATH);

@@ -2,6 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { createTasksAsAgent, updateTasksAsAgent } from "./agentWrite.js";
 import {
   PROJECT_CONTEXT_WRITE_DESCRIPTION,
+  PROPOSE_DESCRIPTION,
   QUERY_LOG_DESCRIPTION,
   REORDER_DESCRIPTION,
   STATUS_DESCRIPTION,
@@ -186,11 +187,14 @@ export function buildMcpServer(onEvent: (kind: "board" | "proposals") => void): 
     server.registerTool(
     "propose_assignments",
     {
-      description:
-        "割り振り案を提案する(人間がUI上で承認すると確定)。理由には負荷・履歴などの根拠を書く",
+      description: PROPOSE_DESCRIPTION,
       inputSchema: {
         proposals: z.array(
-          z.object({ taskId: z.number().int(), assignee: z.string(), reason: z.string() })
+          z.object({
+            taskId: z.number().int(),
+            assignee: z.string(),
+            reason: z.string().optional().describe("ボード上で確かめられる根拠だけ。無いなら省略する"),
+          })
         ),
       },
     },

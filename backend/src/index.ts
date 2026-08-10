@@ -290,9 +290,13 @@ app.post("/api/chat", async (req, res) => {
   if (!message) return res.status(400).json({ error: "message required" });
   const id = ++chatSeq;
   const t0 = Date.now();
+  // #126: 誰の発言かはシステムが決める。ログイン済みならセッションの本人、
+  // していなければクライアントの自己申告。本文中の「佐藤です」は発言者にしない
+  const me = currentUser(req);
+  const who = { name: me?.name ?? speaker ?? null, email: me?.email ?? null };
   log(
     "chat",
-    `#${id} REQ${speaker ? ` [${speaker}]` : ""} "${String(message).slice(0, 120)}" (history=${history?.length ?? 0}${attachments?.length ? ` attachments=${attachments.length}` : ""})`
+    `#${id} REQ${who.name ? ` [${who.name}${who.email ? `/${who.email}` : "(自己申告)"}]` : ""} "${String(message).slice(0, 120)}" (history=${history?.length ?? 0}${attachments?.length ? ` attachments=${attachments.length}` : ""})`
   );
   // クライアント切断もログに残す (再起動巻き添え・ブラウザ側中断の追跡用)
   res.on("close", () => {
@@ -308,13 +312,21 @@ app.post("/api/chat", async (req, res) => {
       },
       (label) => io.to(room(currentProjectId())).emit("chat:progress", { label }), // 応答完了前の逐次フィードバック
       undefined,
-      speaker,
+      who.name ?? undefined,
       attachments,
-      view
+      view,
+      !!who.email
     );
     // 会話ログはサーバーに永続化する (添付は原本を保存せず名前だけ記録 #68)
-    saveChatMessage("user", message + (attachments?.length ? ` [添付: ${attachments.map((a: any) => a.name).join(", ")}]` : ""));
-    saveChatMessage("assistant", result.reply, result.trace, result.usage);
+    saveChatMessage(
+      "user",
+      message + (attachments?.length ? ` [添付: ${attachments.map((a: any) => a.name).join(", ")}]` : ""),
+      undefined,
+      undefined,
+      null,
+      who
+    );
+    saveChatMessage("assistant", result.reply, result.trace, result.usage, null, who);
     log(
       "chat",
       `#${id} OK ${Date.now() - t0}ms rounds=${result.usage.rounds} tools=[${result.trace.map((t) => t.tool).join(",")}] reply=${result.reply.length}ch`

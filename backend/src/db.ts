@@ -96,6 +96,8 @@ export function updateTasks(patches: { id: number; patch: TaskPatch }[]): (Task 
       next.status === "done" ? (cur.doneAt ?? new Date().toLocaleString("sv-SE")) : null,
       id
     );
+    // #126: 担当が変わったら、そのタスクの承認待ち提案は畳む (表示と実体の食い違いを残さない)
+    if (patch.assignee !== undefined && patch.assignee !== cur.assignee) settleProposalsFor(id, next.assignee);
     if (patch.assignee && patch.assignee !== cur.assignee) {
       db().prepare("INSERT INTO assignment_history (task_title, assignee, note) VALUES (?, ?, ?)").run(
         next.title,
@@ -160,10 +162,11 @@ export function assignmentHistory(limit = 20): { taskTitle: string; assignee: st
   ).map((r) => ({ taskTitle: r.task_title, assignee: r.assignee, note: r.note }));
 }
 
-export function createProposal(taskId: number, assignee: string, reason: string): Proposal | undefined {
+/** #126: reason は任意。裏付けの無い理由を作らせるくらいなら、理由なしで提案させる */
+export function createProposal(taskId: number, assignee: string, reason?: string | null): Proposal | undefined {
   const task = getTask(taskId);
   if (!task) return undefined;
-  const info = db().prepare("INSERT INTO proposals (task_id, assignee, reason) VALUES (?, ?, ?)").run(taskId, assignee, reason);
+  const info = db().prepare("INSERT INTO proposals (task_id, assignee, reason) VALUES (?, ?, ?)").run(taskId, assignee, reason ?? null);
   return getProposal(Number(info.lastInsertRowid));
 }
 
@@ -209,6 +212,20 @@ export function resolveProposal(id: number, status: "approved" | "rejected"): Pr
     updateTask(p.taskId, { assignee: p.assignee, assignReason: p.reason });
   }
   return p;
+}
+
+/** #126: 担当が別経路で確定したら、そのタスクの承認待ち提案は用済みにする。
+ * 残しておくと、提案カードには古い候補・ボードには新しい担当が出て食い違う
+ * (提案カードは承認ボタンを出しているのに、実体はもう確定している状態)。
+ * 表示と実体を構造的に一致させる */
+export function settleProposalsFor(taskId: number, assignee: string | null): number {
+  const pending = db()
+    .prepare("SELECT id, assignee FROM proposals WHERE task_id = ? AND status = 'pending'")
+    .all(taskId) as { id: number; assignee: string }[];
+  const stmt = db().prepare("UPDATE proposals SET status = ? WHERE id = ?");
+  // 提案どおりなら承認扱い、違う相手に決まったなら却下扱い (どちらも「もう待っていない」)
+  for (const p of pending) stmt.run(p.assignee === assignee ? "approved" : "rejected", p.id);
+  return pending.length;
 }
 
 export interface SummaryElement {
@@ -354,15 +371,23 @@ export function saveChatMessage(
   content: string,
   trace?: unknown,
   usage?: unknown,
-  taskId?: number | null
+  taskId?: number | null,
+  /** #126: 誰の発言か。email はログイン済みのときだけ (本文の名乗りではなくシステムが付ける) */
+  speaker?: { name?: string | null; email?: string | null }
 ) {
-  db().prepare("INSERT INTO chat_messages (role, content, trace, usage, task_id) VALUES (?, ?, ?, ?, ?)").run(
-    role,
-    content,
-    trace ? JSON.stringify(trace) : null,
-    usage ? JSON.stringify(usage) : null,
-    taskId ?? null
-  );
+  db()
+    .prepare(
+      "INSERT INTO chat_messages (role, content, trace, usage, task_id, speaker, speaker_email) VALUES (?, ?, ?, ?, ?, ?, ?)"
+    )
+    .run(
+      role,
+      content,
+      trace ? JSON.stringify(trace) : null,
+      usage ? JSON.stringify(usage) : null,
+      taskId ?? null,
+      speaker?.name ?? null,
+      speaker?.email ?? null
+    );
 }
 
 /** taskId未指定=メインチャット(task_id IS NULL)、指定=そのタスク専用の会話 */

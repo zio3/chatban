@@ -16,12 +16,23 @@ interface Toast {
   retry?: () => void;
 }
 
+const UNASSIGNED = "__unassigned__"; // #90: 担当なしを表すフィルタキー (メンバー名と衝突しない値)
+
 export default function App() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [members, setMembers] = useState<Member[]>([]);
   const [proposals, setProposals] = useState<Proposal[]>([]);
   const [summaryCards, setSummaryCards] = useState<SummaryCard[]>([]);
-  const [filter, setFilter] = useState<string | null>(null);
+  // #90: 複数トグル。空Set=全員表示。UNASSIGNEDは担当なしを表す擬似キー
+  const [filter, setFilter] = useState<Set<string>>(new Set());
+  const toggleFilter = useCallback((name: string) => {
+    setFilter((prev) => {
+      const next = new Set(prev);
+      if (next.has(name)) next.delete(name);
+      else next.add(name);
+      return next;
+    });
+  }, []);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [toast, setToast] = useState<Toast | null>(null);
@@ -29,21 +40,20 @@ export default function App() {
   const [archiveWorking, setArchiveWorking] = useState(false);
   // #21/#33: ボード以外の閲覧ビューへの遷移 (簡易タブ)
   const [view, setView] = useState<"board" | "context" | "metrics" | "audit" | "settings">("board");
-  // #14: なりすまし切替 (デモモード)。認証なしで「いま自分は誰か」を選び、チャット発言に記名される
-  const [currentUser, setCurrentUser] = useState(() => localStorage.getItem("chatban.currentUser") || "zio");
+  // #14 → #90: なりきりの切替UIは撤去。デモでは人フィルタが見えれば足りると判断した。
+  // 発言者(speaker)の配線自体は残してあるので、localStorage の chatban.currentUser を
+  // 書き換えれば別人として発言できる (音声入力#20と同じく「入口だけ外す」扱い)
+  const currentUser = localStorage.getItem("chatban.currentUser") || "zio";
   const currentUserRef = useRef(currentUser);
   currentUserRef.current = currentUser;
-  const switchUser = (name: string) => {
-    setCurrentUser(name);
-    localStorage.setItem("chatban.currentUser", name);
-  };
 
   // メインチャット: ライフサイクル(送信/考え中/停止/タイムアウト/再送)は共有フックに集約 (#23/#28/#29/#30)
   const mainChat = useChatTurn({
     request: (m, h, signal, attachments) => api.chat(m, h, signal, currentUserRef.current, attachments),
     onResponse: (res) => {
       for (const a of res.uiActions) {
-        if (a.type === "set_filter") setFilter(a.assignee);
+        // チャットからの絞り込みは単一指定。nullで解除 (#90でSetに変わったため詰め替える)
+        if (a.type === "set_filter") setFilter(a.assignee ? new Set([a.assignee]) : new Set());
       }
     },
   });
@@ -134,7 +144,7 @@ export default function App() {
 
   // 詳細パネルの「ボードで表示」: パネルは開いたまま、フィルタ解除→スクロール→フラッシュ (Slackスレッド風の常駐)
   const jumpToBoard = useCallback((id: number) => {
-    setFilter(null);
+    setFilter(new Set());
     setTimeout(() => {
       const el = document.querySelector(`[data-testid="task-card-${id}"]`);
       if (!el) return;
@@ -219,6 +229,12 @@ export default function App() {
   suggestions.push(...aiSuggestions);
 
   const sortedTasks = [...tasks].sort((a, b) => a.sort - b.sort || a.id - b.id);
+  // #90: 選択ゼロなら素通し。複数選択はOR (Aさん「と」Bさんを並べて見る)
+  const visibleTasks =
+    filter.size === 0
+      ? sortedTasks
+      : sortedTasks.filter((t) => filter.has(t.assignee ?? UNASSIGNED));
+  const hiddenCount = sortedTasks.length - visibleTasks.length;
 
   // パネルで開いているタスクが完了→アーカイブでtasksから消えても、パネルは最後のスナップショットで
   // 開き続ける (#53: AIの「完了にしました」返答が見えないまま消えるのを防ぐ)。閉じるのは✕のみ
@@ -258,45 +274,35 @@ export default function App() {
             ))}
           </span>
         </div>
+        {/* #90: 担当フィルタは複数トグル (AさんBさんを並べて見る)。選択ゼロ=全員表示。
+            なりきりの入口は撤去 (デモでは人フィルタが見えれば足りる)。speakerの配線は温存 */}
         <div className="flex flex-wrap items-center gap-1 text-sm">
-          <button
-            onClick={() => setFilter(null)}
-            className={`rounded-full px-3 py-1 ${filter === null ? "bg-slate-900 text-white" : "bg-slate-200 hover:bg-slate-300"}`}
-          >
-            全員
-          </button>
-          {/* #11: なりすまし中のユーザーでワンクリック自分フィルタ */}
-          <button
-            onClick={() => setFilter(currentUser)}
-            className={`rounded-full px-3 py-1 ${filter === currentUser ? "bg-slate-900 text-white" : "bg-indigo-100 text-indigo-700 hover:bg-indigo-200"}`}
-          >
-            👤 自分の
-          </button>
           {members.map((m) => (
             <button
               key={m.id}
-              onClick={() => setFilter(m.name)}
-              className={`rounded-full px-3 py-1 ${filter === m.name ? "bg-slate-900 text-white" : "bg-slate-200 hover:bg-slate-300"}`}
+              onClick={() => toggleFilter(m.name)}
+              className={`rounded-full px-3 py-1 ${filter.has(m.name) ? "bg-slate-900 text-white" : "bg-slate-200 hover:bg-slate-300"}`}
             >
               {m.name}
             </button>
           ))}
-          {/* #14: なりすまし切替 (デモモード)。選んだ人としてチャットに記名される */}
-          <label className="ml-3 flex items-center gap-1.5 rounded-full border border-slate-300 bg-white px-3 py-1 text-xs text-slate-600">
-            なりきり
-            <select
-              data-testid="impersonate-select"
-              value={currentUser}
-              onChange={(e) => switchUser(e.target.value)}
-              className="bg-transparent font-bold text-slate-900 outline-none"
-            >
-              {members.map((m) => (
-                <option key={m.id} value={m.name}>
-                  {m.name}
-                </option>
-              ))}
-            </select>
-          </label>
+          {/* 未割り当ては「拾い手がいない」を見つける導線。担当なしのタスクが埋もれるのを防ぐ */}
+          <button
+            onClick={() => toggleFilter(UNASSIGNED)}
+            className={`rounded-full px-3 py-1 ${filter.has(UNASSIGNED) ? "bg-slate-900 text-white" : "bg-slate-200 hover:bg-slate-300"}`}
+          >
+            未割り当て
+          </button>
+          {/* フィルタが効いていることをチップの色だけに頼らない。何件隠れているかを数で出す
+              (#87/#88が「消えた」と誤解された事故の再発防止) */}
+          {filter.size > 0 && (
+            <span className="ml-2 flex items-center gap-1.5 rounded-full bg-amber-100 px-3 py-1 text-xs text-amber-800">
+              フィルタで{hiddenCount}件が非表示
+              <button onClick={() => setFilter(new Set())} className="font-bold hover:text-amber-950" title="フィルタ解除">
+                ✕
+              </button>
+            </span>
+          )}
         </div>
       </header>
       <main className="min-h-0 flex-1 overflow-auto p-3">
@@ -322,7 +328,7 @@ export default function App() {
         )}
         {view === "board" && !loading && !loadError && (
           <Board
-            tasks={filter ? sortedTasks.filter((t) => t.assignee === filter) : sortedTasks}
+            tasks={visibleTasks}
             summaryCards={summaryCards}
             archiveWorking={archiveWorking}
             onMove={moveTask}

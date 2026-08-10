@@ -132,3 +132,34 @@ test("Review列: 検収OKチェック→一括確定でdoneになる (チェッ�
   await expect(page.getByTestId("column-done").getByTestId(`task-card-${id}`)).toBeVisible();
   await expect.poll(() => getTaskStatus(id)).toBe("done");
 });
+
+test("担当フィルタ: 複数トグルのOR絞り込みと非表示件数の表示 (#90)", async ({ page }) => {
+  // 担当ありと担当なしを1件ずつ用意する
+  const res = await fetch(`${API}/api/tasks`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ title: "E2E: フィルタ対象(zio担当)", assignee: "zio" }),
+  });
+  const assigned = (await res.json()).id as number;
+  const unassigned = await createTask("E2E: フィルタ対象(担当なし)");
+
+  await page.goto("/");
+  await expect(page.getByTestId(`task-card-${assigned}`)).toBeVisible();
+  await expect(page.getByTestId(`task-card-${unassigned}`)).toBeVisible();
+
+  // zioで絞ると担当なしが消え、非表示件数バッジが出る
+  await page.getByRole("button", { name: "zio", exact: true }).click();
+  await expect(page.getByTestId(`task-card-${assigned}`)).toBeVisible();
+  await expect(page.getByTestId(`task-card-${unassigned}`)).toBeHidden();
+  await expect(page.getByText(/フィルタで\d+件が非表示/)).toBeVisible();
+
+  // 未割り当ても足すとOR条件になり両方見える
+  await page.getByRole("button", { name: "未割り当て", exact: true }).click();
+  await expect(page.getByTestId(`task-card-${assigned}`)).toBeVisible();
+  await expect(page.getByTestId(`task-card-${unassigned}`)).toBeVisible();
+
+  // ✕で解除するとバッジも消える
+  await page.getByTitle("フィルタ解除").click();
+  await expect(page.getByText(/フィルタで\d+件が非表示/)).toBeHidden();
+  await expect(page.getByTestId(`task-card-${unassigned}`)).toBeVisible();
+});

@@ -6,14 +6,24 @@
 $ErrorActionPreference = "Stop"
 $root = $PSScriptRoot
 
-# --- 1. DB backup (keep latest 20) ---
-$db = Join-Path $root "backend\chatban.db"
-if (Test-Path $db) {
-    $backupDir = Join-Path $root "backend\backup"
+# --- 1. DB backup (keep latest 20 sets) ---
+# #86: プロジェクトごとにDBが分かれたので data/ 配下をまとめて世代バックアップする
+# (管理DB chatban-admin.db + projects/*.db。突き合わせは管理DBのprojects表でできる)
+$dataDir = Join-Path $root "backend\data"
+$legacyDb = Join-Path $root "backend\chatban.db"
+$backupDir = Join-Path $root "backend\backup"
+$stamp = Get-Date -Format "yyyyMMdd-HHmmss"
+if (Test-Path $dataDir) {
+    # WALモードではファイルコピーだと直近の書き込みが落ちるので、
+    # SQLiteのオンラインバックアップAPI経由で取る (稼働中でも整合が取れる)
+    Push-Location (Join-Path $root "backend")
+    node scripts/backup-data.mjs 20
+    Pop-Location
+}
+elseif (Test-Path $legacyDb) {
+    # 移行前 (初回起動でプロジェクト構成へ変換される) の保険
     New-Item -ItemType Directory -Force $backupDir | Out-Null
-    $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
-    Copy-Item $db (Join-Path $backupDir "chatban-$stamp.db")
-    Get-ChildItem $backupDir -Filter "chatban-*.db" | Sort-Object Name -Descending | Select-Object -Skip 20 | Remove-Item -Force
+    Copy-Item $legacyDb (Join-Path $backupDir "chatban-$stamp.db")
     Write-Host "[backup] chatban.db -> backup/chatban-$stamp.db" -ForegroundColor Green
 }
 

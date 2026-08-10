@@ -21,7 +21,9 @@ export default defineConfig({
       reuseExistingServer: false,
       env: {
         PORT: String(BACKEND_PORT),
-        DB_PATH: "e2e-test.db",
+        // #86: プロジェクトごとにDBが分かれたので、E2Eは専用のデータディレクトリを使う
+        // (存在しなければ空のプロジェクトが1つ自動生成される)
+        CHATBAN_DATA_DIR: "e2e-data",
         AUTO_ARCHIVE: "0", // done移動でLLM要約が走らないように
       },
     },

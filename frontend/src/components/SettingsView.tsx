@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import ProjectSettings from "./ProjectSettings";
 
 // #88: 管理画面。用途別モデルを実行時に切り替える (再起動不要)。
 // 「モデルID1行で差し替えられる」というルーターの利点を、UIとして触れる形にしたもの。
@@ -87,6 +88,8 @@ export default function SettingsView() {
 
   return (
     <div className="mx-auto max-w-4xl space-y-5 p-6">
+      <ProjectSettings />
+
       <div>
         <h2 className="text-base font-bold">モデル設定</h2>
         <p className="mt-1 text-xs text-slate-500">

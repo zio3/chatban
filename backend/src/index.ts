@@ -9,6 +9,18 @@ import { generateSuggestions, runChatTurn } from "./chat.js";
 import { hooks } from "./hooks.js";
 import { log } from "./log.js";
 import { buildMcpServer } from "./mcp.js";
+import { resetPromptState } from "./promptState.js";
+import {
+  activeProjectId,
+  createProjectWithMembers,
+  migrateLegacyDbIfNeeded,
+  projectSummaries,
+  renameProject,
+  reportOrphanFiles,
+  setActiveProjectId,
+  setProjectMembers,
+  trashProject,
+} from "./store.js";
 import {
   auditLog,
   createTask,
@@ -32,6 +44,11 @@ import {
 } from "./db.js";
 
 const PORT = Number(process.env.PORT ?? 8787);
+
+// #86: 旧構成 (backend/chatban.db 単一ファイル) があればプロジェクト1として取り込む。
+// 以降は data/ 配下 (管理DB + プロジェクトDB) だけを見る。DBに触る前に必ず通す
+migrateLegacyDbIfNeeded();
+reportOrphanFiles();
 
 const app = express();
 app.use(cors());
@@ -249,6 +266,52 @@ app.get("/api/audit/export", (_req, res) => {
   const stamp = new Date().toISOString().slice(0, 19).replace(/[-:T]/g, "").slice(0, 14);
   res.setHeader("Content-Disposition", `attachment; filename="chatban-audit-${stamp}.json"`);
   res.json(exportAll());
+});
+
+// プロジェクト (#86): SQLiteファイルごと分かれている。切り替えるとボード・チャット・
+// 前提情報・メンバーがまとめて入れ替わる (アクティブはサーバー側に1つ)
+app.get("/api/projects", (_req, res) => {
+  res.json({ projects: projectSummaries() });
+});
+
+app.post("/api/projects", (req, res) => {
+  const { name, members } = req.body ?? {};
+  if (!name || !String(name).trim()) return res.status(400).json({ error: "name required" });
+  const p = createProjectWithMembers(String(name).trim(), Array.isArray(members) ? members : []);
+  res.json({ ok: true, project: p });
+});
+
+app.post("/api/projects/:id/activate", (req, res) => {
+  try {
+    setActiveProjectId(Number(req.params.id));
+  } catch (e: any) {
+    return res.status(400).json({ error: e?.message ?? "activate failed" });
+  }
+  resetPromptState(); // ボードが総取っ替えになるのでプロンプトの基準スナップショットを作り直す
+  io.emit("project:changed", { projects: projectSummaries() });
+  broadcastBoard();
+  broadcastProposals();
+  res.json({ ok: true, projects: projectSummaries() });
+});
+
+app.patch("/api/projects/:id", (req, res) => {
+  const id = Number(req.params.id);
+  const { name, members } = req.body ?? {};
+  if (typeof name === "string" && name.trim()) renameProject(id, name.trim());
+  if (Array.isArray(members)) setProjectMembers(id, members);
+  io.emit("project:changed", { projects: projectSummaries() });
+  if (id === activeProjectId()) broadcastBoard();
+  res.json({ ok: true, projects: projectSummaries() });
+});
+
+app.delete("/api/projects/:id", (req, res) => {
+  try {
+    trashProject(Number(req.params.id));
+  } catch (e: any) {
+    return res.status(400).json({ error: e?.message ?? "delete failed" });
+  }
+  io.emit("project:changed", { projects: projectSummaries() });
+  res.json({ ok: true, projects: projectSummaries() });
 });
 
 // 管理画面 (#88): 用途別モデルの実効値と既定値。source=どこから来た値か

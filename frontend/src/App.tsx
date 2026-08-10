@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api } from "./api";
+import { api, type Project } from "./api";
 import AuditView from "./components/AuditView";
 import Board, { type MovePayload } from "./components/Board";
 import Chat, { type Suggestion } from "./components/Chat";
@@ -58,6 +58,12 @@ export default function App() {
     },
   });
 
+  // #86: プロジェクト一覧。切り替えるとボード・チャット・前提情報・メンバーが総取っ替えになる
+  const [projects, setProjects] = useState<Project[]>([]);
+  const loadProjects = useCallback(() => {
+    api.projects().then((d) => setProjects(d.projects)).catch(() => {});
+  }, []);
+
   const reload = useCallback(async () => {
     setLoading(true);
     setLoadError(null);
@@ -85,15 +91,23 @@ export default function App() {
     const onProposals = (p: { proposals: Proposal[] }) => setProposals(p.proposals);
     // Done要約カードの非同期再生成中インジケータ (#56)
     const onArchive = (p: { count: number }) => setArchiveWorking(p.count > 0);
+    // プロジェクトが切り替わったら全部読み直す (他のタブ/端末での切り替えにも追従する)
+    const onProject = (p: { projects: Project[] }) => {
+      setProjects(p.projects);
+      reload();
+    };
     socket.on("board:changed", onBoard);
     socket.on("proposals:changed", onProposals);
     socket.on("archive:working", onArchive);
+    socket.on("project:changed", onProject);
+    loadProjects();
     return () => {
       socket.off("board:changed", onBoard);
       socket.off("proposals:changed", onProposals);
       socket.off("archive:working", onArchive);
+      socket.off("project:changed", onProject);
     };
-  }, [reload]);
+  }, [reload, loadProjects]);
 
   // 列内挿入位置から新しいsort値を計算 (前後の中間値。端は±1)
   const moveTask = useCallback((move: MovePayload) => {
@@ -261,7 +275,24 @@ export default function App() {
       <header className="flex flex-wrap items-center justify-between gap-y-1.5 border-b border-slate-200 bg-white px-4 py-2">
         <div className="flex items-baseline gap-3">
           <h1 className="text-lg font-bold tracking-tight">ChatBan</h1>
-          <span className="text-xs text-slate-500">会話がそのままタスク管理になる</span>
+          {/* #86: プロジェクト切替。SQLiteファイルごと分かれているので、選び直すと
+              ボード・チャット・前提情報・メンバーがまとめて入れ替わる */}
+          <select
+            data-testid="project-select"
+            value={projects.find((p) => p.active)?.id ?? ""}
+            onChange={(e) => {
+              mainChat.stop();
+              mainChat.setLog([]);
+              api.activateProject(Number(e.target.value)).then((d) => setProjects(d.projects));
+            }}
+            className="rounded-full border border-slate-300 bg-white px-3 py-1 text-xs font-bold text-slate-900 outline-none"
+          >
+            {projects.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+              </option>
+            ))}
+          </select>
           <span className="flex gap-1 text-xs">
             {(
               [

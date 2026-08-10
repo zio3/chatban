@@ -5,7 +5,36 @@ async function json<T>(res: Response): Promise<T> {
   return res.json();
 }
 
+// #86: プロジェクト。SQLiteファイルごと分かれており、切り替えるとボード・チャット・
+// 前提情報・メンバーがまとめて入れ替わる
+export interface Project {
+  id: number;
+  name: string;
+  file: string;
+  createdAt: string;
+  active: boolean;
+  openTasks: number;
+  members: string[];
+}
+
 export const api = {
+  projects: () => fetch("/api/projects").then((r) => json<{ projects: Project[] }>(r)),
+  createProject: (name: string, members: string[]) =>
+    fetch("/api/projects", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, members }),
+    }).then((r) => json<{ ok: boolean }>(r)),
+  activateProject: (id: number) =>
+    fetch(`/api/projects/${id}/activate`, { method: "POST" }).then((r) => json<{ projects: Project[] }>(r)),
+  updateProject: (id: number, patch: { name?: string; members?: string[] }) =>
+    fetch(`/api/projects/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch),
+    }).then((r) => json<{ projects: Project[] }>(r)),
+  deleteProject: (id: number) =>
+    fetch(`/api/projects/${id}`, { method: "DELETE" }).then((r) => json<{ projects: Project[] }>(r)),
   board: () =>
     fetch("/api/board").then((r) =>
       json<{ tasks: Task[]; members: Member[]; proposals: Proposal[]; summaryCards: SummaryCard[] }>(r)

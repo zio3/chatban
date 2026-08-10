@@ -197,8 +197,13 @@ CREATE TABLE IF NOT EXISTS summary_cards (
   // created_at(登録日) や summary_cards.created_at(#105の日次まとめで引き継がれる) では
   // 完了の集計ができなかった。SQL窓口にしたことで露呈した穴 —
   // 固定集計のツールでは聞ける質問が決まっているので見えなかった。
-  // この列より前に終わったものは null (埋めると嘘になるので記録が無いままにする)
   addColumn("ALTER TABLE tasks ADD COLUMN done_at TEXT");
+  // 列を作る前に終わったものは updated_at で埋める。完了後に触らなければ
+  // 最終更新 ≒ 完了日時になるため (実データで確認: アーカイブ済み89件が14通りの時刻に散り、
+  // 検収バッチの単位と一致していた。#105の日次まとめは summary_card_id しか書き換えないので
+  // updated_at は潰れていない)。近似値だが、null のまま「不明」にするより答えられることが増える。
+  // 何度流しても既に入っている行は触らないので、DBを開くたびに走って構わない
+  db.exec("UPDATE tasks SET done_at = updated_at WHERE done_at IS NULL AND (status = 'done' OR archived = 1)");
   addColumn("ALTER TABLE summary_cards ADD COLUMN settled INTEGER NOT NULL DEFAULT 0");
   addColumn("ALTER TABLE chat_messages ADD COLUMN task_id INTEGER");
 }

@@ -58,7 +58,7 @@ export const QUERY_LOG_DESCRIPTION = [
   "checked_at = 人が実物で確かめた日時 (nullなら未検収)。status とは別物で、done は列が動いたこと・checked_at は検収が進んだこと。片方からもう片方を推測しない。この窓口は読み取り専用で、checked_at を書く手段はどこにも無い (印を付けられるのは人間だけ)",
   "会話で「#112」と呼ぶタスクは tasks.id = 112 のこと(主キー)。番号はプロジェクトごとに1から振られる。特定の1件を見るときは WHERE id=<番号> で引く",
   "日付の列を取り違えない。created_at=登録日 / updated_at=最終更新(その後の編集でも動く) / done_at=Doneへ確定した日 / checked_at=人が確かめた日。完了の集計には done_at を使う(created_at だと登録日を数えてしまう)。summary_cards.created_at も完了日ではない — 日次まとめで統合されると最初のカードの日付を引き継ぐ",
-  "done_at が null の完了タスクは、この列を作る前(2026-08-10以前)に終わったもの。記録が無いので「不明」として扱い、埋めたり推測したりしない",
+  "done_at のうち 2026-08-10 以前のものは、列を作る前に終わったぶんを updated_at から埋めた近似値(完了後に触っていなければ最終更新=完了日時)。日単位の集計には使えるが、分単位の議論には使わない",
   "例(いつ何件終わったか): SELECT date(done_at) d, COUNT(*) n FROM tasks WHERE done_at IS NOT NULL GROUP BY 1 ORDER BY 1 DESC",
   "SELECT * は使わない。必要な列だけ挙げる。context(経緯メモ)は1件1,000字を超えるので、一覧では length(context) か substr(context,1,120) にし、全文が要るタスクだけ id で絞って引き直す",
   "例(ボードの一覧。生きているタスクはこの条件): SELECT id, status, title, assignee, due, checked_at, length(context) ctx FROM tasks WHERE archived=0 AND trashed_at IS NULL ORDER BY COALESCE(sort,id), id",

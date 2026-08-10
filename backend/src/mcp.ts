@@ -139,14 +139,17 @@ export function buildMcpServer(onEvent: (kind: "board" | "proposals") => void): 
       },
     },
     async ({ updates }) => {
-      const { ok, updated, note, conflicts } = updateTasksAsAgent(updates as any);
+      const { ok, status, updated, note, conflicts, notFound } = updateTasksAsAgent(updates as any);
       onEvent("board");
       return text({
-        // #120: 1件でも弾いたら false。成功レスポンスの中身を疑って読ませない
+        // #120/#123: 1件でも適用できなければ ok:false。
+        // 全部ダメだったのか一部だけかは status で言う (配列を数えさせない)
         ok,
+        status,
         updated: (updated as any[]).map((t: any) => brief(t, isPersonal)),
         // #112: 経緯メモの版が合わなかったものは適用していない。現在の全文を返すのでマージして再実行する
         ...(conflicts ? { conflicts } : {}),
+        ...(notFound ? { notFound } : {}),
         ...(note ? { note } : {}),
       });
     }

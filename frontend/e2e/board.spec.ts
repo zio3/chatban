@@ -600,3 +600,31 @@ test("版が合わない更新は、同じ行の他のフィールドも保存�
   expect(after.summary).toBe(before.summary); // 巻き添えで保存されない
   expect(after.updatedAt).toBe(before.updatedAt); // 拒否された書き込みで最終更新も動かない
 });
+
+test("存在しないIDは notFound で名指しし、成功と混ぜない (#123 #124)", async () => {
+  const id = await createTask("実在するタスク");
+
+  // 一部だけ失敗 = partial。適用できた行だけが updated に入り、null は混ざらない
+  const partial = await mcp("update_tasks", {
+    updates: [{ id: 999999, summary: "存在しない" }, { id, summary: "実在する方" }],
+  });
+  expect(partial.ok).toBe(false);
+  expect(partial.status).toBe("partial");
+  expect(partial.notFound).toEqual([999999]);
+  expect(partial.updated).toHaveLength(1);
+  expect(partial.updated.every((t: unknown) => t != null)).toBe(true);
+  expect(partial.note).toContain("2件のうち1件を適用しました");
+
+  // 実在する方は実際に書けている (部分適用は「できたものはできた」)
+  const after = (await (await fetch(`${API}/api/tasks/${id}`)).json()) as any;
+  expect(after.summary).toBe("実在する方");
+
+  // 全滅は failed。ok:false だけだと「全部か一部か」が分からないので状態で言う
+  const failed = await mcp("update_tasks", { updates: [{ id: 999998, summary: "x" }] });
+  expect(failed.status).toBe("failed");
+  expect(failed.updated).toHaveLength(0);
+
+  const all = await mcp("update_tasks", { updates: [{ id, summary: "全部通る" }] });
+  expect(all.ok).toBe(true);
+  expect(all.status).toBe("ok");
+});

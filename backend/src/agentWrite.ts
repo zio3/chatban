@@ -53,6 +53,9 @@ function coerceStatus(status: string | undefined): { status?: TaskStatus; coerce
   return { status: status as TaskStatus, coerced: false };
 }
 
+const NOT_FOUND_NOTE =
+  "は存在しません。IDを確認してください (古い一覧を見ている可能性があります)。この指定は何も適用していません。その旨をユーザーにも伝えてください";
+
 const CONFLICT_NOTE =
   "経緯メモの版が合わないため、この行の更新は一切適用していません (他のフィールドも保存されていません)。conflicts の context に自分の追記をマージし、その contextVersion を添えて再実行してください。上書きに失敗したことをユーザーにも伝えてください";
 
@@ -83,19 +86,32 @@ export function createTasksAsAgent(tasks: AgentTaskInput[]): { created: unknown[
 
 export function updateTasksAsAgent(updates: AgentTaskUpdate[]): {
   ok: boolean;
+  /** #123: 全件通ったのか一部だけかを、配列を数えさせずに言う。
+   * ok だけだと「全部失敗」と「一部だけ失敗」が同じ false になる */
+  status: "ok" | "partial" | "failed";
   updated: unknown[];
   coerced: number[];
   conflicts?: ContextConflict[];
+  notFound?: number[];
   note?: string;
 } {
   const coerced: number[] = [];
   const conflicts: ContextConflict[] = [];
+  const notFound: number[] = [];
 
   const patches = updates.map((u) => {
     // #87: 「差分だけ送る」モデルを前提にしない。全フィールドをエコーバックするモデル
     // (実測: gpt-5.6-terra) だと、変更していない値まで patch に載って既存値を壊す。
     // 現在値と突き合わせ、実際に変わったフィールドだけを通す
     const cur = getTask(u.id);
+    // #123: 存在しないIDは名指しで返す。以前は updated に null が混ざるだけで、
+    // ok:true / updated:[null, {...}] を見て「2件とも書けた」と読めてしまった。
+    // エラーで全体を落とさないのは #120/#108 と同じ理由 (古い一覧を元に呼んだだけで
+    // 全部失敗するとLLMには扱いにくい) — 適用できたものは適用し、できなかったものを報告する
+    if (!cur) {
+      notFound.push(u.id);
+      return null;
+    }
     const changed = <T>(incoming: T | undefined, current: T) => incoming !== undefined && incoming !== current;
 
     const { status, coerced: didCoerce } = coerceStatus(u.status);
@@ -161,16 +177,26 @@ export function updateTasksAsAgent(updates: AgentTaskUpdate[]): {
   // 一括更新は db 層でまとめて処理 (完了遷移の通知=要約再生成が1回で済む #60)
   const updated = updateTasks(patches.filter((p): p is NonNullable<typeof p> => p !== null));
   const notes = [
+    // 件数を先に言う。「何件通って何件通らなかったか」を数えさせない
+    ...(conflicts.length + notFound.length > 0
+      ? [`${updates.length}件のうち${updates.length - conflicts.length - notFound.length}件を適用しました`]
+      : []),
     ...(coerced.length > 0 ? [`#${coerced.join(", #")} は${DONE_NOTE}`] : []),
     ...(conflicts.length > 0 ? [`#${conflicts.map((c) => c.id).join(", #")} は${CONFLICT_NOTE}`] : []),
+    ...(notFound.length > 0 ? [`#${notFound.join(", #")} ${NOT_FOUND_NOTE}`] : []),
   ];
+  // #124: 適用できた行だけが入る。undefined/null は混ざらない (内部事情を漏らさない)
+  const applied = updated.filter((t): t is NonNullable<typeof t> => t != null);
+  const rejected = conflicts.length + notFound.length;
   return {
     // 部分成功を ok:true と返すと、多くのエージェントはここで分岐して先へ進む。
-    // 1件でも弾いたなら false にして、中身を読ませる (#120)
-    ok: conflicts.length === 0,
-    updated,
+    // 1件でも適用できなかったなら false にして、中身を読ませる (#120/#123)
+    ok: rejected === 0,
+    status: rejected === 0 ? "ok" : applied.length > 0 ? "partial" : "failed",
+    updated: applied,
     coerced,
     ...(conflicts.length > 0 ? { conflicts } : {}),
+    ...(notFound.length > 0 ? { notFound } : {}),
     ...(notes.length > 0 ? { note: notes.join(" / ") } : {}),
   };
 }

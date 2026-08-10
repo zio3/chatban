@@ -6,14 +6,9 @@ import { useAttachments } from "../hooks/useAttachments";
 import { useChatTurn } from "../hooks/useChatTurn";
 import AttachmentTray from "./AttachmentTray";
 import ThinkingIndicator from "./ThinkingIndicator";
+import { DepChip } from "./Board";
+import { STATUS_LABELS } from "../types";
 import type { ChatEntry, Task } from "../types";
-
-const STATUS_LABELS: Record<string, { label: string; cls: string }> = {
-  todo: { label: "Todo", cls: "bg-slate-200 text-slate-700" },
-  inprogress: { label: "In Progress", cls: "bg-blue-100 text-blue-700" },
-  review: { label: "Review", cls: "bg-amber-100 text-amber-700" },
-  done: { label: "Done", cls: "bg-emerald-100 text-emerald-700" },
-};
 
 export default function TaskDetailPanel({
   task,
@@ -22,6 +17,8 @@ export default function TaskDetailPanel({
   onClose,
   onJumpToBoard,
   onRestored,
+  taskById,
+  onOpenTask,
 }: {
   task: Task;
   /** true: タスクは完了→アーカイブ済み (表示は最後のスナップショット) */
@@ -32,6 +29,9 @@ export default function TaskDetailPanel({
   onJumpToBoard: (id: number) => void;
   /** #102: ゴミ箱から戻したあとの再読み込み */
   onRestored?: () => void;
+  /** #111: 依存先の中身をチップから引く索引と、そこへ飛ぶための導線 */
+  taskById?: Map<number, Task>;
+  onOpenTask?: (id: number) => void;
 }) {
   const status = STATUS_LABELS[task.status];
   const [width, setWidth] = useState(() => {
@@ -165,8 +165,17 @@ export default function TaskDetailPanel({
             <span className="rounded bg-amber-50 px-1.5 py-0.5 text-[10px] text-amber-700">⏰ 期限 {task.due}</span>
           )}
           {task.blockedBy && task.blockedBy.length > 0 && (
-            <span className="rounded bg-violet-50 px-1.5 py-0.5 text-[10px] text-violet-700">
-              ⛓ 依存 {task.blockedBy.map((id) => `#${id}`).join(" ")}
+            <span className="text-[10px] text-slate-400">
+              ⛓{" "}
+              {task.blockedBy.map((id) => (
+                <DepChip
+                  key={id}
+                  id={id}
+                  dep={taskById?.get(id)}
+                  unresolved={(taskById?.get(id)?.status ?? "done") !== "done"}
+                  onOpen={onOpenTask}
+                />
+              ))}
             </span>
           )}
           <button

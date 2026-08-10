@@ -479,3 +479,25 @@ test("done_at は完了に入った瞬間だけ打刻され、その後の編集
   await patch({ status: "review" });
   expect((await get()).doneAt).toBeFalsy();
 });
+
+test("依存チップをクリックすると依存先の詳細が開く (カード自体のクリックと取り合わない) (#111)", async ({ page }) => {
+  const depId = await createTask("依存先のタスク", "inprogress");
+  const id = await createTask("依存元のタスク");
+  await fetch(`${API}/api/tasks/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ blockedBy: [depId] }),
+  });
+
+  await page.goto("/");
+  const chip = page.getByTestId(`task-card-${id}`).getByTestId(`dep-chip-${depId}`);
+  await expect(chip).toBeVisible();
+  // ホバーで中身が読める (標準のツールチップ。レイアウトを覆わない)
+  await expect(chip).toHaveAttribute("title", /依存先のタスク/);
+
+  // クリックで開くのは依存「先」。依存元(カード自体)ではない
+  await chip.click();
+  const panel = page.getByTestId("task-detail-panel");
+  await expect(panel).toContainText("依存先のタスク");
+  await expect(panel).not.toContainText("依存元のタスク");
+});

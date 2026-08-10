@@ -452,6 +452,8 @@ export default function App() {
             lastDetailTaskRef.current = undefined;
           }}
           onJumpToBoard={jumpToBoard}
+          taskById={new Map(tasks.map((t) => [t.id, t]))}
+          onOpenTask={openTask}
           onRestored={() => {
             setArchivedTask(null);
             reload();

@@ -93,3 +93,11 @@ export interface ChatEntry {
   /** 添付の表示用メタ (#68)。原本は保持しない */
   attachments?: { kind: "image" | "pdf"; name: string }[];
 }
+
+/** 列の表示名。パネルとカードで別々に持つとズレるので1箇所に置く */
+export const STATUS_LABELS: Record<string, { label: string; cls: string }> = {
+  todo: { label: "Todo", cls: "bg-slate-200 text-slate-700" },
+  inprogress: { label: "In Progress", cls: "bg-blue-100 text-blue-700" },
+  review: { label: "Review", cls: "bg-amber-100 text-amber-700" },
+  done: { label: "Done", cls: "bg-emerald-100 text-emerald-700" },
+};

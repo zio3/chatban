@@ -3,6 +3,7 @@ import type { DragEndEvent, DragOverEvent, DragStartEvent } from "@dnd-kit/core"
 import { SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { useState } from "react";
+import { STATUS_LABELS } from "../types";
 import type { SummaryCard, Task, TaskStatus } from "../types";
 
 const COLUMNS: { key: TaskStatus; label: string; accent: string }[] = [
@@ -31,6 +32,47 @@ export interface MovePayload {
   index: number;
 }
 
+/** #111: 依存先をその場で確かめられるようにする。IDだけでは何を待っているのか分からず、
+ * いちいち探しに行くことになっていた。
+ *
+ * ポップオーバーで概要を出す案もあったが採らない。カードのクリック=詳細パネル という規則が
+ * 既にあるので、依存チップも同じ意味にしておけば覚えることが増えない (#107でlaneを消したのと同じ、
+ * 語彙を増やさない判断)。ホバーは標準のツールチップでタイトルだけ — レイアウトを覆わず、
+ * 俯瞰したまま「何待ちか」が読める。モバイルはクリックだけで完結する */
+export function DepChip({
+  id,
+  dep,
+  unresolved,
+  onOpen,
+}: {
+  id: number;
+  dep?: Task;
+  unresolved: boolean;
+  onOpen?: (id: number) => void;
+}) {
+  const label = dep
+    ? `#${id} ${dep.title}
+${STATUS_LABELS[dep.status]?.label ?? dep.status}${dep.assignee ? ` / ${dep.assignee}` : ""}${dep.summary ? `
+${dep.summary}` : ""}
+(クリックで詳細)`
+    : `#${id} 完了してアーカイブ済み (クリックで詳細)`;
+  return (
+    <span
+      data-testid={`dep-chip-${id}`}
+      title={label}
+      onClick={(e) => {
+        e.stopPropagation(); // カード自体のクリック(自分を開く)と取り合わない
+        onOpen?.(id);
+      }}
+      className={`mr-1 inline-block cursor-pointer rounded px-1 py-0.5 text-[10px] hover:ring-1 hover:ring-violet-300 ${
+        unresolved ? "bg-violet-100 font-bold text-violet-700" : "bg-slate-100 text-slate-400 line-through"
+      }`}
+    >
+      #{id}
+    </span>
+  );
+}
+
 function TaskCard({
   task,
   overlay = false,
@@ -38,6 +80,7 @@ function TaskCard({
   approved,
   onToggleApproved,
   openIds,
+  taskById,
 }: {
   task: Task;
   overlay?: boolean;
@@ -47,6 +90,8 @@ function TaskCard({
   onToggleApproved?: (id: number) => void;
   /** 未完了タスクIDの集合 (#41: 依存バッジの未解決判定用) */
   openIds?: Set<number>;
+  /** 依存先の中身を引くための索引 (#111)。アーカイブ済みは載らない */
+  taskById?: Map<number, Task>;
 }) {
   const depsUnresolved = task.blockedBy?.some((id) => openIds?.has(id)) ?? false;
   return (
@@ -68,12 +113,13 @@ function TaskCard({
           )}
           {task.blockedBy && task.blockedBy.length > 0 && (
             <span
+              className="mr-1 text-[10px] text-slate-400"
               title={depsUnresolved ? "依存先が未完了のため着手できません" : "依存先はすべて完了済み"}
-              className={`mr-1 rounded px-1 py-0.5 text-[10px] ${
-                depsUnresolved ? "bg-violet-100 font-bold text-violet-700" : "bg-slate-100 text-slate-400 line-through"
-              }`}
             >
-              ⛓ 依存 {task.blockedBy.map((id) => `#${id}`).join(" ")}
+              ⛓{" "}
+              {task.blockedBy.map((id) => (
+                <DepChip key={id} id={id} dep={taskById?.get(id)} unresolved={!!openIds?.has(id)} onOpen={onOpen} />
+              ))}
             </span>
           )}
           {task.title}
@@ -118,12 +164,14 @@ function SortableCard({
   approved,
   onToggleApproved,
   openIds,
+  taskById,
 }: {
   task: Task;
   onOpen: (id: number) => void;
   approved?: boolean;
   onToggleApproved?: (id: number) => void;
   openIds?: Set<number>;
+  taskById?: Map<number, Task>;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: task.id });
   return (
@@ -134,7 +182,14 @@ function SortableCard({
       style={{ transform: CSS.Transform.toString(transform), transition }}
       className={`cursor-grab touch-none ${isDragging ? "opacity-30" : ""}`}
     >
-      <TaskCard task={task} onOpen={onOpen} approved={approved} onToggleApproved={onToggleApproved} openIds={openIds} />
+      <TaskCard
+        task={task}
+        onOpen={onOpen}
+        approved={approved}
+        onToggleApproved={onToggleApproved}
+        openIds={openIds}
+        taskById={taskById}
+      />
     </div>
   );
 }
@@ -206,6 +261,7 @@ function Column({
   onToggleApproved,
   onCommitApproved,
   openIds,
+  taskById,
 }: {
   col: (typeof COLUMNS)[number];
   tasks: Task[];
@@ -218,6 +274,8 @@ function Column({
   onCommitApproved?: () => void;
   /** 未完了タスクIDの集合 (#41: 依存バッジの未解決判定用) */
   openIds?: Set<number>;
+  /** 依存先の中身を引くための索引 (#111)。アーカイブ済みは載らない */
+  taskById?: Map<number, Task>;
 }) {
   // Doneは「置き場」でなく「検収の結果」: D&Dでは到達できない (#57)
   const { setNodeRef, isOver } = useDroppable({ id: col.key, disabled: col.key === "done" });
@@ -273,7 +331,7 @@ function Column({
           // 「todoなのにボードから消える」幽霊タスクができる。
           // Doneへは入れられない(#57)ので、出られないほうが一貫する。戻したいときはチャットで「#xxを戻して」
           col.key === "done" ? (
-            <TaskCard key={t.id} task={t} onOpen={onOpenTask} openIds={openIds} />
+            <TaskCard key={t.id} task={t} onOpen={onOpenTask} openIds={openIds} taskById={taskById} />
           ) : (
             <SortableCard
               key={t.id}
@@ -282,6 +340,7 @@ function Column({
               approved={approvedIds?.has(t.id)}
               onToggleApproved={onToggleApproved}
               openIds={openIds}
+              taskById={taskById}
             />
           )
         )}
@@ -320,6 +379,8 @@ export default function Board({
   const byStatus = (s: TaskStatus) => tasks.filter((t) => t.status === s);
   // #41: 依存バッジの未解決判定 (依存先がボード上に未完了で残っていれば「待ち」)
   const openIds = new Set(tasks.filter((t) => t.status !== "done").map((t) => t.id));
+  // #111: 依存先の中身をチップから引くための索引 (アーカイブ済みは載らない。クリックで取りに行く)
+  const taskById = new Map(tasks.map((t) => [t.id, t]));
 
   function locate(overId: number | TaskStatus): { status: TaskStatus; index: number } | null {
     if (COLUMNS.some((c) => c.key === overId)) {
@@ -365,6 +426,7 @@ export default function Board({
             onToggleApproved={col.key === "review" ? onToggleApproved : undefined}
             onCommitApproved={col.key === "review" ? onCommitApproved : undefined}
             openIds={openIds}
+            taskById={taskById}
           />
         ))}
       </div>

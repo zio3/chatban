@@ -635,7 +635,9 @@ function buildAttachmentParts(attachments: ChatAttachment[]): OpenAI.Chat.Comple
 // (クライアント側を直しても他の経路が残るため、費用の歯止めはサーバー側に置く)
 let suggestCache: { key: string; value: { label: string; message: string }[]; at: number } | null = null;
 const SUGGEST_TTL_MS = 5 * 60 * 1000;
-let suggestInflight: Promise<{ label: string; message: string }[]> | null = null;
+// #119: 同時実行の合流もプロンプト単位で持つ。1本しか持たないと、
+// プロジェクトAの生成中にBが要求したときAの結果がBへ返る (タブごとに別プロジェクト #97)
+const suggestInflight = new Map<string, Promise<{ label: string; message: string }[]>>();
 
 export async function generateSuggestions(): Promise<{ label: string; message: string }[]> {
   // 新規プロジェクト(ボードが空)では読むべき文脈が無い。LLMを呼ばずに空で返す
@@ -646,16 +648,18 @@ export async function generateSuggestions(): Promise<{ label: string; message: s
     return suggestCache.value;
   }
   // 同時到着 (StrictModeの二重実行はほぼ同時に来る) は1本にまとめる
-  if (suggestInflight) return suggestInflight;
-  suggestInflight = generateSuggestionsUncached(systemPrompt)
+  const running = suggestInflight.get(systemPrompt);
+  if (running) return running;
+  const job = generateSuggestionsUncached(systemPrompt)
     .then((value) => {
       suggestCache = { key: systemPrompt, value, at: Date.now() };
       return value;
     })
     .finally(() => {
-      suggestInflight = null;
+      suggestInflight.delete(systemPrompt);
     });
-  return suggestInflight;
+  suggestInflight.set(systemPrompt, job);
+  return job;
 }
 
 async function generateSuggestionsUncached(systemPrompt: string): Promise<{ label: string; message: string }[]> {

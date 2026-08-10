@@ -1,4 +1,5 @@
 import { getProjectContext, listSummaryCards, listTasks } from "./db.js";
+import { currentProjectId } from "./store.js";
 import { log } from "./log.js";
 
 // #50: イベントログ型プロンプト + TTL意識の再ベースライン (docs/cost-engineering-log.md)
@@ -17,17 +18,34 @@ interface Snapshot {
   date: string; // 日付が変わったら再ベースライン (「今日」がプレフィックスに入るため)
 }
 
-let baselineText = ""; // プロンプトに載る基準スナップショット (再ベースラインまでバイト不変)
-let lastSeen: Snapshot | null = null; // 直近リクエストでプロンプトに反映済みの状態 (差分計算の基準)
-let events: string[] = [];
-let lastRequestAt = 0;
+interface State {
+  baselineText: string; // プロンプトに載る基準スナップショット (再ベースラインまでバイト不変)
+  lastSeen: Snapshot | null; // 直近リクエストでプロンプトに反映済みの状態 (差分計算の基準)
+  events: string[];
+  lastRequestAt: number;
+}
 
-/** #86: プロジェクト切り替え時に呼ぶ。ボードが総取っ替えになるので差分イベントでは表現できない
- * (次のリクエストで基準スナップショットを作り直させる) */
+// #119: プロジェクトごとに持つ。以前はモジュール変数1組だったため、
+// あるプロジェクトで作った基準スナップショットが別プロジェクトのチャットにそのまま載っていた
+// (前提情報が空のプロジェクトで、別プロジェクトの前提情報を喋る)。
+// #97 でタブごとに別プロジェクトを開けるようにした時点で、1組では表現できなくなっていた。
+// 「サーバー側に隠れた"いま見ているもの"を持たない」(#97) がプロンプト側だけ守れていなかった
+const states = new Map<number, State>();
+
+function state(): State {
+  const id = currentProjectId();
+  let st = states.get(id);
+  if (!st) {
+    st = { baselineText: "", lastSeen: null, events: [], lastRequestAt: 0 };
+    states.set(id, st);
+  }
+  return st;
+}
+
+/** #86: プロジェクトの中身が総取っ替えになったときに呼ぶ。差分イベントでは表現できないので、
+ * 次のリクエストで基準スナップショットを作り直させる */
 export function resetPromptState(): void {
-  lastSeen = null;
-  events = [];
-  baselineText = "";
+  states.clear();
 }
 
 function todayLabel(): string {
@@ -79,21 +97,22 @@ function buildBaselineText(s: Snapshot): string {
 /** ボード状態のプロンプトセクションを返す。プレフィックス安定性を保つため、
  * 温かい間は基準スナップショット+イベント追記のみ、コールド時は再ベースラインする */
 export function getBoardPromptSection(): string {
+  const st = state();
   const now = Date.now();
   const needRebase =
-    !lastSeen || now - lastRequestAt > TTL_MS || events.length > MAX_EVENTS || lastSeen.date !== todayLabel();
-  lastRequestAt = now;
+    !st.lastSeen || now - st.lastRequestAt > TTL_MS || st.events.length > MAX_EVENTS || st.lastSeen.date !== todayLabel();
+  st.lastRequestAt = now;
 
   if (needRebase) {
-    lastSeen = capture();
-    baselineText = buildBaselineText(lastSeen);
-    events = [];
-    log("prompt", `rebaseline: tasks=${lastSeen.tasks.size} cards=${lastSeen.cards.size}`);
-    return baselineText;
+    st.lastSeen = capture();
+    st.baselineText = buildBaselineText(st.lastSeen);
+    st.events = [];
+    log("prompt", `rebaseline (project #${currentProjectId()}): tasks=${st.lastSeen.tasks.size} cards=${st.lastSeen.cards.size}`);
+    return st.baselineText;
   }
 
   // 前回反映済み状態との差分をイベントとして追記 (チャット外のREST/MCP起因の変更もここで拾える)
-  const seen = lastSeen!; // needRebase=false の分岐なので非null
+  const seen = st.lastSeen!; // needRebase=false の分岐なので非null
   const cur = capture();
   const fresh: string[] = [];
   for (const [id, json] of cur.tasks) {
@@ -114,12 +133,12 @@ export function getBoardPromptSection(): string {
     fresh.push(`前提情報の全文更新: ${cur.projectContext}`);
   }
   if (fresh.length > 0) {
-    events.push(...fresh);
-    lastSeen = cur;
+    st.events.push(...fresh);
+    st.lastSeen = cur;
   }
 
-  if (events.length === 0) return baselineText;
-  return `${baselineText}\n\n## 変更イベント (基準スナップショット以降の差分。+=追加 ~=変更 -=消滅。適用後が現在の状態)\n${events
+  if (st.events.length === 0) return st.baselineText;
+  return `${st.baselineText}\n\n## 変更イベント (基準スナップショット以降の差分。+=追加 ~=変更 -=消滅。適用後が現在の状態)\n${st.events
     .map((e) => `- ${e}`)
     .join("\n")}`;
 }

@@ -320,11 +320,15 @@ export default function App() {
             onChange={(e) => gotoProject(Number(e.target.value))}
             className="rounded-full border border-slate-300 bg-white px-3 py-1 text-xs font-bold text-slate-900 outline-none"
           >
-            {projects.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name}
-              </option>
-            ))}
+            {/* #107: 無効なプロジェクトは出さない。ただし今開いているものは残す
+                (除外すると選択値が消えて別プロジェクトを指してしまう) */}
+            {projects
+              .filter((p) => !p.archived || p.id === projectIdFromUrl())
+              .map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.archived ? `${p.name} (無効)` : p.name}
+                </option>
+              ))}
           </select>
           <span className="flex gap-1 text-xs">
             {(

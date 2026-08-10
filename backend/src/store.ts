@@ -65,6 +65,16 @@ CREATE TABLE IF NOT EXISTS llm_calls (
   created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
 );
 `);
+  // #107: 無効フラグ。削除するほどではないが普段は見せたくないプロジェクト用。
+  // ドロップダウンから消えるだけで、設定画面には出る (実体もタスクもそのまま)
+  const addProj = (sql: string) => {
+    try {
+      db.exec(sql);
+    } catch {
+      /* already exists */
+    }
+  };
+  addProj("ALTER TABLE projects ADD COLUMN archived INTEGER NOT NULL DEFAULT 0");
   // 旧DBから移設した llm_calls には project_id が無いので後付けする
   const add = (sql: string) => {
     try {
@@ -190,6 +200,7 @@ export interface ProjectRow {
   id: number;
   name: string;
   file: string;
+  archived: number;
   created_at: string;
 }
 
@@ -211,6 +222,11 @@ export function insertProject(name: string): ProjectRow {
 
 export function renameProject(id: number, name: string): void {
   admin.prepare("UPDATE projects SET name = ? WHERE id = ?").run(name, id);
+}
+
+/** #107: 無効/有効の切り替え。隠すだけで実体は残る */
+export function setProjectArchived(id: number, archived: boolean): void {
+  admin.prepare("UPDATE projects SET archived = ? WHERE id = ?").run(archived ? 1 : 0, id);
 }
 
 export function deleteProjectRow(id: number): void {
@@ -250,7 +266,8 @@ export function activeProjectId(): number {
     | undefined;
   const id = v ? Number(v.value) : NaN;
   if (Number.isFinite(id) && getProject(id)) return id;
-  const first = listProjects()[0];
+  const list = listProjects();
+  const first = list.find((p) => !p.archived) ?? list[0];
   if (!first) throw new Error("プロジェクトが1つもありません");
   return first.id;
 }
@@ -307,6 +324,8 @@ export interface ProjectSummary {
   file: string;
   createdAt: string;
   active: boolean;
+  /** #107: 無効。ドロップダウンには出さないが設定画面には出る */
+  archived: boolean;
   openTasks: number;
   members: string[];
 }
@@ -321,6 +340,7 @@ export function projectSummaries(): ProjectSummary[] {
       file: p.file,
       createdAt: p.created_at,
       active: p.id === activeId,
+      archived: !!p.archived,
       openTasks: (
         pdb.prepare("SELECT COUNT(*) AS c FROM tasks WHERE archived = 0 AND status != 'done'").get() as { c: number }
       ).c,

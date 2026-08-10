@@ -21,6 +21,7 @@ import {
   renameProject,
   reportOrphanFiles,
   setActiveProjectId,
+  setProjectArchived,
   setProjectMembers,
   trashProject,
   withProject,
@@ -369,6 +370,7 @@ app.patch("/api/projects/:id", (req, res) => {
   const { name, members } = req.body ?? {};
   if (typeof name === "string" && name.trim()) renameProject(id, name.trim());
   if (Array.isArray(members)) setProjectMembers(id, members);
+  if (typeof req.body?.archived === "boolean") setProjectArchived(id, req.body.archived);
   io.emit("project:changed", { projects: projectSummaries() });
   broadcastBoard(id);
   res.json({ ok: true, projects: projectSummaries() });

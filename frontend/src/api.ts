@@ -20,6 +20,8 @@ export interface Project {
   file: string;
   createdAt: string;
   active: boolean;
+  /** #107: 無効。ドロップダウンには出さないが設定画面には出る */
+  archived: boolean;
   openTasks: number;
   members: string[];
 }
@@ -34,7 +36,7 @@ export const api = {
     }).then((r) => json<{ ok: boolean }>(r)),
   activateProject: (id: number) =>
     apiFetch(`/api/projects/${id}/activate`, { method: "POST" }).then((r) => json<{ projects: Project[] }>(r)),
-  updateProject: (id: number, patch: { name?: string; members?: string[] }) =>
+  updateProject: (id: number, patch: { name?: string; members?: string[]; archived?: boolean }) =>
     apiFetch(`/api/projects/${id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },

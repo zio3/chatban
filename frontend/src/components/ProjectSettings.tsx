@@ -102,7 +102,10 @@ export default function ProjectSettings() {
               </div>
             ) : (
               <div className="flex flex-wrap items-center gap-2">
-                <span className="text-sm font-bold">{p.name}</span>
+                <span className={`text-sm font-bold ${p.archived ? "text-slate-400" : ""}`}>{p.name}</span>
+                {p.archived && (
+                  <span className="rounded-full bg-slate-200 px-2 py-0.5 text-[10px] text-slate-500">無効</span>
+                )}
                 {p.id === projectIdFromUrl() && (
                   <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-bold text-emerald-700">表示中</span>
                 )}
@@ -116,6 +119,18 @@ export default function ProjectSettings() {
                       className="rounded-lg bg-slate-900 px-3 py-1.5 text-xs text-white"
                     >
                       開く
+                    </button>
+                  )}
+                  {/* #107: 削除するほどではないが普段は見せたくないプロジェクト用。
+                      ドロップダウンから消えるだけで実体もタスクも残る */}
+                  {p.id !== projectIdFromUrl() && (
+                    <button
+                      disabled={busy}
+                      onClick={() => run(() => api.updateProject(p.id, { archived: !p.archived }))}
+                      className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-100 disabled:opacity-30"
+                      title={p.archived ? "ドロップダウンに表示する" : "ドロップダウンから隠す (実体は残る)"}
+                    >
+                      {p.archived ? "有効にする" : "無効にする"}
                     </button>
                   )}
                   <button

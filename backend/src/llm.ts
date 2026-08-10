@@ -73,6 +73,29 @@ export async function fetchModelCatalog(): Promise<ModelCatalogEntry[]> {
   return entries;
 }
 
+/** キャッシュ入力の割引率。カタログに欄がないので仮定値 (OpenAI系は概ね定価の10%) */
+export const CACHE_DISCOUNT = 0.1;
+
+/** 1呼び出しのコスト概算。routed_model の実単価 × 実測トークン。
+ * 実測(2026-08-10)では主力モデルは請求と100%一致するが、gpt-5.4-pro のように
+ * カタログ単価が実態とずれるモデルもあるため、あくまで概算として扱う (UIにも明記) */
+export async function estimateCallCost(
+  routedModel: string | null,
+  model: string,
+  promptTokens: number,
+  completionTokens: number,
+  cachedTokens: number
+): Promise<number | null> {
+  const catalog = await fetchModelCatalog();
+  // routed_model は provider 接頭辞なしで返ることがある ("gpt-5.4-mini-2026-03-17")
+  const find = (id: string | null) =>
+    id ? catalog.find((m) => m.id === id || m.id.split("/").pop() === id) : undefined;
+  const e = find(routedModel) ?? find(model);
+  if (!e || e.inputPerM == null || e.outputPerM == null) return null;
+  const fresh = Math.max(0, promptTokens - cachedTokens);
+  return (fresh * e.inputPerM + cachedTokens * e.inputPerM * CACHE_DISCOUNT + completionTokens * e.outputPerM) / 1e6;
+}
+
 export type ModelSlot = "main" | "archive" | "cheap";
 
 /** 出荷時の既定値。管理画面(#88)で上書きされていない場合はこれが使われる */

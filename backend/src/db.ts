@@ -508,7 +508,7 @@ export function metrics() {
       "SELECT purpose, COUNT(*) AS calls, SUM(prompt_tokens) AS pt, SUM(completion_tokens) AS ct, SUM(cached_tokens) AS cached, CAST(AVG(elapsed_ms) AS INTEGER) AS avgMs, COUNT(DISTINCT routed_model) AS models FROM llm_calls GROUP BY purpose ORDER BY calls DESC"
     )
     .all();
-  const recent = db.prepare("SELECT * FROM llm_calls ORDER BY id DESC LIMIT 20").all();
+  const recent = db.prepare("SELECT * FROM llm_calls ORDER BY id DESC LIMIT 50").all();
   return {
     totalCalls: total.calls,
     promptTokens: total.pt,

@@ -287,6 +287,28 @@ const tools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
   {
     type: "function",
     function: {
+      name: "ask",
+      description:
+        "返答をユーザーへの問いかけで終える場合、その答えの候補をこのツールで渡す(渡した文字列がボタンになり、押すとそのまま次の発言として届く)。" +
+        "「どうしますか?」「どちらにしますか?」で終わる返答では、候補を本文に箇条書きするのではなく必ずこれを呼ぶ。" +
+        "質問文自体はツールに渡さず本文に書く。答えが自由記述になる問いや、そもそも聞かずに実行してよい判断では呼ばない。" +
+        "ボタンは次の発言で消えるので、押されるのを待つ状態にはならない",
+      parameters: {
+        type: "object",
+        properties: {
+          options: {
+            type: "array",
+            items: { type: "string" },
+            description: "ボタンの文言(2〜4個)。押されるとこの文字列がそのまま発言として送られるので、単体で意味が通る短文にする",
+          },
+        },
+        required: ["options"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
       name: "set_view",
       description: "ボードの表示フィルタを切り替える(「鈴木さんの分だけ見せて」など)。assigneeにnullを渡すと全員表示に戻す",
       parameters: {
@@ -415,6 +437,22 @@ async function execTool(name: string, args: any, uiActions: UiAction[], events: 
       uiActions.push({ type: "set_filter", assignee: args.assignee ?? null });
       return { ok: true };
     }
+    case "ask": {
+      // 選択肢だけ受け取る。質問文は本文に書かせる —
+      // ツール呼び出しと同じターンの本文はループが捨てるので(tool_callsがあるとcontinueする)、
+      // 「テキスト+ツール」を同時に期待しない形にしてある。ツール結果を返せば必ずもう1周回り、
+      // そこで本文が返る
+      const options = (Array.isArray(args.options) ? args.options : [])
+        .filter((o: unknown): o is string => typeof o === "string" && o.trim() !== "")
+        .map((o: string) => o.trim().slice(0, 24))
+        .slice(0, 4);
+      if (options.length === 0) return { ok: false, error: "options が空です" };
+      uiActions.push({ type: "ask", options });
+      return {
+        ok: true,
+        note: "返信ボタンを出しました。質問は続けて本文に書いてください。回答はユーザーの次の発言として届くので、いまは確定しないでください",
+      };
+    }
     default:
       return { error: `unknown tool: ${name}` };
   }
@@ -447,6 +485,8 @@ function buildSystemPrompt(
     "- 「#10は渡辺に」のような名指しの指名は、理由を言われていなければ assign_reason に「◯◯(発言者)による指名」とだけ書き、理由を作らない。",
     "- 「終わりました」等の完了報告は status=review に置き、「Reviewに置いたので確認OKなら承認を」と一言返す。勝手に done にしない (doneは検収済みの意味で、即アーカイブされる)。発言者名が分かればその人のタスクを優先して曖昧参照を解決する。",
     "- あなたは done に変更できない (ツールが受け付けず review に置き換わる)。完了・却下・承認はすべて status=review に置き、done への確定はボードのReview列の検収チェック(人間の操作)だけが行う。「doneにして」「まとめて承認」と言われたら review に置いた上で「確定はReview列の検収チェックからお願いします」と案内する。",
+    "- 聞き返すときに選択肢を示すなら、本文に箇条書きで並べず ask に渡す (「はい/いいえ」「上から順に振る/軽いものから」など)。同じ内容を本文にも書き直さない — ボタンがそのまま選択肢の表示になる。答えが自由記述になるときは ask を使わずふつうに聞く。",
+    "- ask は入力の近道であって承認の関門ではない。ユーザーは押さずに打ち返してよいし、無視して別の話をしてもよい。ボタンは次の発言で消えるので、押されるのを待つ状態にはならない。",
     "- 「◯◯さんの分だけ見せて」は set_view を使う。",
     "- チーム共通の前提・決まりごと(締切、方針、用語など)を伝えられたら update_project_context で前提情報に反映する。",
     "- 特定タスクの経緯・決定事項・補足(「#22は◯◯方式でいくことにした」等)は update_task_context でそのタスクの経緯メモに記録する。",
@@ -557,6 +597,7 @@ const TOOL_LABELS: Record<string, string> = {
   delete_tasks: "ゴミ箱へ移動",
   restore_tasks: "ゴミ箱から復元",
   set_view: "ビューを切替",
+  ask: "返信ボタンを用意",
   update_project_context: "前提情報を更新",
   compact_archive: "過去ログを整頓",
   reorder_tasks: "並び順を変更",

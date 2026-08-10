@@ -47,7 +47,12 @@ export interface Proposal {
   createdAt: string;
 }
 
-export interface UiAction {
-  type: "set_filter";
-  assignee: string | null;
-}
+/** チャットの応答に付随してUIを動かす指示。DBには保存しない揮発物 */
+export type UiAction =
+  | { type: "set_filter"; assignee: string | null }
+  | {
+      /** 直前の返答に対する簡易返信ボタン。押すとその文字列がそのままユーザー発言として送られる。
+       * 次の発言でUIごと消える(状態を持たない) — 承認待ちという状態を作らないための設計 */
+      type: "ask";
+      options: string[];
+    };

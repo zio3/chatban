@@ -51,10 +51,10 @@ export interface ToolTrace {
   result: unknown;
 }
 
-export interface UiAction {
-  type: "set_filter";
-  assignee: string | null;
-}
+export type UiAction =
+  | { type: "set_filter"; assignee: string | null }
+  /** 直前の返答に添える簡易返信ボタン。押すとその文字列がそのまま発言として送られ、次の発言で消える */
+  | { type: "ask"; options: string[] };
 
 export interface ChatResponse {
   reply: string;

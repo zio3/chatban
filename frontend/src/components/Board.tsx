@@ -164,8 +164,17 @@ function renderRefs(text: string, onOpen: (id: number) => void) {
 
 // #58: チェックボックスは廃止 (done=検収済みなので把握確認が二重になる)。
 // アクティブカード=緑で開いた状態、整頓で過去ログ化(settled)されたカード=グレーで畳んだ状態
-function SummaryCardView({ card, onOpenTask }: { card: SummaryCard; onOpenTask: (id: number) => void }) {
-  const [open, setOpen] = useState(!card.settled);
+function SummaryCardView({
+  card,
+  onOpenTask,
+  defaultOpen,
+}: {
+  card: SummaryCard;
+  onOpenTask: (id: number) => void;
+  /** #105: 検収バッチごとにカードが増えるので、開くのは最新の1枚だけ */
+  defaultOpen: boolean;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
   return (
     <div
       data-testid={`summary-card-${card.id}`}
@@ -260,7 +269,9 @@ function Column({
       {summaryCards &&
         [...summaryCards]
           .sort((a, b) => Number(a.settled) - Number(b.settled) || b.id - a.id)
-          .map((c) => <SummaryCardView key={c.id} card={c} onOpenTask={onOpenTask} />)}
+          .map((c, i) => (
+            <SummaryCardView key={c.id} card={c} onOpenTask={onOpenTask} defaultOpen={i === 0 && !c.settled} />
+          ))}
       <SortableContext items={tasks.map((t) => t.id)} strategy={verticalListSortingStrategy}>
         {tasks.map((t) => (
           <SortableCard

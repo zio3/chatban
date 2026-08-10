@@ -1,6 +1,6 @@
 import {
   detachTaskFromCard,
-  getOrCreateActiveCard,
+  createSummaryCard,
   getSummaryCard,
   assignTaskToCard,
   deleteSummaryCards,
@@ -33,7 +33,37 @@ function extractJsonArray(text: string): string[] | null {
   return null;
 }
 
-export async function regenerateCard(cardId: number): Promise<SummaryCard | undefined> {
+const todayLabel = () => `${new Date().toLocaleDateString("ja-JP", { month: "numeric", day: "numeric" })}の完了`;
+
+/** 中身が何だったかを表す短い見出し。失敗時はnullを返して呼び出し側でフォールバックさせる */
+async function generateContentLabel(titles: string[]): Promise<string | null> {
+  try {
+    const res = await chatCompletion("archive-title", getModel("cheap"), {
+      messages: [
+        {
+          role: "system",
+          content:
+            "完了タスク群の見出しラベルを1つだけ生成する。そのまとまりが何だったか一目で分かる短い日本語(20字以内)。日付は入れない。件数も書かない。ラベルテキストのみ出力。例: 「プロジェクト分離まわり」「削除の可逆化と検索」",
+        },
+        { role: "user", content: titles.map((t) => `- ${t.slice(0, 40)}`).join("\n") },
+      ],
+    });
+    const label = (res.choices[0].message.content ?? "")
+      .trim()
+      .split("\n")[0]
+      .replace(/[(（]\d+件[)）]/g, "")
+      .replace(/^["「』]|["」』]$/g, "")
+      .trim()
+      .slice(0, 40);
+    return label || null;
+  } catch (e: any) {
+    log("archive", `title generation failed (fallback): ${e?.message ?? e}`);
+    return null;
+  }
+}
+
+/** カードの要約を作り直す。dateLabelを渡すとタイトル生成をせずそのラベルを使う (日次まとめ用) */
+export async function regenerateCard(cardId: number, dateLabel?: string): Promise<SummaryCard | undefined> {
   const card = getSummaryCard(cardId);
   if (!card) return undefined;
   const tasks = tasksOfCard(cardId);
@@ -84,47 +114,66 @@ export async function regenerateCard(cardId: number): Promise<SummaryCard | unde
   ];
   const elements: SummaryElement[] = [...checkedElements, ...newTexts.map((text) => ({ text, checked: false }))];
 
-  // タイトル: 見出しラベルはコスト優先ルーティング(定型)、件数は機械で付与(LLMに数えさせない)
-  let label = "";
-  try {
-    const titleRes = await chatCompletion("archive-title", getModel("cheap"), {
-      messages: [
-        {
-          role: "system",
-          content:
-            "完了タスク要約カードの見出しラベルを1つだけ生成。「8/9午前の完了」のような日付ベースの短い形式。件数は書かない。ラベルテキストのみ出力。",
-        },
-        {
-          role: "user",
-          content: `今日: ${new Date().toLocaleDateString("ja-JP", { month: "numeric", day: "numeric" })}`,
-        },
-      ],
-    });
-    label = (titleRes.choices[0].message.content ?? "").trim().split("\n")[0].replace(/[(（]\d+件[)）]/g, "").trim().slice(0, 40);
-  } catch (e: any) {
-    log("archive", `title generation failed (fallback): ${e?.message ?? e}`);
-  }
-  // 件数はUI側で taskIds.length から表示するので、タイトルはラベルのみ持つ
-  const title = label || `${new Date().toLocaleDateString("ja-JP", { month: "numeric", day: "numeric" })}の完了`;
+  // タイトル: 見出しラベルはコスト優先ルーティング(定型)、件数は機械で付与(LLMに数えさせない)。
+  // #105: カードが検収バッチごとに複数並ぶようになったので、日付ラベルでは区別できない。
+  // 中身のタスクを渡して内容ラベルを作らせる (日次まとめ済みのカードだけは日付ラベルのまま)
+  const title = dateLabel ?? (await generateContentLabel(taskData.map((t) => t.title))) ?? todayLabel();
 
   updateCardContent(cardId, title, elements);
   log("archive", `card#${cardId} regenerated: ${tasks.length} tasks -> ${elements.length} elements`);
   return getSummaryCard(cardId);
 }
 
-/** 完了タスク群をアクティブカードに合流させ、生データから要約を再生成する。
- * #60: 一括検収で複数doneが来ても再生成(LLM呼び出し)は1回で済むようバッチで受ける */
+/** #105: 1日経ったカードを日単位に統合する。粒度は時間とともに粗くなる:
+ *   直近=検収バッチごと(内容ラベル) → 1日経過=その日1枚(日付ラベル) → 手動整頓=全部で1枚(settled)
+ * 放っておくとバッチ単位のカードが増え続けるので、古くなったものから自動で畳む。
+ * settledにはしない — 過去ログ化の引き金は手動整頓だけ、という #58 の定義を壊さないため。
+ *
+ * 将来案: レンジを日だけでなく週・月・四半期・年へ段階的に上げていくと、
+ * 何年運用しても常駐する要約カードの枚数が対数的にしか増えない (CLAUDE.mdに記載)。
+ */
+async function rollUpOldCards(): Promise<void> {
+  const today = new Date().toLocaleDateString("sv-SE"); // YYYY-MM-DD
+  const byDate = new Map<string, SummaryCard[]>();
+  for (const c of listSummaryCards()) {
+    if (c.settled || c.taskIds.length === 0) continue;
+    const date = c.createdAt.slice(0, 10);
+    if (date >= today) continue; // 今日のぶんは細かいまま残す
+    byDate.set(date, [...(byDate.get(date) ?? []), c]);
+  }
+  for (const [date, cards] of byDate) {
+    if (cards.length < 2) continue; // 1枚しかない日は畳む必要がない
+    const keep = cards[0];
+    reassignTasksToCard(cards.flatMap((c) => c.taskIds), keep.id);
+    deleteSummaryCards(cards.slice(1).map((c) => c.id));
+    updateCardContent(keep.id, null, []); // 白紙にしてから原本で作り直す (要約の要約にしない)
+    const [, m, d] = date.split("-");
+    await regenerateCard(keep.id, `${Number(m)}/${Number(d)}の完了`);
+    log("archive", `rolled up ${cards.length} cards of ${date} -> card#${keep.id}`);
+  }
+}
+
+/** 完了タスク群を新しいカードにまとめ、生データから要約を再生成する。
+ * #60: 一括検収で複数doneが来ても再生成(LLM呼び出し)は1回で済むようバッチで受ける
+ * #105: バッチごとに新しいカードを作る (以前は1枚のアクティブカードに合流し続けていた) */
 export async function onTasksCompleted(taskIds: number[]): Promise<SummaryCard | undefined> {
   if (taskIds.length === 0) return undefined;
-  const card = getOrCreateActiveCard();
+  await rollUpOldCards(); // 先に古いぶんを畳んでから、今回のバッチを新しいカードにする
+  const card = createSummaryCard();
   for (const id of taskIds) assignTaskToCard(id, card.id);
   return regenerateCard(card.id);
 }
 
-/** doneから戻されたタスクをカードから外し、要約を作り直す */
+/** doneから戻されたタスクをカードから外し、要約を作り直す。
+ * #105: 最後の1件が抜けて空になったカードは消す (チェックボックス廃止済みなので残す意味がない) */
 export async function onTaskReopened(taskId: number): Promise<SummaryCard | undefined> {
   const cardId = detachTaskFromCard(taskId);
   if (!cardId) return undefined;
+  if (tasksOfCard(cardId).length === 0) {
+    deleteSummaryCards([cardId]);
+    log("archive", `card#${cardId} became empty -> deleted`);
+    return undefined;
+  }
   return regenerateCard(cardId);
 }
 
@@ -139,7 +188,7 @@ export async function compactArchive(): Promise<{ merged: number; card?: Summary
   deleteSummaryCards(targets.slice(1).map((c) => c.id));
   // 白紙にしてから全生データで再要約 (要約の要約ではなく原本から作り直す)
   updateCardContent(keep.id, null, []);
-  await regenerateCard(keep.id);
+  await regenerateCard(keep.id, todayLabel());
   setCardSettled(keep.id);
   const card = getSummaryCard(keep.id);
   log("archive", `compacted ${targets.length} cards -> card#${keep.id} (${allTaskIds.length} tasks, settled)`);

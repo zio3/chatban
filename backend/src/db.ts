@@ -233,11 +233,12 @@ export function getSummaryCard(id: number): SummaryCard | undefined {
   return r ? rowToCard(r) : undefined;
 }
 
-// 完了タスクの合流先。settled=0 のカードが「育っているアクティブ要約」。
-// 過去ログ化(settle)の引き金は整頓(compact_archive)のみ (#58)。
-export function getOrCreateActiveCard(): SummaryCard {
-  const active = listSummaryCards().filter((c) => !c.settled).at(-1);
-  if (active) return active;
+// #105: 完了タスクの合流先を検収バッチごとに新規作成する。
+// 以前は「settledでない最後のカード」に合流し続けたため、整頓するまで1枚が無限に育ち、
+// 直近の作業と数時間前の作業が同じカードに畳まれて解像度が落ちていた。
+// 人間が「このまとまりを完了にする」と決めた単位(=検収バッチ)をそのまま粒度にする。
+// 分けるのは後からできないが、統合は compact_archive と日次まとめでできる = 細かい側に倒す。
+export function createSummaryCard(): SummaryCard {
   const info = db()
     .prepare("INSERT INTO summary_cards (title, elements, task_ids) VALUES (?, ?, ?)")
     .run("完了タスクの要約", "[]", "[]");

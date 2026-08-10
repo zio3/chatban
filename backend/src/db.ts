@@ -33,6 +33,7 @@ function rowToTask(r: any): Task {
     blockedBy: r.blocked_by ? JSON.parse(r.blocked_by) : null,
     rejected: !!r.rejected,
     trashedAt: r.trashed_at ?? null,
+    checkedAt: r.checked_at ?? null,
     contextVersion: r.context_version ?? 1,
     sort: r.sort ?? r.id,
     createdAt: r.created_at,
@@ -71,8 +72,12 @@ export function updateTasks(patches: { id: number; patch: TaskPatch }[]): (Task 
     // #112: 経緯メモが実際に変わったときだけ版を上げる。
     // 他の列の更新で上げてしまうと、context を書いている側が無関係な変更で弾かれる
     const contextChanged = patch.context !== undefined && patch.context !== cur.context;
+    // #108: 作業中の列へ戻したら検収の印は無効になる。「確かめた」のは前の状態に対してなので、
+    // 作り直しているものに印が残っていると、次の検収で「もう確認済み」と誤読される。
+    // done と review では消さない (done=検収の結果、review=検収待ちで印は進捗そのもの)
+    const backToWork = next.status === "todo" || next.status === "inprogress";
     db().prepare(
-      "UPDATE tasks SET title = ?, status = ?, assignee = ?, assign_reason = ?, sort = ?, context = ?, summary = ?, due = ?, blocked_by = ?, rejected = ?, context_version = context_version + ?, updated_at = datetime('now', 'localtime') WHERE id = ?"
+      "UPDATE tasks SET title = ?, status = ?, assignee = ?, assign_reason = ?, sort = ?, context = ?, summary = ?, due = ?, blocked_by = ?, rejected = ?, context_version = context_version + ?, checked_at = ?, updated_at = datetime('now', 'localtime') WHERE id = ?"
     ).run(
       next.title,
       next.status,
@@ -85,6 +90,7 @@ export function updateTasks(patches: { id: number; patch: TaskPatch }[]): (Task 
       next.blockedBy?.length ? JSON.stringify(next.blockedBy) : null,
       next.rejected ? 1 : 0,
       contextChanged ? 1 : 0,
+      backToWork ? null : (cur.checkedAt ?? null),
       id
     );
     if (patch.assignee && patch.assignee !== cur.assignee) {
@@ -667,4 +673,14 @@ function runReadonly(
   if (hit) throw new Error(`${hit} は参照できません (機密として閉じているテーブル)`);
   const rows = conn.prepare(trimmed).all() as unknown[];
   return { rows: rows.slice(0, limit), sql: trimmed, truncated: rows.length > limit };
+}
+
+/** #108: 検収の印を付け外しする。人間のUI操作 (REST) からのみ呼ぶ。
+ * agentWrite の TaskPatch には入れない — エージェントが「確認しておきました」と
+ * 自分でチェックを付けてしまう事故を、プロンプトではなく経路の有無で防ぐ */
+export function setChecked(id: number, checked: boolean): Task | undefined {
+  db()
+    .prepare("UPDATE tasks SET checked_at = ? WHERE id = ?")
+    .run(checked ? new Date().toLocaleString("sv-SE") : null, id);
+  return getTask(id);
 }

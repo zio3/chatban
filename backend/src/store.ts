@@ -188,6 +188,11 @@ CREATE TABLE IF NOT EXISTS summary_cards (
   // 他人の追記が消える。status や due のような単一値は後勝ちでも実害が小さく、
   // むしろ長いサイクル(context)と同じ番号で守ると、実害のない衝突でリトライが多発する
   addColumn("ALTER TABLE tasks ADD COLUMN context_version INTEGER NOT NULL DEFAULT 1");
+  // #108: 検収の印。人が実物で確かめた日時が入る (nullなら未検収)。
+  // status とは別物 — done は「列が動いた」、checked_at は「人が確かめた」。
+  // 一塊の完了を管理する重要なフラグなので、UIの一時状態ではなくDBに持つ。
+  // 書けるのは人間のUI経路(REST)だけで、エージェント(agentWrite)からは触れない
+  addColumn("ALTER TABLE tasks ADD COLUMN checked_at TEXT");
   addColumn("ALTER TABLE summary_cards ADD COLUMN settled INTEGER NOT NULL DEFAULT 0");
   addColumn("ALTER TABLE chat_messages ADD COLUMN task_id INTEGER");
 }

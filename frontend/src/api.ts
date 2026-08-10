@@ -59,6 +59,13 @@ export const api = {
       body: JSON.stringify(patch),
     }).then((r) => json<Task>(r)),
   getTask: (id: number) => apiFetch(`/api/tasks/${id}`).then((r) => json<Task>(r)),
+  // #108: 検収の印。この口はRESTにしか無い (エージェントは読めるが書けない)
+  setChecked: (id: number, checked: boolean) =>
+    apiFetch(`/api/tasks/${id}/checked`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ checked }),
+    }),
   approveTasks: (ids: number[]) =>
     apiFetch("/api/tasks/approve", {
       method: "POST",

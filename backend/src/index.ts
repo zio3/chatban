@@ -29,6 +29,7 @@ import {
 import {
   auditLog,
   createTask,
+  setChecked,
   deleteSetting,
   listTrashedTasks,
   purgeTask,
@@ -151,6 +152,16 @@ app.post("/api/tasks", (req, res) => {
   const { title, status, assignee, assignReason } = req.body ?? {};
   if (!title) return res.status(400).json({ error: "title required" });
   const task = createTask(title, status ?? "todo", assignee ?? null, assignReason ?? null);
+  broadcastBoard();
+  res.json(task);
+});
+
+// #108: 検収の印 (人が実物で確かめたという記録)。done とは別物で、
+// done は列が動いたこと、checked_at は検収が進んだこと。片方からもう片方を推測しない。
+// エージェントには読ませるが書かせない — この口はRESTにしか無い
+app.post("/api/tasks/:id/checked", (req, res) => {
+  const task = setChecked(Number(req.params.id), !!req.body?.checked);
+  if (!task) return res.status(404).json({ error: "not found" });
   broadcastBoard();
   res.json(task);
 });

@@ -19,6 +19,8 @@ export interface Task {
   rejected: boolean;
   /** #102: ゴミ箱に入れた日時。nullなら通常のタスク */
   trashedAt?: string | null;
+  /** #108: 人が実物で確かめた日時。nullなら未検収。AIは読むだけで書けない */
+  checkedAt?: string | null;
   /** #112: 経緯メモの版。contextが変わるたびに +1。
    * エージェントが「読む→考える→全文で書き戻す」の間に他人が追記していないかを見る */
   contextVersion: number;

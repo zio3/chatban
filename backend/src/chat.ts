@@ -49,6 +49,23 @@ export interface ChatResult {
 
 const STATUS_VALUES = ["todo", "inprogress", "review", "done"];
 
+/** #106/#108: 記録へのSQL窓口の説明。チャットとMCPで同じものを使う。
+ * 入口ごとに書き分けると必ずズレる (#92 #108 #114 で3回起きた) */
+export const QUERY_LOG_DESCRIPTION = [
+        "記録にSQLで問い合わせる(読み取り専用)。集計軸・期間・条件は自由に決めてよい。",
+        "scope='cost': llm_calls — id, purpose(chat/suggest/archive-decompose/archive-title), model, routed_model, prompt_tokens, completion_tokens, cached_tokens, elapsed_ms, project_id, price_in_per_m, price_out_per_m, estimated_usd, created_at",
+        "scope='audit': このプロジェクトの記録。chat_messages(id, role, content, trace, usage, task_id, created_at) / assignment_history(task_title, assignee, note, created_at) / proposals(task_id, assignee, reason, status, created_at) / summary_cards(id, title, elements, task_ids, settled, created_at)",
+        "scope='audit' の tasks(id, title, status, assignee, assign_reason, summary, context, context_version, due, blocked_by, rejected, checked_at, trashed_at, sort, archived, summary_card_id, created_at, updated_at)",
+        "checked_at = 人が実物で確かめた日時 (nullなら未検収)。status とは別物で、done は列が動いたこと・checked_at は検収が進んだこと。片方からもう片方を推測しない。この窓口は読み取り専用で、checked_at を書く手段はどこにも無い (印を付けられるのは人間だけ)",
+        "例: SELECT id, title, summary FROM tasks WHERE status='review' AND checked_at IS NULL ORDER BY sort",
+        "例: SELECT routed_model, COUNT(*) n, ROUND(SUM(estimated_usd),4) usd FROM llm_calls GROUP BY 1 ORDER BY usd DESC LIMIT 10",
+        "例: SELECT ROUND(SUM(estimated_usd),4) usd FROM llm_calls WHERE date(created_at)=date('now','localtime')",
+        "例: SELECT created_at, role, substr(content,1,120) FROM chat_messages WHERE date(created_at)='2026-08-09' ORDER BY id LIMIT 30",
+        "例: SELECT substr(created_at,1,13) h, COUNT(*) n FROM chat_messages GROUP BY 1 ORDER BY 1",
+        "会話ログは常時プロンプトに載せていないので、過去の話を聞かれたらここを掘る。",
+        "estimated_usd は呼び出し時点の単価で打刻した概算。全体の実額は請求APIの値(画面上部)が正",
+].join("\n");
+
 const tools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
   {
     type: "function",
@@ -253,17 +270,7 @@ const tools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
     type: "function",
     function: {
       name: "query_log",
-      description: [
-        "記録にSQLで問い合わせる(読み取り専用)。集計軸・期間・条件は自由に決めてよい。",
-        "scope='cost': llm_calls — id, purpose(chat/suggest/archive-decompose/archive-title), model, routed_model, prompt_tokens, completion_tokens, cached_tokens, elapsed_ms, project_id, price_in_per_m, price_out_per_m, estimated_usd, created_at",
-        "scope='audit': このプロジェクトの記録。chat_messages(id, role, content, trace, usage, task_id, created_at) / assignment_history(task_title, assignee, note, created_at) / proposals(task_id, assignee, reason, status, created_at) / tasks / summary_cards",
-        "例: SELECT routed_model, COUNT(*) n, ROUND(SUM(estimated_usd),4) usd FROM llm_calls GROUP BY 1 ORDER BY usd DESC LIMIT 10",
-        "例: SELECT ROUND(SUM(estimated_usd),4) usd FROM llm_calls WHERE date(created_at)=date('now','localtime')",
-        "例: SELECT created_at, role, substr(content,1,120) FROM chat_messages WHERE date(created_at)='2026-08-09' ORDER BY id LIMIT 30",
-        "例: SELECT substr(created_at,1,13) h, COUNT(*) n FROM chat_messages GROUP BY 1 ORDER BY 1",
-        "会話ログは常時プロンプトに載せていないので、過去の話を聞かれたらここを掘る。",
-        "estimated_usd は呼び出し時点の単価で打刻した概算。全体の実額は請求APIの値(画面上部)が正",
-      ].join("\n"),
+      description: QUERY_LOG_DESCRIPTION,
       parameters: {
         type: "object",
         properties: {
@@ -486,6 +493,7 @@ function buildSystemPrompt(taskFocus?: ReturnType<typeof getTask>, speaker?: str
     "- 削除と却下は文脈で使い分ける: 誤登録・重複・ダミー(「消して」「間違えた」)は delete_tasks (ゴミ箱行きで復元可。返答で復元方法を説明する必要はない)。やらない決定(「見送り」「却下」「やらないことにした」)は削除せず update_tasks で status=review + rejected=true にし、reason に却下の根拠を書いて「却下としてReviewに置きました。検収で確定します」と返す (検収後、決定として要約アーカイブに残る)。",
     "- 「消して」がタスクそのものを指すのか、タイトルや文言の一部の修正を指すのか曖昧なときは、操作せず確認する (実例:「#95だけ発言者の話が入っていて不自然なので消せますか?」はタイトルの修正依頼だったが、タスクごと削除してしまった)。",
     "- ボードから退場するもの(完了・却下)は必ずReviewを通り、人間の検収チェックで確定する。チャットからdoneへ直行する経路は存在しない。",
+    "- 検収の印(checked_at)は人が実物で確かめた記録で、AIには書く手段が無い。「確認しておきました」と自分で付けることはできないし、付いたことにして話さない。誰が何を確かめたかを聞かれたら query_log(scope=audit) の tasks.checked_at を読む。",
     "- 「後回し」「今はやらない」は却下ではない。status は変えず (done にするとアーカイブに吸い込まれる)、reorder_tasks でその列の下へ落とす。「今やりたい」は逆に上へ。",
     "- 「金曜まで」「明日まで」等の期限表現は今日の日付から YYYY-MM-DD に解決して due に入れる。期限が近い/過ぎたタスクはレポートや割り振り提案で優先的に言及する。",
     "- 画像やPDFが添付されたら内容を読み取って会話・操作に活かす。重要な情報(バグの症状、決定事項、資料の要点)はタスクの context や前提情報に文字で蒸留して記録する。ファイル原本はどこにも保存されないため、後から参照が必要な内容は必ず文字にして残す。",

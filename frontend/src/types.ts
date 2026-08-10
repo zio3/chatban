@@ -18,6 +18,7 @@ export interface Task {
   rejected: boolean;
   /** #102: ゴミ箱に入れた日時。nullなら通常のタスク */
   trashedAt?: string | null;
+  checkedAt?: string | null;
   sort: number;
   createdAt: string;
   updatedAt: string;

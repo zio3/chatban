@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, apiFetch, type Project } from "./api";
 import { ensureProjectInUrl, gotoProject, projectIdFromUrl } from "./project";
 import AuditView from "./components/AuditView";
@@ -181,24 +181,34 @@ export default function App() {
 
   // Review→Doneの検収 (#57)。カードの検収OKチェックはマーキングのみで、
   // 「検収済みN件をDoneへ」ボタンで初めて確定する (Doneへの唯一のUI経路。D&Dは禁止)
-  const [approvedIds, setApprovedIds] = useState<Set<number>>(new Set());
+  //
+  // #108: 印はDBに持つ (checked_at)。以前は画面のローカル状態で、リロードで消えていた。
+  // 一塊の完了を管理するフラグなので、確かめた記録として残す。
+  // 書けるのはこの経路(REST)だけ — エージェントはSQL窓口で読めるが付けられない
+  const approvedIds = useMemo(
+    () => new Set(tasks.filter((t) => t.checkedAt).map((t) => t.id)),
+    [tasks]
+  );
+  // 他の更新と同じく楽観更新 (moveTaskと同じ形): 先に画面へ反映し、失敗したら戻す
   const toggleApproved = useCallback((id: number) => {
-    setApprovedIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
+    setTasks((prev) => {
+      const snapshot = prev;
+      const on = !prev.find((t) => t.id === id)?.checkedAt;
+      api.setChecked(id, on).catch((e) => {
+        setTasks(snapshot);
+        setToast({ message: `検収の記録に失敗しました: ${e?.message ?? e}` });
+      });
+      return prev.map((t) => (t.id === id ? { ...t, checkedAt: on ? new Date().toISOString() : null } : t));
     });
   }, []);
   const commitApproved = useCallback(() => {
-    const ids = tasks.filter((t) => t.status === "review" && approvedIds.has(t.id)).map((t) => t.id);
+    const ids = tasks.filter((t) => t.status === "review" && t.checkedAt).map((t) => t.id);
     if (ids.length === 0) return;
     // 複数前提の一括確定API (#60): N件でも要約再生成は1回
     api.approveTasks(ids).catch((e) => {
       setToast({ message: `検収に失敗しました: ${e?.message ?? e}` });
     });
-    setApprovedIds(new Set());
-  }, [tasks, approvedIds]);
+  }, [tasks]);
 
   const resolveProposal = useCallback((id: number, action: "approve" | "reject") => {
     setProposals((prev) => prev.filter((p) => p.id !== id));

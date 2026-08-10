@@ -1,7 +1,11 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { createTasksAsAgent, updateTasksAsAgent } from "./agentWrite.js";
+import { QUERY_LOG_DESCRIPTION } from "./chat.js";
 import { z } from "zod";
 import {
+  queryLlmCalls,
+  queryProjectData,
+  reorderTasks,
   createProposal,
   createTask,
   restoreTask,
@@ -226,6 +230,45 @@ export function buildMcpServer(onEvent: (kind: "board" | "proposals") => void): 
       inputSchema: { terms: z.array(z.string()).describe("検索語(最大10)。言い換え・英日表記を並べる") },
     },
     async ({ terms }) => text(searchTasks(terms))
+  );
+
+  // #108: 記録へのSQL窓口。チャットにしか無く、MCP越しの外部エージェントからは引けなかった。
+  // 検収の印(checked_at)を「専用ツールで返す」のではなくこの窓口から読ませるのは、
+  // readonly接続が「読めるが書けない」を構造で保証するため — プロンプトで禁じる必要がない
+  server.registerTool(
+    "query_log",
+    {
+      description: QUERY_LOG_DESCRIPTION,
+      inputSchema: {
+        scope: z.enum(["cost", "audit"]).describe("cost=LLM呼び出し記録 / audit=会話・割り振り・タスク"),
+        sql: z.string().describe("SELECT または WITH で始まる1文"),
+      },
+    },
+    async ({ scope, sql }) => {
+      try {
+        return text(scope === "audit" ? queryProjectData(sql) : queryLlmCalls(sql));
+      } catch (e: any) {
+        return text({ ok: false, error: e?.message ?? String(e) });
+      }
+    }
+  );
+
+  // #107で並び順が「後で良い」の表現手段になったのに、MCPからは並べ替えられなかった
+  server.registerTool(
+    "reorder_tasks",
+    {
+      description:
+        "列の並び順を付け替える。並べたい順にタスクIDを渡す(「重要そうな順」など意味のある並びも可)。「後回し」は列の下へ、「今やりたい」は上へ。書き忘れたタスクは末尾に残るので消えない",
+      inputSchema: {
+        status: STATUS.optional().describe("対象の列。省略で全列"),
+        ids: z.array(z.number().int()).describe("並べたい順のタスクID"),
+      },
+    },
+    async ({ status, ids }) => {
+      const r = reorderTasks(ids, status);
+      onEvent("board");
+      return text(r);
+    }
   );
 
   server.registerTool(

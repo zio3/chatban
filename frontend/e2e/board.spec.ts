@@ -383,3 +383,36 @@ test("経緯メモの上書きは版が合うときだけ通る。状態変更�
   expect(statusOnly.updated[0].status).toBe("inprogress");
   expect(statusOnly.updated[0].contextVersion).toBe(2);
 });
+
+test("検収の印はDBに残り、AIは読めるが付けられない (#108)", async () => {
+  const id = await createTask("検収フラグの検証", "review");
+
+  // 人間の経路(REST)でだけ付く
+  await fetch(`${API}/api/tasks/${id}/checked`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ checked: true }),
+  });
+  const checked = await (await fetch(`${API}/api/tasks/${id}`)).json();
+  expect(checked.checkedAt).toBeTruthy();
+
+  // エージェントはSQL窓口で読める
+  const read = await mcp("query_log", { scope: "audit", sql: `SELECT checked_at FROM tasks WHERE id = ${id}` });
+  expect(read.rows[0].checked_at).toBeTruthy();
+
+  // 書く口はどこにも無い: SQL窓口は読み取り専用、update_tasks のスキーマにも無い
+  const write = await mcp("query_log", { scope: "audit", sql: `UPDATE tasks SET checked_at = NULL WHERE id = ${id}` });
+  expect(write.ok).toBe(false);
+  await mcp("update_tasks", { updates: [{ id, checked_at: null, checkedAt: null }] });
+  const afterAgent = await (await fetch(`${API}/api/tasks/${id}`)).json();
+  expect(afterAgent.checkedAt).toBeTruthy(); // エージェントの指定は素通りする(消せない)
+
+  // 作業中の列へ戻すと印は消える (確かめたのは前の状態に対してなので)
+  await fetch(`${API}/api/tasks/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ status: "inprogress" }),
+  });
+  const reopened = await (await fetch(`${API}/api/tasks/${id}`)).json();
+  expect(reopened.checkedAt).toBeFalsy();
+});

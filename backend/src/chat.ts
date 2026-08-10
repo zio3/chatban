@@ -88,6 +88,16 @@ export const STATUS_DESCRIPTION =
 export const PROJECT_CONTEXT_WRITE_DESCRIPTION =
   "プロジェクトの前提情報(全員共有、チャットのシステムプロンプトに常時含まれる)を上書き更新する。全文を渡すので、必ず先に読んで自分の変更をマージした全文にすること。完了の定義・却下や保留の扱い・稼働日など、そのプロジェクト固有の運用ルールが入っている";
 
+/** #91/#108: 並べ替えの契約。sortは列内でしか効かない(列をまたぐ順序はstatusそのもの)ので、
+ * 全列を1本のリストで渡されたときに何が起きるかを書いておかないと、LLMの期待とズレる。
+ * 実際に「1位 #7、2位 #4…」と全体順位のつもりで渡された事例がある (zio) */
+export const REORDER_DESCRIPTION = [
+  "列の並び順を付け替える。並べたい順にタスクIDを渡す(「番号の降順」だけでなく「重要そうな順」など意味のある並びも可)。",
+  "表示設定ではなく並び順そのものを書き換える操作で、あとから手で並べ直せる。「後回し」は列の下へ、「今やりたい」は上へ。",
+  "status を省くと全列が対象になるが、渡した並びは列ごとの相対順に分解される(列をまたぐ順序は status そのものなので、1本の通し順位にはならない)。全体の順位として説明しないこと。",
+  "対象は生きているタスクだけ(アーカイブ済み・ゴミ箱は対象外)。指定しなかったタスクは元の順のまま末尾に残るので消えない。対象外や存在しないIDは無視して ignored で返す(全体は失敗しない)。",
+].join("\n");
+
 const tools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
   {
     type: "function",
@@ -238,8 +248,7 @@ const tools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
     type: "function",
     function: {
       name: "reorder_tasks",
-      description:
-        "列の並び順を付け替える。並べたい順にタスクIDを渡す(「番号の降順」だけでなく「重要そうな順」など意味のある並びも可)。表示設定ではなく並び順そのものを書き換える操作で、あとから手で並べ直せる。書き忘れたタスクは末尾に残るので消えない",
+      description: REORDER_DESCRIPTION,
       parameters: {
         type: "object",
         properties: {

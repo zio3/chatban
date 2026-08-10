@@ -542,3 +542,26 @@ test("前提情報は版が合うときだけ上書きできる (読まずに書
   // 元に戻す (このプロジェクトは他のテストと共用)
   await mcp("update_project_context", { text: before.text, version: after.version });
 });
+
+test("並べ替えの母集団はサーバー側で絞る。対象外のIDは無視して報告する (#108)", async () => {
+  const a = await createTask("並べ替えA");
+  const b = await createTask("並べ替えB");
+  const gone = await createTask("アーカイブ行き", "review");
+  await fetch(`${API}/api/tasks/approve`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ids: [gone] }),
+  });
+
+  // アーカイブ済みと存在しないIDを混ぜても、全体は失敗せず ignored で返る
+  const r = await mcp("reorder_tasks", { status: "todo", ids: [b, gone, 999999, a] });
+  expect(r.ignored).toContain(gone);
+  expect(r.ignored).toContain(999999);
+  expect(r.ordered).toBe(2);
+
+  // 指定した2件は指定順に並ぶ
+  const board = await (await fetch(`${API}/api/board`)).json();
+  const todo = board.tasks.filter((t: any) => t.status === "todo").sort((x: any, y: any) => x.sort - y.sort);
+  const idx = (id: number) => todo.findIndex((t: any) => t.id === id);
+  expect(idx(b)).toBeLessThan(idx(a));
+});

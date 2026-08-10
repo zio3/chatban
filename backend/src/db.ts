@@ -537,14 +537,28 @@ export function recentActivity(limit = 15) {
 //   - 重複は最初の1回だけ
 //   - 対象列に実在しないIDは無視する
 // 表示設定ではなく操作なので「いまソート中」という画面の隠れ状態は生まれず、あとから手で直せる。
-export function reorderTasks(ids: number[], status?: TaskStatus): { ordered: number; appended: number } {
+export function reorderTasks(
+  ids: number[],
+  status?: TaskStatus
+): { ordered: number; appended: number; ignored?: number[] } {
+  // 母集団はサーバー側で決める。listTasks() が archived=0 AND trashed_at IS NULL なので、
+  // アーカイブ済み・ゴミ箱は最初から対象外 — query_log の説明で読み手に教えている
+  // 「生きているタスクはこの条件」と同じ母集団を、書き込み側は実装で強制する。
+  // 読みは教育で守り、書きは実装で守る (zio)
   const targets = listTasks().filter((t) => !status || t.status === status);
   const byId = new Map(targets.map((t) => [t.id, t]));
   const seen = new Set<number>();
+  const ignored: number[] = [];
   const ordered: Task[] = [];
   for (const id of ids) {
+    if (seen.has(id)) continue;
     const t = byId.get(id);
-    if (!t || seen.has(id)) continue;
+    // 対象外(アーカイブ済み・ゴミ箱・別の列・存在しない)は黙って落とさず報告する。
+    // エラーで弾かないのは、古い一覧を元に呼んだだけで全体が失敗するとLLMには扱いにくいため
+    if (!t) {
+      ignored.push(id);
+      continue;
+    }
     seen.add(id);
     ordered.push(t);
   }
@@ -552,7 +566,7 @@ export function reorderTasks(ids: number[], status?: TaskStatus): { ordered: num
   const final = [...ordered, ...appended];
   const stmt = db().prepare("UPDATE tasks SET sort = ? WHERE id = ?");
   db().transaction(() => final.forEach((t, i) => stmt.run(i + 1, t.id)))();
-  return { ordered: ordered.length, appended: appended.length };
+  return { ordered: ordered.length, appended: appended.length, ...(ignored.length ? { ignored } : {}) };
 }
 
 // #103: 経緯の横断検索。LLMが表記ゆれを自分で展開して複数語を投げ、コードは総当たりするだけ。

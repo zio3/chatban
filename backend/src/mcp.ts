@@ -1,6 +1,11 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { createTasksAsAgent, updateTasksAsAgent } from "./agentWrite.js";
-import { PROJECT_CONTEXT_WRITE_DESCRIPTION, QUERY_LOG_DESCRIPTION, STATUS_DESCRIPTION } from "./chat.js";
+import {
+  PROJECT_CONTEXT_WRITE_DESCRIPTION,
+  QUERY_LOG_DESCRIPTION,
+  REORDER_DESCRIPTION,
+  STATUS_DESCRIPTION,
+} from "./chat.js";
 import { z } from "zod";
 import {
   queryLlmCalls,
@@ -227,8 +232,7 @@ export function buildMcpServer(onEvent: (kind: "board" | "proposals") => void): 
   server.registerTool(
     "reorder_tasks",
     {
-      description:
-        "列の並び順を付け替える。並べたい順にタスクIDを渡す(「重要そうな順」など意味のある並びも可)。「後回し」は列の下へ、「今やりたい」は上へ。書き忘れたタスクは末尾に残るので消えない",
+      description: REORDER_DESCRIPTION,
       inputSchema: {
         status: STATUS.optional().describe("対象の列。省略で全列"),
         ids: z.array(z.number().int()).describe("並べたい順のタスクID"),

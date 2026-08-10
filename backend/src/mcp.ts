@@ -1,4 +1,5 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { createTasksAsAgent, updateTasksAsAgent } from "./agentWrite.js";
 import { z } from "zod";
 import {
   createProposal,
@@ -104,21 +105,11 @@ export function buildMcpServer(onEvent: (kind: "board" | "proposals") => void): 
       },
     },
     async ({ tasks }) => {
-      // #108: 作成時に due/blocked_by/lane まで渡せるようにした。以前は無かったので
-      // create → update と2回叩く必要があった (チャット側の契約とズレていた)
-      const created = tasks.map((t) => {
-        const task = createTask(t.title, (t.status ?? "todo") as TaskStatus, t.assignee ?? null, t.assign_reason ?? null);
-        const patch = {
-          ...(t.context !== undefined ? { context: t.context } : {}),
-          ...(t.summary !== undefined ? { summary: t.summary } : {}),
-          ...(t.due !== undefined ? { due: t.due } : {}),
-          ...(t.blocked_by !== undefined ? { blockedBy: t.blocked_by } : {}),
-          ...(t.lane !== undefined ? { lane: t.lane } : {}),
-        };
-        return Object.keys(patch).length > 0 ? updateTasks([{ id: task.id, patch }])[0] : task;
-      });
+      // #114: 書き込みは agentWrite に集約。以前はMCP側にガードが無く、
+      // done指定がそのまま通って「AIが自主的にDoneへ移動」する事故が起きた
+      const r = createTasksAsAgent(tasks as any);
       onEvent("board");
-      return text({ ok: true, created: created.map(brief) });
+      return text({ ok: true, created: (r.created as any[]).map(brief), ...(r.note ? { note: r.note } : {}) });
     }
   );
 
@@ -145,26 +136,9 @@ export function buildMcpServer(onEvent: (kind: "board" | "proposals") => void): 
       },
     },
     async ({ updates }) => {
-      // 一括更新は db 層でまとめて処理 (完了遷移の通知=要約再生成が1回で済む #60)
-      const updated = updateTasks(
-        updates.map((u) => ({
-          id: u.id,
-          patch: {
-            ...(u.title !== undefined ? { title: u.title } : {}),
-            ...(u.status !== undefined ? { status: u.status as TaskStatus } : {}),
-            ...(u.assignee !== undefined ? { assignee: u.assignee } : {}),
-            ...(u.assign_reason !== undefined ? { assignReason: u.assign_reason } : {}),
-            ...(u.summary !== undefined ? { summary: u.summary } : {}),
-            ...(u.lane !== undefined ? { lane: u.lane } : {}),
-            ...(u.context !== undefined ? { context: u.context } : {}),
-            ...(u.due !== undefined ? { due: u.due } : {}),
-            ...(u.blocked_by !== undefined ? { blockedBy: u.blocked_by } : {}),
-            ...(u.rejected !== undefined ? { rejected: u.rejected } : {}),
-          },
-        }))
-      );
+      const { updated, note } = updateTasksAsAgent(updates as any);
       onEvent("board");
-      return text({ ok: true, updated: updated.map(brief) });
+      return text({ ok: true, updated: (updated as any[]).map(brief), ...(note ? { note } : {}) });
     }
   );
 

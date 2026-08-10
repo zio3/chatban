@@ -1,4 +1,5 @@
 import type OpenAI from "openai";
+import { createTasksAsAgent, updateTasksAsAgent } from "./agentWrite.js";
 import { compactArchive } from "./archive.js";
 import { getBoardPromptSection } from "./promptState.js";
 import {
@@ -321,86 +322,15 @@ function stripSpeakerLabel<T extends string | undefined | null>(v: T): T {
 async function execTool(name: string, args: any, uiActions: UiAction[], events: Set<string>): Promise<unknown> {
   switch (name) {
     case "create_tasks": {
-      const created = (args.tasks as any[]).map((t) => {
-        const task = createTask(stripSpeakerLabel(t.title), "todo", t.assignee ?? null, stripSpeakerLabel(t.assign_reason) ?? null);
-        const extra = {
-          ...(t.context ? { context: stripSpeakerLabel(t.context) } : {}),
-          ...(t.due ? { due: t.due } : {}),
-          ...(t.blocked_by?.length ? { blockedBy: t.blocked_by } : {}),
-        };
-        return Object.keys(extra).length > 0 ? updateTask(task.id, extra) : task;
-      });
+      // #114: 書き込みは agentWrite に集約 (チャットとMCPで同じガードを通す)
+      const r = createTasksAsAgent(args.tasks ?? []);
       events.add("board");
-      return { ok: true, created };
+      return { ok: true, ...r };
     }
     case "update_tasks": {
-      // #69: LLMはdoneに直行できない。「承認」「解決で」等の拡大解釈で検収を飛ばす事故が
-      // 実際に起きたため、プロンプトでなくコードで塞ぐ。doneへの唯一の扉は人間の検収UI
-      const coerced: number[] = [];
-      for (const u of args.updates as any[]) {
-        if (u.status === "done") {
-          u.status = "review";
-          coerced.push(u.id);
-        }
-      }
-      // 一括更新は db 層でまとめて処理 (完了遷移の通知=要約再生成が1回で済む #60)
-      const updated = updateTasks(
-        (args.updates as any[]).map((u) => {
-          // #87: 「差分だけ送る」モデルを前提にしない。全フィールドをエコーバックするモデル
-          // (実測: gpt-5.6-terra) だと、変更していない値まで patch に載って既存値を壊す。
-          // 現在値と突き合わせ、実際に変わったフィールドだけを通す
-          const cur = getTask(u.id);
-          const changed = <T>(incoming: T | undefined, current: T) => incoming !== undefined && incoming !== current;
-          const assignee = u.assignee === "" ? null : u.assignee; // 空文字は「未割り当て」の意図とみなす
-          const lane = u.lane === "" ? null : u.lane;
-          const due = u.due === "" ? null : u.due;
-          const blockedBy = u.blocked_by === undefined ? undefined : (u.blocked_by ?? null);
-          const sameDeps =
-            blockedBy !== undefined &&
-            JSON.stringify(blockedBy ?? []) === JSON.stringify(cur?.blockedBy ?? []);
-
-          const statusChanged = changed(u.status, cur?.status);
-          const assigneeChanged = changed(assignee, cur?.assignee ?? null);
-          const rejectedChanged = u.rejected !== undefined && !!u.rejected !== !!cur?.rejected;
-
-          // reason上書きガード: 担当・状態の変更を伴わない更新(lane/due/依存のみ等)で
-          // LLMがreasonを添えると既存の割り振り理由が破壊されるため無視する (実事故2件の再発防止)。
-          // 空文字のreasonは常に拒否する — 理由を「消す」操作に意味はない
-          const keepReason =
-            typeof u.assign_reason === "string" &&
-            u.assign_reason.trim() !== "" &&
-            u.assign_reason !== cur?.assignReason &&
-            (assigneeChanged || statusChanged || rejectedChanged);
-
-          return {
-            id: u.id,
-            patch: {
-              ...(changed(stripSpeakerLabel(u.title), cur?.title) ? { title: stripSpeakerLabel(u.title) } : {}),
-              ...(statusChanged ? { status: u.status as TaskStatus } : {}),
-              ...(assigneeChanged ? { assignee } : {}),
-              ...(keepReason ? { assignReason: stripSpeakerLabel(u.assign_reason) } : {}),
-              ...(changed(lane, cur?.lane ?? null) ? { lane } : {}),
-              ...(changed(due, cur?.due ?? null) ? { due } : {}),
-              ...(blockedBy !== undefined && !sameDeps ? { blockedBy } : {}),
-              ...(changed(u.summary, cur?.summary ?? null) ? { summary: u.summary } : {}),
-              ...(rejectedChanged ? { rejected: !!u.rejected } : {}),
-            },
-          };
-        })
-      );
+      const { updated, note } = updateTasksAsAgent(args.updates ?? []);
       events.add("board");
-      return {
-        ok: true,
-        updated,
-        ...(coerced.length > 0
-          ? { note: `#${coerced.join(", #")} は done を指定されましたが review に置きました。done への確定はボードの検収チェック(人間)のみが行えます。その旨をユーザーに伝えてください` }
-          : {}),
-      };
-    }
-    case "restore_tasks": {
-      const restored = (args.ids as number[]).map((id) => restoreTask(id));
-      events.add("board");
-      return { ok: true, restored };
+      return { ok: true, updated, ...(note ? { note } : {}) };
     }
     case "delete_tasks": {
       // #102: 実データは消さずゴミ箱へ。誤解釈で消えても取り返しがつくようにする

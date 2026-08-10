@@ -163,3 +163,23 @@ test("担当フィルタ: 複数トグルのOR絞り込みと非表示件数の�
   await expect(page.getByText(/フィルタで\d+件が非表示/)).toBeHidden();
   await expect(page.getByTestId(`task-card-${unassigned}`)).toBeVisible();
 });
+
+test("担当フィルタ: メンバー未登録の担当者にもトグルが出る (全部オンで全件見える) (#90)", async ({ page }) => {
+  const res = await fetch(`${API}/api/tasks`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ title: "E2E: メンバー表にない担当者", assignee: "Claude" }),
+  });
+  const id = (await res.json()).id as number;
+
+  await page.goto("/");
+  // メンバー表に居ない担当者でもトグルが生える
+  const chip = page.getByRole("button", { name: "Claude", exact: true });
+  await expect(chip).toBeVisible();
+
+  // 他の担当者だけで絞ると隠れ、そのトグルを足せば出てくる
+  await page.getByRole("button", { name: "zio", exact: true }).click();
+  await expect(page.getByTestId(`task-card-${id}`)).toBeHidden();
+  await chip.click();
+  await expect(page.getByTestId(`task-card-${id}`)).toBeVisible();
+});

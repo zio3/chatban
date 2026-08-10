@@ -229,6 +229,14 @@ export default function App() {
   suggestions.push(...aiSuggestions);
 
   const sortedTasks = [...tasks].sort((a, b) => a.sort - b.sort || a.id - b.id);
+  // #90: トグルはメンバー表だけでなく「実際にボードに居る担当者」の和集合から作る。
+  // Claudeのようにメンバー未登録の担当者がいると、全部オンにしても出せないタスクが生まれるため
+  const filterNames = [
+    ...members.map((m) => m.name),
+    ...[...new Set(tasks.map((t) => t.assignee).filter((a): a is string => !!a))].filter(
+      (a) => !members.some((m) => m.name === a)
+    ),
+  ];
   // #90: 選択ゼロなら素通し。複数選択はOR (Aさん「と」Bさんを並べて見る)
   const visibleTasks =
     filter.size === 0
@@ -277,13 +285,13 @@ export default function App() {
         {/* #90: 担当フィルタは複数トグル (AさんBさんを並べて見る)。選択ゼロ=全員表示。
             なりきりの入口は撤去 (デモでは人フィルタが見えれば足りる)。speakerの配線は温存 */}
         <div className="flex flex-wrap items-center gap-1 text-sm">
-          {members.map((m) => (
+          {filterNames.map((name) => (
             <button
-              key={m.id}
-              onClick={() => toggleFilter(m.name)}
-              className={`rounded-full px-3 py-1 ${filter.has(m.name) ? "bg-slate-900 text-white" : "bg-slate-200 hover:bg-slate-300"}`}
+              key={name}
+              onClick={() => toggleFilter(name)}
+              className={`rounded-full px-3 py-1 ${filter.has(name) ? "bg-slate-900 text-white" : "bg-slate-200 hover:bg-slate-300"}`}
             >
-              {m.name}
+              {name}
             </button>
           ))}
           {/* 未割り当ては「拾い手がいない」を見つける導線。担当なしのタスクが埋もれるのを防ぐ */}

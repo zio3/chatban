@@ -13,6 +13,8 @@ import { socket } from "./socket";
 import type { ChatEntry, Member, Proposal, SummaryCard, Task } from "./types";
 
 interface Toast {
+  tone?: "error" | "info";
+  action?: { label: string; run: () => void };
   message: string;
   retry?: () => void;
 }
@@ -435,14 +437,20 @@ export default function App() {
             lastDetailTaskRef.current = undefined;
           }}
           onJumpToBoard={jumpToBoard}
+          onRestored={() => {
+            setArchivedTask(null);
+            reload();
+          }}
         />
       )}
       {toast && (
         <div
           data-testid="toast"
-          className="fixed bottom-20 right-4 z-50 flex items-center gap-3 rounded-xl border border-red-200 bg-white px-4 py-3 text-sm shadow-lg"
+          className={`fixed bottom-20 right-4 z-50 flex items-center gap-3 rounded-xl border bg-white px-4 py-3 text-sm shadow-lg ${
+            toast.tone === "info" ? "border-slate-300" : "border-red-200"
+          }`}
         >
-          <span className="text-red-600">{toast.message}</span>
+          <span className={toast.tone === "info" ? "text-slate-700" : "text-red-600"}>{toast.message}</span>
           {toast.retry && (
             <button
               onClick={() => {
@@ -453,6 +461,18 @@ export default function App() {
               className="rounded-md bg-slate-900 px-3 py-1 text-xs font-medium text-white hover:bg-slate-700"
             >
               リトライ
+            </button>
+          )}
+          {toast.action && (
+            <button
+              onClick={() => {
+                const a = toast.action!;
+                setToast(null);
+                a.run();
+              }}
+              className="rounded-md bg-slate-900 px-3 py-1 text-xs font-medium text-white hover:bg-slate-700"
+            >
+              {toast.action.label}
             </button>
           )}
           <button onClick={() => setToast(null)} className="text-xs text-slate-400 hover:text-slate-600">

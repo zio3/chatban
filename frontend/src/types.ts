@@ -14,6 +14,8 @@ export interface Task {
   blockedBy: number[] | null;
   /** 却下=やらない決定 (#65) */
   rejected: boolean;
+  /** #102: ゴミ箱に入れた日時。nullなら通常のタスク */
+  trashedAt?: string | null;
   sort: number;
   createdAt: string;
   updatedAt: string;

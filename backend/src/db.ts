@@ -32,6 +32,7 @@ function rowToTask(r: any): Task {
     due: r.due ?? null,
     blockedBy: r.blocked_by ? JSON.parse(r.blocked_by) : null,
     rejected: !!r.rejected,
+    trashedAt: r.trashed_at ?? null,
     sort: r.sort ?? r.id,
     createdAt: r.created_at,
     updatedAt: r.updated_at,

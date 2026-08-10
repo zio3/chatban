@@ -21,6 +21,7 @@ export default function TaskDetailPanel({
   currentUser,
   onClose,
   onJumpToBoard,
+  onRestored,
 }: {
   task: Task;
   /** true: タスクは完了→アーカイブ済み (表示は最後のスナップショット) */
@@ -29,6 +30,8 @@ export default function TaskDetailPanel({
   currentUser?: string;
   onClose: () => void;
   onJumpToBoard: (id: number) => void;
+  /** #102: ゴミ箱から戻したあとの再読み込み */
+  onRestored?: () => void;
 }) {
   const status = STATUS_LABELS[task.status];
   const [width, setWidth] = useState(() => {
@@ -127,7 +130,21 @@ export default function TaskDetailPanel({
       </header>
 
       <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-4 py-3">
-        {archived && (
+        {/* #102: ゴミ箱にあるタスク。チャットの返答の #xx リンクからここに辿り着けるので、
+            「元に戻せます」を毎回文章で説明する必要がない (くどくなる) */}
+        {task.trashedAt && (
+          <div className="flex flex-wrap items-center gap-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800">
+            <span>🗑 このタスクはゴミ箱にあります ({task.trashedAt})</span>
+            <button
+              data-testid="restore-from-panel"
+              onClick={() => api.restoreTask(task.id).then(() => onRestored?.())}
+              className="ml-auto rounded-md bg-slate-900 px-3 py-1 text-xs font-medium text-white hover:bg-slate-700"
+            >
+              戻す
+            </button>
+          </div>
+        )}
+        {archived && !task.trashedAt && (
           <div className="rounded-lg bg-emerald-50 px-3 py-2 text-xs text-emerald-700">
             {task.rejected
               ? "🚫 このタスクは却下として確定し、アーカイブ済みです (経緯は下のreason参照)"

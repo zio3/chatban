@@ -331,12 +331,9 @@ async function execTool(name: string, args: any, uiActions: UiAction[], events: 
     case "delete_tasks": {
       // #102: 実データは消さずゴミ箱へ。誤解釈で消えても取り返しがつくようにする
       const results = (args.ids as number[]).map((id) => ({ id, trashed: trashTask(id) }));
+      // 復元できることは毎回文章で説明しない (くどい)。#xx リンクから詳細パネルを開けば「戻す」がある
       events.add("board");
-      return {
-        ok: true,
-        results,
-        note: "ゴミ箱に入れました (実データは残っています)。ユーザーには『取り消す場合は「#xxを戻して」と言ってください』と伝えてください",
-      };
+      return { ok: true, results };
     }
     case "propose_assignments": {
       const created = (args.proposals as any[]).map((p) => createProposal(p.taskId, p.assignee, p.reason));
@@ -425,7 +422,7 @@ function buildSystemPrompt(taskFocus?: ReturnType<typeof getTask>, speaker?: str
     "- 分類したい → lane (demo/later) か、タイトルの付け方で表現する",
     "- 優先したい → 並び順 (「これ上にして」) で表現する",
     "断るときは設計理由 (語彙が固定だから一言が正確に通じる) を一言添える。",
-    "- 削除はゴミ箱行き (復元可)。ただし「消して」がタスクの削除を指すのか文言の修正を指すのか曖昧なときは、消す前に確認する。",
+    "- 削除はゴミ箱行き (復元可、UIが「元に戻す」を出す)。返答で復元方法を説明する必要はない。ただし「消して」がタスクの削除を指すのか文言の修正を指すのか曖昧なときは、消す前に確認する。",
     "",
     // ---- ここから動的セクション ----
     // #50: ボード状態は「基準スナップショット+変更イベント追記」でプレフィックスを安定させる (promptState.ts)。

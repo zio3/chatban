@@ -162,7 +162,12 @@ export default function Chat({
               {log.map((e, i) => (
                 <div key={i} className={`flex ${e.role === "user" ? "justify-end" : "justify-start"}`}>
                   <div
-                    className={`max-w-[75%] rounded-2xl px-3.5 py-2 text-sm whitespace-pre-wrap ${
+                    // #122: whitespace-pre-wrap は「改行をそのまま見せたい」ユーザー発言と
+                    // エラー文のためのもの。Markdownを組み立てるアシスタント側に効かせると、
+                    // ソースの空行がそのまま空行として描画され、段落マージンと二重にかかる
+                    className={`max-w-[75%] rounded-2xl px-3.5 py-2 text-sm ${
+                      e.role === "assistant" && !e.error ? "" : "whitespace-pre-wrap"
+                    } ${
                       e.role === "user"
                         ? "bg-indigo-600 text-white"
                         : e.error

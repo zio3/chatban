@@ -15,6 +15,12 @@ html, body, #root {
 
 /* チャット内のMarkdown表示 (吹き出しに収まる控えめなスタイル) */
 .chat-md :is(p, ul, ol, table) { margin: 0.25rem 0; }
+/* #122: 箇条書きの行間。項目間に空行があるMarkdown(loose list)だと各liがpで包まれ、
+   そのマージンが積み上がって間延びする。liの中のpはマージンを持たせない */
+.chat-md li { margin: 0.1rem 0; }
+.chat-md li > p { margin: 0; }
+.chat-md > :first-child { margin-top: 0; }
+.chat-md > :last-child { margin-bottom: 0; }
 .chat-md ul { list-style: disc; padding-left: 1.25rem; }
 .chat-md ol { list-style: decimal; padding-left: 1.25rem; }
 .chat-md strong { font-weight: 700; }

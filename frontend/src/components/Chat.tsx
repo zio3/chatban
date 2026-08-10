@@ -4,19 +4,17 @@ import remarkGfm from "remark-gfm";
 import { useAttachments, type Attachment } from "../hooks/useAttachments";
 import AttachmentTray from "./AttachmentTray";
 import ThinkingIndicator from "./ThinkingIndicator";
-import type { ChatEntry, Proposal } from "../types";
+import type { ChatEntry } from "../types";
 
 const TOOL_LABELS: Record<string, string> = {
   create_tasks: "タスク追加",
   update_tasks: "タスク更新",
   delete_tasks: "タスク削除",
-  propose_assignments: "割り振り提案",
   set_view: "ビュー切替",
   update_project_context: "前提情報更新",
   compact_archive: "ログ整頓",
   get_task_details: "詳細取得",
   update_task_context: "経緯メモ更新",
-  resolve_proposals: "提案を承認/却下",
 };
 
 export interface Suggestion {
@@ -48,8 +46,6 @@ export default function Chat({
   sending,
   elapsedSec,
   suggestions,
-  proposals,
-  onResolveProposal,
   onOpenTask,
   onSend,
   onStop,
@@ -59,8 +55,6 @@ export default function Chat({
   sending: boolean;
   elapsedSec: number;
   suggestions: Suggestion[];
-  proposals: Proposal[];
-  onResolveProposal: (id: number, action: "approve" | "reject") => void;
   onOpenTask: (id: number) => void;
   onSend: (message: string, attachments?: Attachment[]) => void;
   onStop: () => void;
@@ -106,7 +100,7 @@ export default function Chat({
   // チャットはこのシステムのアイデンティティなので常設 (畳みUIは廃止 zio判断 8/9)
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
-  }, [log, proposals.length]);
+  }, [log]);
 
   function submit() {
     const text = input.trim();
@@ -268,44 +262,6 @@ export default function Chat({
                   </div>
                 </div>
               ))}
-              {/* 承認待ちの割り振り提案はチャットの流れの中に出す。調整・理由の会話がここで続けられる */}
-              {proposals.length > 0 && (
-                <div className="flex justify-start">
-                  <div className="max-w-[85%] rounded-2xl border border-amber-200 bg-amber-50 px-3.5 py-2.5">
-                    <p className="mb-1.5 text-xs font-bold text-amber-700">🤖 割り振り提案 — 承認で確定。修正はそのまま返信でOK</p>
-                    <div className="space-y-1.5">
-                      {proposals.map((p) => (
-                        <div key={p.id} className="rounded-lg border border-amber-100 bg-white px-3 py-2 text-sm">
-                          <div className="flex items-center gap-2">
-                            <button onClick={() => onOpenTask(p.taskId)} className="text-left font-medium hover:underline">
-                              #{p.taskId} {p.taskTitle}
-                            </button>
-                            <span className="text-slate-400">→</span>
-                            <span className="rounded-full bg-indigo-100 px-2 py-0.5 text-xs font-medium text-indigo-700">
-                              {p.assignee}
-                            </span>
-                            <span className="ml-auto flex gap-1.5">
-                              <button
-                                onClick={() => onResolveProposal(p.id, "approve")}
-                                className="rounded-md bg-emerald-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-emerald-700"
-                              >
-                                承認
-                              </button>
-                              <button
-                                onClick={() => onResolveProposal(p.id, "reject")}
-                                className="rounded-md bg-slate-200 px-2.5 py-1 text-xs font-medium text-slate-600 hover:bg-slate-300"
-                              >
-                                却下
-                              </button>
-                            </span>
-                          </div>
-                          <p className="mt-1 text-xs text-slate-500">💡 {p.reason}</p>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              )}
               {/* リコメンドチップは会話が始まる前だけ表示 (押した瞬間チャットが始まり消える #75)。
                   固定チップ=即時 / ✨AI提案=非同期でちょい後に合流 */}
               {log.length === 0 && suggestions.length > 0 && (

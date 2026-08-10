@@ -53,11 +53,9 @@ import {
   getTask,
   listChatMessages,
   listMembers,
-  listPendingProposals,
   listSummaryCards,
   listTasks,
   metrics,
-  resolveProposal,
   saveChatMessage,
   updateTask,
   updateTasks,
@@ -165,9 +163,6 @@ function broadcastBoard(projectId = currentProjectId()) {
     io.to(room(projectId)).emit("board:changed", { tasks: listTasks(), summaryCards: listSummaryCards() })
   );
 }
-function broadcastProposals(projectId = currentProjectId()) {
-  withProject(projectId, () => io.to(room(projectId)).emit("proposals:changed", { proposals: listPendingProposals() }));
-}
 
 // 要約再生成は非同期で15〜30秒かかるため、実行中件数をUIへ通知する (#56)。
 // 件数はプロジェクトごとに数える — 別プロジェクトの再生成でスピナーが回ると誤解を生む
@@ -201,7 +196,6 @@ app.get("/api/board", (_req, res) => {
   res.json({
     tasks: listTasks(),
     members: listMembers(),
-    proposals: listPendingProposals(),
     summaryCards: listSummaryCards(),
   });
 });
@@ -274,16 +268,6 @@ app.delete("/api/trash/:id", (req, res) => {
   res.json({ ok: true });
 });
 
-app.post("/api/proposals/:id/:action", (req, res) => {
-  const action = req.params.action;
-  if (action !== "approve" && action !== "reject") return res.status(400).json({ error: "bad action" });
-  const p = resolveProposal(Number(req.params.id), action === "approve" ? "approved" : "rejected");
-  if (!p) return res.status(404).json({ error: "not found" });
-  broadcastProposals();
-  if (action === "approve") broadcastBoard();
-  res.json(p);
-});
-
 let chatSeq = 0;
 app.post("/api/chat", async (req, res) => {
   const { message, history, speaker, attachments, view } = req.body ?? {};
@@ -308,8 +292,7 @@ app.post("/api/chat", async (req, res) => {
       history ?? [],
       (kind) => {
         if (kind === "board") broadcastBoard();
-        else broadcastProposals();
-      },
+          },
       (label) => io.to(room(currentProjectId())).emit("chat:progress", { label }), // 応答完了前の逐次フィードバック
       undefined,
       who.name ?? undefined,
@@ -357,8 +340,7 @@ app.post("/api/tasks/:id/chat", async (req, res) => {
       history ?? [],
       (kind) => {
         if (kind === "board") broadcastBoard();
-        else broadcastProposals();
-      },
+          },
       (label) => io.to(room(currentProjectId())).emit("chat:progress", { label, taskId }),
       taskId,
       speaker,
@@ -442,7 +424,6 @@ app.post("/api/projects/:id/activate", (req, res) => {
   rejoinFollowers(activeProjectId()); // 追従組を新しいプロジェクトのroomへ移してから配信する
   io.emit("project:changed", { projects: projectSummaries() });
   broadcastBoard();
-  broadcastProposals();
   res.json({ ok: true, projects: projectSummaries() });
 });
 
@@ -560,8 +541,7 @@ app.post("/mcp/:projectId", async (req, res) => {
       // #99: 接続先プロジェクトのroomへ送るだけでよい (購読していないクライアントには届かない)
       const mcpServer = buildMcpServer((kind) => {
         if (kind === "board") broadcastBoard(projectId);
-        else broadcastProposals(projectId);
-      });
+          });
       const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
       res.on("close", () => {
         transport.close();

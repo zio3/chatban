@@ -200,51 +200,6 @@ const tools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
   {
     type: "function",
     function: {
-      name: "propose_assignments",
-      description: PROPOSE_DESCRIPTION,
-      parameters: {
-        type: "object",
-        properties: {
-          proposals: {
-            type: "array",
-            items: {
-              type: "object",
-              properties: {
-                taskId: { type: "integer" },
-                assignee: { type: "string" },
-                reason: {
-                  type: "string",
-                  description:
-                    "ボード上で確かめられる根拠だけ(「未完了が最少」「#12の依存が解けている」等)。根拠が無いなら省略する。憶測のスキルや実績を書かない",
-                },
-              },
-              required: ["taskId", "assignee"],
-            },
-          },
-        },
-        required: ["proposals"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "resolve_proposals",
-      description:
-        "承認待ちの割り振り提案を承認/却下する(「全部承認」「#24は却下」等)。taskIdsを省略すると承認待ち全件が対象",
-      parameters: {
-        type: "object",
-        properties: {
-          action: { type: "string", enum: ["approve", "reject"] },
-          taskIds: { type: "array", items: { type: "integer" }, description: "対象タスクID。省略で全承認待ち" },
-        },
-        required: ["action"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
       name: "update_task_context",
       description: "タスクの経緯メモを上書き更新する(既存を query_log で読みマージした全文を渡す)",
       parameters: {
@@ -351,7 +306,7 @@ const tools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
  *
  * 共有プロジェクトでは元の配列をそのまま返す。ツール定義はプロンプトの一部なので、
  * 組み立て直してバイト列が揺れるとキャッシュが外れる */
-const ASSIGNEE_TOOLS = ["propose_assignments", "resolve_proposals", "set_view"];
+const ASSIGNEE_TOOLS = ["set_view"];
 let personalTools: OpenAI.Chat.Completions.ChatCompletionTool[] | null = null;
 
 function toolsFor(personal: boolean): OpenAI.Chat.Completions.ChatCompletionTool[] {
@@ -397,29 +352,6 @@ async function execTool(name: string, args: any, uiActions: UiAction[], events: 
       // 復元できることは毎回文章で説明しない (くどい)。#xx リンクから詳細パネルを開けば「戻す」がある
       events.add("board");
       return { ok: true, results };
-    }
-    case "propose_assignments": {
-      // #101: 一人用プロジェクトでは割り振りに意味がない。プロンプトで抑えても漏れるのでここで止める
-      if (memberLoads().length === 0) {
-        return {
-          ok: false,
-          error: "このプロジェクトはメンバー未登録(一人用)のため割り振りはできません。人を追加するには⚙設定タブのプロジェクト設定から、とユーザーに案内してください",
-        };
-      }
-      const created = (args.proposals as any[]).map((p) => createProposal(p.taskId, p.assignee, p.reason));
-      events.add("proposals");
-      return { ok: true, proposals: created };
-    }
-    case "resolve_proposals": {
-      const pending = listPendingProposals();
-      const targets = args.taskIds?.length
-        ? pending.filter((p) => (args.taskIds as number[]).includes(p.taskId))
-        : pending;
-      if (targets.length === 0) return { ok: false, error: "対象の承認待ち提案がありません" };
-      const resolved = targets.map((p) => resolveProposal(p.id, args.action === "approve" ? "approved" : "rejected"));
-      events.add("proposals");
-      if (args.action === "approve") events.add("board");
-      return { ok: true, action: args.action, resolved: resolved.map((p) => ({ taskId: p?.taskId, assignee: p?.assignee })) };
     }
     case "update_task_context": {
       // #112/#114: 経緯メモの上書きも agentWrite を通す (版の確認を1箇所に集約)
@@ -509,9 +441,10 @@ function buildSystemPrompt(
     "- create_tasks / update_tasks の報告では、必ず割り当てられたタスクID を「#12として登録しました」の形式で明記する (ユーザーは以後この番号で参照する)。",
     "- 相談・議論の流れからタスクを登録するときは、create_tasks の context に登録に至った経緯を要約して入れる。経緯のない単発の明確な依頼では省略可。",
     "- 「Nは◯◯に」のような指名は update_tasks で即実行してよい (reason は「指名」)。",
-    "- 「いい感じに振っといて」のような委任は propose_assignments を使う。勝手に assignee を確定しない。理由はボード上で確かめられることだけ書き、裏付けが無いなら理由なしで提案する (「実績がある」「経験を活かせる」を根拠が無いまま書かない)。過去の担当実績を根拠にしたいときは query_log で done_at と assignee を集計してから引用する。",
-    "- 「#10は渡辺に」のような名指しの指名は提案ではないので update_tasks で確定してよい。理由を言われていなければ assign_reason は「◯◯(発言者)による指名」とだけ書き、理由を作らない。",
-    "- 提案への「承認」「全部承認で」「#Nは却下」は resolve_proposals を使う。update_tasks で直接 assignee を書いて代用しない (提案が残留してUIに表示され続ける)。",
+    "- 割り振りは update_tasks でその場で確定し、誰をどこに置いたかを一覧で報告する。承認ボタンのような確認UIは無い — 担当は後からいくらでも変えられるので、確定してから直すほうが速い (取り返しがつかないのはDoneだけで、そこは人間の検収でしか通れない)。",
+    "- ただし判断材料が足りないときや、影響が大きいと感じたときは、確定する前にチャットで案を出して聞く。どちらにするかは文脈で決めてよい (「全部おまかせ」なら確定して報告、「どう振るのがいい?」なら案を出して相談)。",
+    "- 割り振りの理由はボード上で確かめられることだけ書き、裏付けが無いなら assign_reason を省く (「実績がある」「経験を活かせる」を根拠が無いまま書かない)。過去の担当実績を根拠にしたいときは query_log で done_at と assignee を集計してから引用する。",
+    "- 「#10は渡辺に」のような名指しの指名は、理由を言われていなければ assign_reason に「◯◯(発言者)による指名」とだけ書き、理由を作らない。",
     "- 「終わりました」等の完了報告は status=review に置き、「Reviewに置いたので確認OKなら承認を」と一言返す。勝手に done にしない (doneは検収済みの意味で、即アーカイブされる)。発言者名が分かればその人のタスクを優先して曖昧参照を解決する。",
     "- あなたは done に変更できない (ツールが受け付けず review に置き換わる)。完了・却下・承認はすべて status=review に置き、done への確定はボードのReview列の検収チェック(人間の操作)だけが行う。「doneにして」「まとめて承認」と言われたら review に置いた上で「確定はReview列の検収チェックからお願いします」と案内する。",
     "- 「◯◯さんの分だけ見せて」は set_view を使う。",
@@ -623,7 +556,6 @@ const TOOL_LABELS: Record<string, string> = {
   update_tasks: "タスクを更新",
   delete_tasks: "ゴミ箱へ移動",
   restore_tasks: "ゴミ箱から復元",
-  propose_assignments: "割り振りを検討",
   set_view: "ビューを切替",
   update_project_context: "前提情報を更新",
   compact_archive: "過去ログを整頓",
@@ -631,7 +563,6 @@ const TOOL_LABELS: Record<string, string> = {
   search_tasks: "経緯を検索",
   query_log: "記録を集計",
   update_task_context: "経緯メモを更新",
-  resolve_proposals: "提案を承認/却下",
 };
 
 // #68: 添付は「保存しない蒸留型」— 画像もPDFもそのままLLMに渡し(前処理なし、原本はどこにも残さない)、

@@ -2,7 +2,6 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { createTasksAsAgent, updateTasksAsAgent } from "./agentWrite.js";
 import {
   PROJECT_CONTEXT_WRITE_DESCRIPTION,
-  PROPOSE_DESCRIPTION,
   QUERY_LOG_DESCRIPTION,
   REORDER_DESCRIPTION,
   STATUS_DESCRIPTION,
@@ -12,7 +11,6 @@ import {
   queryLlmCalls,
   queryProjectData,
   reorderTasks,
-  createProposal,
   createTask,
   restoreTask,
   trashTask,
@@ -20,7 +18,6 @@ import {
   getProjectContextRow,
   getTask,
   listMembers,
-  listPendingProposals,
   listSummaryCards,
   listTasks,
   listTrashedTasks,
@@ -179,29 +176,6 @@ export function buildMcpServer(onEvent: (kind: "board" | "proposals") => void): 
       const restored = ids.map((id) => restoreTask(id));
       onEvent("board");
       return text({ ok: true, restored: restored.map((t: any) => brief(t, isPersonal)) });
-    }
-  );
-
-  // 個人用プロジェクトでは担当者関連のツールごと出さない (#109/#110)
-  if (!isPersonal)
-    server.registerTool(
-    "propose_assignments",
-    {
-      description: PROPOSE_DESCRIPTION,
-      inputSchema: {
-        proposals: z.array(
-          z.object({
-            taskId: z.number().int(),
-            assignee: z.string(),
-            reason: z.string().optional().describe("ボード上で確かめられる根拠だけ。無いなら省略する"),
-          })
-        ),
-      },
-    },
-    async ({ proposals }) => {
-      const created = proposals.map((p) => createProposal(p.taskId, p.assignee, p.reason));
-      onEvent("proposals");
-      return text({ ok: true, proposals: created });
     }
   );
 

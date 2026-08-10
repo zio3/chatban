@@ -1,5 +1,5 @@
 import { currentProjectHeader } from "./project";
-import type { ChatResponse, Member, Proposal, SummaryCard, Task, TaskStatus } from "./types";
+import type { ChatResponse, Member, SummaryCard, Task, TaskStatus } from "./types";
 
 async function json<T>(res: Response): Promise<T> {
   if (!res.ok) throw new Error(`${res.status}: ${await res.text()}`);
@@ -67,7 +67,7 @@ export const api = {
   purgeTask: (id: number) => apiFetch(`/api/trash/${id}`, { method: "DELETE" }).then((r) => json<{ ok: boolean }>(r)),
   board: () =>
     apiFetch("/api/board").then((r) =>
-      json<{ tasks: Task[]; members: Member[]; proposals: Proposal[]; summaryCards: SummaryCard[] }>(r)
+      json<{ tasks: Task[]; members: Member[]; summaryCards: SummaryCard[] }>(r)
     ),
   updateTask: (id: number, patch: Partial<Pick<Task, "title" | "assignee" | "assignReason" | "summary" | "sort">> & { status?: TaskStatus }) =>
     apiFetch(`/api/tasks/${id}`, {
@@ -89,8 +89,6 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ ids }),
     }).then((r) => json<{ ok: boolean }>(r)),
-  resolveProposal: (id: number, action: "approve" | "reject") =>
-    apiFetch(`/api/proposals/${id}/${action}`, { method: "POST" }).then((r) => json<Proposal>(r)),
   chatLog: (taskId?: number) =>
     apiFetch(`/api/chat/log${taskId != null ? `?taskId=${taskId}` : ""}`).then((r) =>
       json<{ messages: { role: "user" | "assistant"; content: string; trace?: unknown; usage?: unknown }[] }>(r)

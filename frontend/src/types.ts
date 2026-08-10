@@ -31,16 +31,6 @@ export interface Member {
   skills: string | null;
 }
 
-export interface Proposal {
-  id: number;
-  taskId: number;
-  taskTitle: string;
-  assignee: string;
-  reason: string;
-  status: "pending" | "approved" | "rejected";
-  createdAt: string;
-}
-
 export interface SummaryElement {
   text: string;
   checked: boolean;

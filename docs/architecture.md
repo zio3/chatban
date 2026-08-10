@@ -195,7 +195,7 @@ DateTimeOffset に相当する型が無く (TEXT/INTEGER/REAL/BLOB/NULL のみ)�
 ## チャットのツール (13)
 
 `create_tasks` / `update_tasks` / `delete_tasks`(ゴミ箱行き) / `restore_tasks` /
-`propose_assignments` / `resolve_proposals` / `update_task_context` / `reorder_tasks` /
+`update_task_context` / `reorder_tasks` /
 `search_tasks` / `query_log` / `compact_archive` / `update_project_context` / `set_view`
 
 **読み取りは `query_log` (SQL) に寄せている (#108)**。人間のWebUIは画面が決まっているので
@@ -243,7 +243,7 @@ DateTimeOffset に相当する型が無く (TEXT/INTEGER/REAL/BLOB/NULL のみ)�
 ```
 
 ツール (10、個人用プロジェクトは9): `create_tasks` / `update_tasks` / `delete_tasks` /
-`restore_tasks` / `reorder_tasks` / `propose_assignments`(共有のみ) / `search_tasks` /
+`restore_tasks` / `reorder_tasks` / `search_tasks` /
 `query_log` / `get_project_context` / `update_project_context`
 
 - プロジェクト未指定 (`POST /mcp`) は **400**。フォールバックすると事故の原因が残り続けるため。

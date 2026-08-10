@@ -12,7 +12,7 @@ import TrashView from "./components/TrashView";
 import TaskDetailPanel from "./components/TaskDetailPanel";
 import { useChatTurn } from "./hooks/useChatTurn";
 import { socket } from "./socket";
-import type { ChatEntry, Member, Proposal, SummaryCard, Task } from "./types";
+import type { ChatEntry, Member, SummaryCard, Task } from "./types";
 
 interface Toast {
   tone?: "error" | "info";
@@ -26,7 +26,6 @@ const UNASSIGNED = "__unassigned__"; // #90: 担当なしを表すフィルタ�
 export default function App() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [members, setMembers] = useState<Member[]>([]);
-  const [proposals, setProposals] = useState<Proposal[]>([]);
   const [summaryCards, setSummaryCards] = useState<SummaryCard[]>([]);
   // #90: 複数トグル。空Set=全員表示。UNASSIGNEDは担当なしを表す擬似キー
   const [filter, setFilter] = useState<Set<string>>(new Set());
@@ -95,7 +94,6 @@ export default function App() {
       const b = await api.board();
       setTasks(b.tasks);
       setMembers(b.members);
-      setProposals(b.proposals);
       setSummaryCards(b.summaryCards ?? []);
     } catch (e: any) {
       setLoadError(e?.message ?? String(e));
@@ -112,19 +110,16 @@ export default function App() {
       setTasks(p.tasks);
       if (p.summaryCards) setSummaryCards(p.summaryCards);
     };
-    const onProposals = (p: { proposals: Proposal[] }) => setProposals(p.proposals);
     // Done要約カードの非同期再生成中インジケータ (#56)
     const onArchive = (p: { count: number }) => setArchiveWorking(p.count > 0);
     // プロジェクトが切り替わったら全部読み直す (他のタブ/端末での切り替えにも追従する)
     const onProject = (p: { projects: Project[] }) => setProjects(p.projects);
     socket.on("board:changed", onBoard);
-    socket.on("proposals:changed", onProposals);
     socket.on("archive:working", onArchive);
     socket.on("project:changed", onProject);
     loadProjects();
     return () => {
       socket.off("board:changed", onBoard);
-      socket.off("proposals:changed", onProposals);
       socket.off("archive:working", onArchive);
       socket.off("project:changed", onProject);
     };
@@ -220,10 +215,6 @@ export default function App() {
     });
   }, [tasks]);
 
-  const resolveProposal = useCallback((id: number, action: "approve" | "reject") => {
-    setProposals((prev) => prev.filter((p) => p.id !== id));
-    api.resolveProposal(id, action).catch(() => api.board().then((b) => setProposals(b.proposals)));
-  }, []);
 
   // ✨AI提案チップ (#75): ボードの文脈を読んだ提案を非同期で追加 (固定チップは即時表示の保険)
   const [aiSuggestions, setAiSuggestions] = useState<Suggestion[]>([]);
@@ -490,8 +481,6 @@ export default function App() {
         sending={mainChat.sending}
         elapsedSec={mainChat.elapsedSec}
         suggestions={suggestions}
-        proposals={proposals}
-        onResolveProposal={resolveProposal}
         onOpenTask={openTask}
         onSend={mainChat.send}
         onStop={mainChat.stop}

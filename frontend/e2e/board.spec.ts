@@ -416,3 +416,35 @@ test("検収の印はDBに残り、AIは読めるが付けられない (#108)", 
   const reopened = await (await fetch(`${API}/api/tasks/${id}`)).json();
   expect(reopened.checkedAt).toBeFalsy();
 });
+
+test("MCPの読み取りはSQL窓口1本。落とした一覧ツールは同じ内容を引ける (#108)", async () => {
+  const id = await createTask("SQL窓口の検証", "review");
+
+  // 読み取り専用ツールは query_log と search_tasks だけ (list_* は無い)
+  const res = await fetch(`${API}/mcp/1`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream" },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+  });
+  const names: string[] = JSON.parse(
+    (await res.text())
+      .split("\n")
+      .map((l) => l.replace(/^data: /, "").trim())
+      .filter((l) => l.startsWith("{"))
+      .pop()!
+  ).result.tools.map((t: any) => t.name);
+  for (const gone of ["list_tasks", "list_trash", "list_members", "get_metrics"]) {
+    expect(names).not.toContain(gone);
+  }
+  expect(names).toContain("query_log");
+
+  // 落としたぶんはSQLで引ける (接続の足場だけは get_project_context に残す)
+  const board = await mcp("query_log", {
+    scope: "audit",
+    sql: "SELECT id, status, title FROM tasks WHERE archived=0 AND trashed_at IS NULL",
+  });
+  expect(board.rows.some((r: any) => r.id === id)).toBe(true);
+
+  const anchor = await mcp("get_project_context", {});
+  expect(anchor.project.id).toBe(1);
+});

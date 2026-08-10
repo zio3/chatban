@@ -64,7 +64,7 @@ function buildBaselineText(s: Snapshot): string {
     `## 今日: ${s.date}`,
     s.projectContext ? `## プロジェクトの前提情報 (全員共有)\n${s.projectContext}\n` : "",
     "## ボードの索引 — 基準スナップショット (status: todo=未着手, inprogress=作業中, review=レビュー中, done=完了)",
-    "タイトルは要約品質。詳細(割り振り理由・経緯メモ)が必要なら get_task_details で取る。完了タスクは自動アーカイブされここには載らない。",
+    "タイトルは要約品質。詳細(割り振り理由・経緯メモ)が必要なら query_log で取る (SELECT context FROM tasks WHERE id=...)。完了タスクは自動アーカイブされここには載らない。",
     "後続に「変更イベント」がある場合、この索引にそれを適用した状態が現在のボードである。",
     `[${[...s.tasks.values()].join(",")}]`,
     "",

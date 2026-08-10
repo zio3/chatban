@@ -9,5 +9,5 @@ export const hooks: {
 };
 
 /** #108: 要約の再生成中かどうか。MCP越しのエージェントからは進捗が見えず、
- * 生成中なのに「完了した」と誤認しうるので list_tasks で知らせる */
+ * 生成中なのに「完了した」と誤認しうるので get_project_context で知らせる */
 export const archiveState = { running: new Map<number, number>() };

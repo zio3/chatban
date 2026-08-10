@@ -68,40 +68,6 @@ export function buildMcpServer(onEvent: (kind: "board" | "proposals") => void): 
   const isPersonal = listMembers().length === 0;
 
   server.registerTool(
-    "list_tasks",
-    {
-      description:
-        "かんばんボードの全タスクとメンバー(負荷つき)を取得する。経緯メモを全文含むので重い(Reviewが溜まっていると2万字近くなる)。状態を眺めるだけ・件数を数えるだけなら query_log の軽い一覧クエリを使う",
-    },
-    async () =>
-      text({
-        // #96: この接続が固定されているプロジェクト。エージェントが自分の作業対象を確認できるように
-        // 応答に含める (接続URLで決まるので途中で変わらない)
-        project: currentProject(),
-        // 個人用プロジェクトでは担当者という概念自体が無い (#109/#110)。
-        // ツールとスキーマから消しても、一覧に assignee: null が並んでいれば
-        // 「使える項目がある」と読まれるので、応答からも落とす
-        tasks: isPersonal
-          ? listTasks().map(({ assignee: _a, assignReason: _r, ...t }) => t)
-          : listTasks(),
-        ...(isPersonal ? {} : { members: memberLoads(), pendingProposals: listPendingProposals() }),
-        // #108: 要約カードの状態が取れず、毎回RESTを叩いていた。要素は件数だけ返す(全文は重い)
-        summaryCards: listSummaryCards().map((c) => ({
-          id: c.id,
-          title: c.title,
-          taskIds: c.taskIds,
-          settled: c.settled,
-          elements: c.elements.length,
-        })),
-        trashedCount: listTrashedTasks().length,
-        // #108: 要約の再生成は15〜80秒かかる。生成中に「完了した」と誤認しないように知らせる
-        ...(archiveState.running.get(currentProjectId())
-          ? { archiveRunning: "要約カードを再生成中。結果を見るなら少し待って list_tasks を呼び直すこと" }
-          : {}),
-      })
-  );
-
-  server.registerTool(
     "create_tasks",
     {
       description: "タスクをボードに追加する(複数可)。UIにはリアルタイム反映される",
@@ -140,7 +106,7 @@ export function buildMcpServer(onEvent: (kind: "board" | "proposals") => void): 
       inputSchema: {
         updates: z.array(
           z.object({
-            id: z.number().int(),
+            id: z.number().int().describe("タスクID。会話で「#112」と呼ばれるものと同じで、tasks テーブルの主キー(id)。プロジェクトごとに1から振られるので、別プロジェクトの#112とは別物"),
             title: z.string().optional(),
             status: STATUS.optional(),
             ...(isPersonal
@@ -158,7 +124,7 @@ export function buildMcpServer(onEvent: (kind: "board" | "proposals") => void): 
               .number()
               .int()
               .optional()
-              .describe("context を渡すときのみ必須。直前に list_tasks で読んだ contextVersion をそのまま添える"),
+              .describe("context を渡すときのみ必須。直前に query_log で読んだ context_version をそのまま添える"),
             due: z.string().nullable().optional().describe("期限 YYYY-MM-DD。解除はnull"),
             blocked_by: z.array(z.number().int()).nullable().optional().describe("依存先タスクID(全置換)。解除はnull"),
             rejected: z.boolean().optional().describe("却下(やらない決定)フラグ。reasonに根拠を書く"),
@@ -275,22 +241,22 @@ export function buildMcpServer(onEvent: (kind: "board" | "proposals") => void): 
   );
 
   server.registerTool(
-    "list_trash",
-    { description: "ゴミ箱に入っているタスクを取得する (restore_tasks で戻せる)" },
-    async () => text({ tasks: listTrashedTasks().map((t: any) => brief(t, isPersonal)) })
-  );
-
-  if (!isPersonal)
-    server.registerTool(
-    "list_members",
-    { description: "メンバー一覧(スキル情報つき)を取得する" },
-    async () => text({ members: listMembers() })
-  );
-
-  server.registerTool(
     "get_project_context",
-    { description: "プロジェクトの前提情報(全員共有、チャットのシステムプロンプトに常時含まれる)を取得する" },
-    async () => text({ text: getProjectContext() })
+    {
+      description:
+        "この接続の足場を取得する。対象プロジェクト(接続URLで固定)と、その前提情報(全員共有)。作業を始める前に一度読む。ボードの中身は query_log で引く",
+    },
+    async () =>
+      text({
+        // #96: 接続がどのプロジェクトに向いているか。SQL窓口は
+        // プロジェクトDBしか見えないので、これはここでしか確認できない
+        project: currentProject(),
+        text: getProjectContext(),
+        // #108: 要約の再生成は15〜80秒かかる。生成中に「完了した」と誤認しないように知らせる
+        ...(archiveState.running.get(currentProjectId())
+          ? { archiveRunning: "要約カードを再生成中。結果を見るなら少し待って引き直すこと" }
+          : {}),
+      })
   );
 
   server.registerTool(
@@ -303,12 +269,6 @@ export function buildMcpServer(onEvent: (kind: "board" | "proposals") => void): 
       setProjectContext(t);
       return text({ ok: true });
     }
-  );
-
-  server.registerTool(
-    "get_metrics",
-    { description: "LLM呼び出しのコスト計測サマリー(トークン数・レイテンシ)を取得する" },
-    async () => text(metrics())
   );
 
   return server;

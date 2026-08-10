@@ -15,7 +15,6 @@ import {
   memberLoads,
   queryLlmCalls,
   queryProjectData,
-  recentActivity,
   reorderTasks,
   resolveProposal,
   searchTasks,
@@ -57,8 +56,15 @@ export const QUERY_LOG_DESCRIPTION = [
   "scope='audit': このプロジェクトの記録。chat_messages(id, role, content, trace, usage, task_id, created_at) / assignment_history(task_title, assignee, note, created_at) / proposals(task_id, assignee, reason, status, created_at) / summary_cards(id, title, elements, task_ids, settled, created_at)",
   "scope='audit' の tasks(id, title, status, assignee, assign_reason, summary, context, context_version, due, blocked_by, rejected, checked_at, trashed_at, sort, archived, summary_card_id, created_at, updated_at)",
   "checked_at = 人が実物で確かめた日時 (nullなら未検収)。status とは別物で、done は列が動いたこと・checked_at は検収が進んだこと。片方からもう片方を推測しない。この窓口は読み取り専用で、checked_at を書く手段はどこにも無い (印を付けられるのは人間だけ)",
+  "会話で「#112」と呼ぶタスクは tasks.id = 112 のこと(主キー)。番号はプロジェクトごとに1から振られる。特定の1件を見るときは WHERE id=<番号> で引く",
   "SELECT * は使わない。必要な列だけ挙げる。context(経緯メモ)は1件1,000字を超えるので、一覧では length(context) か substr(context,1,120) にし、全文が要るタスクだけ id で絞って引き直す",
-  "例(ボードの軽い一覧。list_tasks と同じ範囲を1/5以下のトークンで): SELECT id, status, title, assignee, due, checked_at, length(context) ctx FROM tasks WHERE archived=0 AND trashed_at IS NULL ORDER BY COALESCE(sort,id), id",
+  "例(ボードの一覧。生きているタスクはこの条件): SELECT id, status, title, assignee, due, checked_at, length(context) ctx FROM tasks WHERE archived=0 AND trashed_at IS NULL ORDER BY COALESCE(sort,id), id",
+  "例(1件の詳細。経緯メモの全文と版): SELECT title, status, summary, context, context_version, blocked_by FROM tasks WHERE id=112",
+  "例(直近の動き。「なにやってたっけ」): SELECT id, status, title, summary, updated_at FROM tasks WHERE archived=0 AND trashed_at IS NULL ORDER BY updated_at DESC LIMIT 15",
+  "例(担当ごとの負荷): SELECT m.name, COUNT(t.id) open FROM members m LEFT JOIN tasks t ON t.assignee=m.name AND t.status!='done' AND t.archived=0 AND t.trashed_at IS NULL GROUP BY m.name",
+  "例(ゴミ箱の中身): SELECT id, title, trashed_at FROM tasks WHERE trashed_at IS NOT NULL ORDER BY trashed_at DESC",
+  "例(承認待ちの割り振り案): SELECT task_id, assignee, reason FROM proposals WHERE status='pending'",
+  "例(Doneの要約カード): SELECT id, title, task_ids, settled FROM summary_cards ORDER BY id DESC",
   "例(検収待ちで、まだ人が確かめていないもの): SELECT id, title, summary FROM tasks WHERE status='review' AND checked_at IS NULL ORDER BY sort",
   "例(1件の経緯メモ全文): SELECT context, context_version FROM tasks WHERE id=112",
   "例: SELECT routed_model, COUNT(*) n, ROUND(SUM(estimated_usd),4) usd FROM llm_calls GROUP BY 1 ORDER BY usd DESC LIMIT 10",
@@ -111,7 +117,7 @@ const tools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
             items: {
               type: "object",
               properties: {
-                id: { type: "integer" },
+                id: { type: "integer", description: "タスクID。会話で「#112」と呼ばれるものと同じで、tasks テーブルの主キー(id)。プロジェクトごとに1から振られるので、別プロジェクトの#112とは別物" },
                 title: { type: "string" },
                 status: { type: "string", enum: STATUS_VALUES },
                 assignee: { type: "string" },
@@ -199,42 +205,19 @@ const tools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
   {
     type: "function",
     function: {
-      name: "get_task_details",
-      description: "タスクの詳細(割り振り理由・経緯メモ・日付)を取得する",
-      parameters: {
-        type: "object",
-        properties: { ids: { type: "array", items: { type: "integer" } } },
-        required: ["ids"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
       name: "update_task_context",
-      description: "タスクの経緯メモを上書き更新する(既存をget_task_detailsで読みマージした全文を渡す)",
+      description: "タスクの経緯メモを上書き更新する(既存を query_log で読みマージした全文を渡す)",
       parameters: {
         type: "object",
         properties: {
-          id: { type: "integer" },
+          id: { type: "integer", description: "タスクID。会話で「#112」と呼ばれるものと同じで、tasks テーブルの主キー(id)。プロジェクトごとに1から振られるので、別プロジェクトの#112とは別物" },
           text: { type: "string", description: "新しいcontext全文" },
           context_version: {
             type: "integer",
-            description: "get_task_details で読んだ contextVersion をそのまま渡す。読んでから書くまでの間に他から追記されていないかの確認に使う",
+            description: "query_log で読んだ context_version をそのまま渡す。読んでから書くまでの間に他から追記されていないかの確認に使う",
           },
         },
         required: ["id", "text", "context_version"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "get_activity",
-      description: "最近の動き(更新されたタスクと割り振り履歴)を新しい順に取得する。「直近なにをしてた?」等に使う",
-      parameters: {
-        type: "object",
-        properties: { limit: { type: "integer", description: "タスクの件数。既定15" } },
       },
     },
   },
@@ -399,10 +382,6 @@ async function execTool(name: string, args: any, uiActions: UiAction[], events: 
       if (args.action === "approve") events.add("board");
       return { ok: true, action: args.action, resolved: resolved.map((p) => ({ taskId: p?.taskId, assignee: p?.assignee })) };
     }
-    case "get_task_details": {
-      const details = (args.ids as number[]).map((id) => getTask(id) ?? { id, error: "not found" });
-      return { tasks: details };
-    }
     case "update_task_context": {
       // #112/#114: 経緯メモの上書きも agentWrite を通す (版の確認を1箇所に集約)
       const r = updateTasksAsAgent([
@@ -413,9 +392,6 @@ async function execTool(name: string, args: any, uiActions: UiAction[], events: 
       if (!updated) return { error: `task #${args.id} not found` };
       events.add("board");
       return { ok: true, id: updated.id };
-    }
-    case "get_activity": {
-      return recentActivity(Math.min(Number(args.limit) || 15, 30));
     }
     case "reorder_tasks": {
       const r = reorderTasks(args.ids ?? [], args.status);
@@ -430,11 +406,11 @@ async function execTool(name: string, args: any, uiActions: UiAction[], events: 
     case "search_tasks": {
       const r = searchTasks(args.terms ?? []);
       // スニペットは「当たった箇所の周辺」でしかないので、判断の核心が範囲外にあることが多い。
-      // 検索は「どのタスクか」を絞るまでの道具と位置づけ、中身は get_task_details で読ませる
+      // 検索は「どのタスクか」を絞るまでの道具と位置づけ、中身は query_log で読ませる
       return {
         ...r,
         ...(r.hits.length > 0
-          ? { note: "snippetは当たった箇所の周辺のみ。理由や判断を答えるときは get_task_details で経緯メモの全文を読むこと" }
+          ? { note: "snippetは当たった箇所の周辺のみ。理由や判断を答えるときは query_log で経緯メモの全文を読むこと (SELECT context FROM tasks WHERE id=...)" }
           : {}),
       };
     }
@@ -492,7 +468,7 @@ function buildSystemPrompt(taskFocus?: ReturnType<typeof getTask>, speaker?: str
     "- 特定タスクの経緯・決定事項・補足(「#22は◯◯方式でいくことにした」等)は update_task_context でそのタスクの経緯メモに記録する。",
     "- assign_reason は「なぜこの担当か」、summary は「いまどうなっているか」。別の情報なので混ぜない。進捗・完了報告は summary に一言で書き、詳細な根拠は経緯メモ(context)に書く。",
     "- 「ログ整頓して」は compact_archive を使う。完了タスクのアーカイブは自動なので手動操作は不要。",
-    "- 過去の判断や経緯・過去の会話を聞かれたら(「なんで◯◯にしたんだっけ」「あんな話してたっけ」)、索引のタイトルだけで答えず search_tasks で本文と会話ログを引く。言い換え・英日表記を自分で並べて渡し、空振りしたら語を変えて引き直す。検索結果のsnippetは断片なので、理由を答える前に get_task_details で経緯メモの全文を読む。時期や条件で絞りたいとき(「8/9の午前に何を話していたか」等)は query_log(scope=audit) を使う。",
+    "- 過去の判断や経緯・過去の会話を聞かれたら(「なんで◯◯にしたんだっけ」「あんな話してたっけ」)、索引のタイトルだけで答えず search_tasks で本文と会話ログを引く。言い換え・英日表記を自分で並べて渡し、空振りしたら語を変えて引き直す。検索結果のsnippetは断片なので、理由を答える前に query_log で経緯メモの全文を読む。時期や条件で絞りたいとき(「8/9の午前に何を話していたか」等)は query_log(scope=audit) を使う。",
     "- 削除と却下は文脈で使い分ける: 誤登録・重複・ダミー(「消して」「間違えた」)は delete_tasks (ゴミ箱行きで復元可。返答で復元方法を説明する必要はない)。やらない決定(「見送り」「却下」「やらないことにした」)は削除せず update_tasks で status=review + rejected=true にし、reason に却下の根拠を書いて「却下としてReviewに置きました。検収で確定します」と返す (検収後、決定として要約アーカイブに残る)。",
     "- 「消して」がタスクそのものを指すのか、タイトルや文言の一部の修正を指すのか曖昧なときは、操作せず確認する (実例:「#95だけ発言者の話が入っていて不自然なので消せますか?」はタイトルの修正依頼だったが、タスクごと削除してしまった)。",
     "- ボードから退場するもの(完了・却下)は必ずReviewを通り、人間の検収チェックで確定する。チャットからdoneへ直行する経路は存在しない。",
@@ -573,7 +549,7 @@ const VIEW_HINTS: Record<string, string> = {
   audit: [
     "",
     "## いま見ている画面: 📜監査",
-    "会話・LLM呼び出し・割り振り履歴のログを見ている。「直近何やってた?」は get_activity、「あの日どんな話をしていたか」「いつ何を決めたか」は query_log(scope=audit) で会話ログを掘る。",
+    "会話・LLM呼び出し・割り振り履歴のログを見ている。「直近何やってた?」は query_log で updated_at の新しい順に引き、「あの日どんな話をしていたか」「いつ何を決めたか」は query_log(scope=audit) で会話ログを掘る。",
   ].join("\n"),
   trash: [
     "",
@@ -596,11 +572,9 @@ const TOOL_LABELS: Record<string, string> = {
   set_view: "ビューを切替",
   update_project_context: "前提情報を更新",
   compact_archive: "過去ログを整頓",
-  get_activity: "最近の動きを確認",
   reorder_tasks: "並び順を変更",
   search_tasks: "経緯を検索",
   query_log: "記録を集計",
-  get_task_details: "タスク詳細を取得",
   update_task_context: "経緯メモを更新",
   resolve_proposals: "提案を承認/却下",
 };

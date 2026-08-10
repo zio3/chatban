@@ -105,7 +105,7 @@ Socket.IOの配信もプロジェクト単位のroomへ送る。
 - **静的前置・動的後置**: 人格/行動ルール/設計思想を先頭固定 (キャッシュはプレフィックス一致)
 - **イベントログ型 (#50)**: ボード状態=基準スナップショット(バイト不変)+差分イベント追記。
   TTL5分/40件/日付変化で再ベースライン
-- **索引+遅延詳細**: 常駐はタスク索引のみ。詳細は `get_task_details` で取得
+- **索引+遅延詳細**: 常駐はタスク索引のみ。詳細は `query_log` で必要な列だけ取得
 - **メタ情報は動的末尾に置く**: 発言者(#95)・いま見ている画面(#93)。
   本文に混ぜるとLLMがタスクのタイトルへ書き写す事故が起きたため、「書き写すな」と添えて末尾に置く。
   末尾ならキャッシュのプレフィックスを崩さない
@@ -165,12 +165,17 @@ todo → inprogress → review ←─ 完了報告も却下(rejected)もここ�
 - 要素を先に保存してからタイトルを付ける。**高い処理(要素分解)の成果を、
   安い処理(タイトル生成)の成否に人質に取らせない**
 
-## チャットのツール (14)
+## チャットのツール (13)
 
 `create_tasks` / `update_tasks` / `delete_tasks`(ゴミ箱行き) / `restore_tasks` /
-`propose_assignments` / `resolve_proposals` / `get_task_details` / `update_task_context` /
-`get_activity`(最近の動き) / `reorder_tasks` / `search_tasks` / `compact_archive` /
-`update_project_context` / `set_view`
+`propose_assignments` / `resolve_proposals` / `update_task_context` / `reorder_tasks` /
+`search_tasks` / `query_log` / `compact_archive` / `update_project_context` / `set_view`
+
+**読み取りは `query_log` (SQL) に寄せている (#108)**。人間のWebUIは画面が決まっているので
+固定のクエリ関数を使うが、チャット/MCPは「何をどう見たいか」が毎回違うのでSQLを組ませる。
+`get_task_details` / `get_activity` / `list_*` は廃止した — 同じものが
+`SELECT ... FROM tasks WHERE id=112` や `ORDER BY updated_at DESC` で引ける。
+一覧を専用ツールで返すと経緯メモが全文ついてきて重い (実測18,553字。SQLなら3,334字)
 
 **「判断はLLM、整合性はコード」** という形が繰り返し現れる:
 
@@ -210,13 +215,14 @@ todo → inprogress → review ←─ 完了報告も却下(rejected)もここ�
 } }
 ```
 
-ツール: `list_tasks` / `create_tasks` / `update_tasks` / `delete_tasks` / `restore_tasks` /
-`propose_assignments` / `search_tasks` / `list_members` / `get_project_context` /
-`update_project_context` / `get_metrics`
+ツール (10、個人用プロジェクトは9): `create_tasks` / `update_tasks` / `delete_tasks` /
+`restore_tasks` / `reorder_tasks` / `propose_assignments`(共有のみ) / `search_tasks` /
+`query_log` / `get_project_context` / `update_project_context`
 
 - プロジェクト未指定 (`POST /mcp`) は **400**。フォールバックすると事故の原因が残り続けるため。
   MCPの接続失敗はクライアント側で潰れて見えなくなるので、直し方と利用可能プロジェクト一覧を
   サーバーログとレスポンスの両方に出す
-- `list_tasks` の応答に接続先プロジェクトを含める (エージェントが自分の作業対象を確認できる)
+- `get_project_context` が接続の足場 — 対象プロジェクト(接続URLで固定)と前提情報を返す。
+  SQL窓口はプロジェクトDBしか見えないので、どのプロジェクトに向いているかはここでしか確認できない
 - 設計方針: **内蔵チャットは安い定型操作に徹し、横断的な統合判断は使う人のエージェント(BYO Agent)に委ねる**
   (#55却下の決定)

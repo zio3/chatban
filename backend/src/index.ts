@@ -119,11 +119,16 @@ app.use("/api", requireAuth);
 // #97: どのプロジェクトへの操作かはクライアントがヘッダで明示する (UIはURL /p/<id> が持つ)。
 // 指定が無ければ既定プロジェクト (スクリプトやcurlからの素の呼び出し用)。
 // MCPがURLで固定しているのと同じ考え方 — サーバー側に隠れた「いま見ているもの」を持たない
-app.use((req, _res, next) => {
+app.use((req, res, next) => {
   const raw = req.header("X-ChatBan-Project");
-  const id = raw != null ? Number(raw) : NaN;
+  if (raw == null || raw === "") return next(); // 無指定は既定プロジェクト (curl・スクリプト用)
+  const id = Number(raw);
   if (Number.isFinite(id) && getProject(id)) return withProject(id, () => next());
-  next();
+  // #125: 指定したのに存在しないプロジェクトなら拒否する。既定へフォールバックすると
+  // 「9999 のつもりの操作が黙って #1 に書き込まれる」。MCP (/mcp/:projectId) は
+  // 同じ理由で400にしているので、RESTだけ緩いのは契約のズレ (#96)
+  log("api", `存在しないプロジェクト #${raw} への操作を拒否しました`);
+  return res.status(400).json({ error: `project #${raw} not found`, available: projectList() });
 });
 
 const server = http.createServer(app);

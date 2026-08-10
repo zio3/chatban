@@ -628,3 +628,50 @@ test("存在しないIDは notFound で名指しし、成功と混ぜない (#12
   expect(all.ok).toBe(true);
   expect(all.status).toBe("ok");
 });
+
+test("存在しないプロジェクトを指定した操作は既定へ落とさず拒否する (#125)", async () => {
+  const bad = { "X-ChatBan-Project": "9999" };
+
+  // 読み取りも書き込みも 400。黙って既定プロジェクトへ落ちない
+  expect((await fetch(`${API}/api/board`, { headers: bad })).status).toBe(400);
+  const write = await fetch(`${API}/api/tasks`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...bad },
+    body: JSON.stringify({ title: "9999のつもりで作る" }),
+  });
+  expect(write.status).toBe(400);
+
+  // 既定プロジェクトに混入していない
+  const board = await (await fetch(`${API}/api/board`)).json();
+  expect(board.tasks.some((t: any) => t.title.includes("9999のつもり"))).toBe(false);
+
+  // 無指定は既定プロジェクトで通る (curl・スクリプト用の経路は残す)
+  expect((await fetch(`${API}/api/board`)).status).toBe(200);
+});
+
+test("MCPは接続URLのプロジェクトしか触れない (#125)", async () => {
+  const id = await createTask("project1のタスク");
+
+  // project2 のエンドポイントから project1 のIDを更新しようとしても届かない
+  const res = await fetch(`${API}/mcp/2`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream" },
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "tools/call",
+      params: { name: "update_tasks", arguments: { updates: [{ id, summary: "別プロジェクトから書き換えた" }] } },
+    }),
+  });
+  const body = await res.text();
+  const line = body
+    .split("\n")
+    .map((l) => l.replace(/^data: /, "").trim())
+    .filter((l) => l.startsWith("{"))
+    .pop()!;
+  const r = JSON.parse(JSON.parse(line).result.content[0].text);
+  expect(r.notFound).toContain(id);
+
+  const after = (await (await fetch(`${API}/api/tasks/${id}`)).json()) as any;
+  expect(after.summary).toBeFalsy();
+});

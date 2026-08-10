@@ -430,10 +430,35 @@ function buildAttachmentParts(attachments: ChatAttachment[]): OpenAI.Chat.Comple
 
 /** AI提案チップ (#75): ボードの文脈から「いま価値のある操作」を提案する。
  * チャットと同一のシステムプロンプト+ツール定義で呼ぶことで、キャッシュ済みプレフィックスに相乗りする */
+// 提案はボード状態だけの関数なので、同じ状態なら作り直さない。
+// StrictModeの二重実行・複数タブ・F5連打・🆕新しい会話のいずれでもLLMを再度叩かずに済む
+// (クライアント側を直しても他の経路が残るため、費用の歯止めはサーバー側に置く)
+let suggestCache: { key: string; value: { label: string; message: string }[]; at: number } | null = null;
+const SUGGEST_TTL_MS = 5 * 60 * 1000;
+let suggestInflight: Promise<{ label: string; message: string }[]> | null = null;
+
 export async function generateSuggestions(): Promise<{ label: string; message: string }[]> {
+  const systemPrompt = buildSystemPrompt();
+  if (suggestCache && suggestCache.key === systemPrompt && Date.now() - suggestCache.at < SUGGEST_TTL_MS) {
+    return suggestCache.value;
+  }
+  // 同時到着 (StrictModeの二重実行はほぼ同時に来る) は1本にまとめる
+  if (suggestInflight) return suggestInflight;
+  suggestInflight = generateSuggestionsUncached(systemPrompt)
+    .then((value) => {
+      suggestCache = { key: systemPrompt, value, at: Date.now() };
+      return value;
+    })
+    .finally(() => {
+      suggestInflight = null;
+    });
+  return suggestInflight;
+}
+
+async function generateSuggestionsUncached(systemPrompt: string): Promise<{ label: string; message: string }[]> {
   const res = await chatCompletion("suggest", getModel("main"), {
     messages: [
-      { role: "system", content: buildSystemPrompt() },
+      { role: "system", content: systemPrompt },
       {
         role: "user",
         content:

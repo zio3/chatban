@@ -61,12 +61,6 @@ function TaskCard({
           {task.rejected && (
             <span className="mr-1 rounded bg-rose-600 px-1.5 py-0.5 text-[10px] font-bold text-white">🚫 却下</span>
           )}
-          {task.lane === "demo" && (
-            <span className="mr-1 rounded bg-amber-100 px-1 py-0.5 text-[10px] font-bold text-amber-700">🎬 DEMO</span>
-          )}
-          {task.lane === "later" && (
-            <span className="mr-1 rounded bg-slate-100 px-1 py-0.5 text-[10px] text-slate-400">⏸ 凍結後</span>
-          )}
           {task.due && (
             <span className={`mr-1 rounded px-1 py-0.5 text-[10px] ${dueBadge(task.due).cls}`}>
               {dueBadge(task.due).text}

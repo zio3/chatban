@@ -115,7 +115,7 @@ Socket.IOの配信もプロジェクト単位のroomへ送る。
 
 - `tasks`: title / status(todo・inprogress・review・done固定4列) / assignee /
   **assign_reason**(なぜこの担当か) / **summary**(いまどうなっているか。カードに出る) /
-  context(経緯メモ) / lane(demo・later) / due / blocked_by(依存) / rejected(却下) /
+  context(経緯メモ) / **context_version**(経緯メモの楽観ロック) / due / blocked_by(依存) / rejected(却下) /
   sort / archived / summary_card_id / **trashed_at**(ゴミ箱)
 - `summary_cards`: Done要約カード (elements JSON, settled=過去ログ化済み)
 - `chat_messages`: 会話永続化 (task_id NULLがメイン、値ありがタスクチャット)

@@ -8,7 +8,6 @@ export interface Task {
   /** #92: なぜこの担当か。進捗は summary へ (名前で用途が分かるよう reason から改名) */
   assignReason: string | null;
   context: string | null;
-  lane: "demo" | "later" | null;
   /** 期限 YYYY-MM-DD (#44) */
   due: string | null;
   /** 依存先タスクID (#41)。全完了まで着手不可の想定 */

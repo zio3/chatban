@@ -161,12 +161,6 @@ export default function TaskDetailPanel({
               {task.assignee}
             </span>
           )}
-          {task.lane === "demo" && (
-            <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-bold text-amber-700">🎬 DEMO</span>
-          )}
-          {task.lane === "later" && (
-            <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-400">⏸ 凍結後</span>
-          )}
           {task.due && (
             <span className="rounded bg-amber-50 px-1.5 py-0.5 text-[10px] text-amber-700">⏰ 期限 {task.due}</span>
           )}

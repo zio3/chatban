@@ -43,7 +43,6 @@ function capture(): Snapshot {
         title: t.title,
         status: t.status,
         assignee: t.assignee,
-        ...(t.lane ? { lane: t.lane } : {}),
         ...(t.due ? { due: t.due } : {}),
         ...(t.blockedBy?.length ? { dep: t.blockedBy } : {}),
         ...(t.rejected ? { rejected: true } : {}),

@@ -40,7 +40,6 @@ function brief(t: ReturnType<typeof getTask>, personal = false) {
     ...(personal ? {} : { assignee: t.assignee }),
     ...(t.summary ? { summary: t.summary } : {}),
     ...(t.due ? { due: t.due } : {}),
-    ...(t.lane ? { lane: t.lane } : {}),
     ...(t.blockedBy?.length ? { blockedBy: t.blockedBy } : {}),
     ...(t.rejected ? { rejected: true } : {}),
     ...(t.context ? { contextChars: t.context.length, contextVersion: t.contextVersion } : {}),
@@ -114,7 +113,6 @@ export function buildMcpServer(onEvent: (kind: "board" | "proposals") => void): 
             summary: z.string().optional().describe("現況の一言。カードに表示される"),
             due: z.string().optional().describe("期限 YYYY-MM-DD"),
             blocked_by: z.array(z.number().int()).optional().describe("依存先タスクID(これらが終わるまで着手不可)"),
-            lane: z.enum(["demo", "later"]).optional().describe("demo=デモ台本に必要 / later=機能凍結後"),
           })
         ),
       },
@@ -145,7 +143,6 @@ export function buildMcpServer(onEvent: (kind: "board" | "proposals") => void): 
                   assign_reason: z.string().optional().describe("なぜこの担当かを一言で。進捗は書かない"),
                 }),
             summary: z.string().optional().describe("現況の一言。カードに表示される。詳細な根拠は context へ"),
-            lane: z.enum(["demo", "later"]).nullable().optional().describe("demo=90秒台本に必要 / later=機能凍結後"),
             context: z
               .string()
               .optional()

@@ -29,7 +29,6 @@ function rowToTask(r: any): Task {
     assignReason: r.assign_reason ?? null,
     context: r.context ?? null,
     summary: r.summary ?? null,
-    lane: r.lane ?? null,
     due: r.due ?? null,
     blockedBy: r.blocked_by ? JSON.parse(r.blocked_by) : null,
     rejected: !!r.rejected,
@@ -54,7 +53,7 @@ export function getTask(id: number): Task | undefined {
 }
 
 export type TaskPatch = Partial<
-  Pick<Task, "title" | "status" | "assignee" | "assignReason" | "sort" | "lane" | "context" | "summary" | "due" | "blockedBy" | "rejected">
+  Pick<Task, "title" | "status" | "assignee" | "assignReason" | "sort" | "context" | "summary" | "due" | "blockedBy" | "rejected">
 >;
 
 /** 複数タスクの一括更新 (#60)。完了遷移はまとめて1回だけ通知する (要約再生成のバッチ化)。
@@ -73,14 +72,13 @@ export function updateTasks(patches: { id: number; patch: TaskPatch }[]): (Task 
     // 他の列の更新で上げてしまうと、context を書いている側が無関係な変更で弾かれる
     const contextChanged = patch.context !== undefined && patch.context !== cur.context;
     db().prepare(
-      "UPDATE tasks SET title = ?, status = ?, assignee = ?, assign_reason = ?, sort = ?, lane = ?, context = ?, summary = ?, due = ?, blocked_by = ?, rejected = ?, context_version = context_version + ?, updated_at = datetime('now', 'localtime') WHERE id = ?"
+      "UPDATE tasks SET title = ?, status = ?, assignee = ?, assign_reason = ?, sort = ?, context = ?, summary = ?, due = ?, blocked_by = ?, rejected = ?, context_version = context_version + ?, updated_at = datetime('now', 'localtime') WHERE id = ?"
     ).run(
       next.title,
       next.status,
       next.assignee,
       next.assignReason,
       next.sort,
-      next.lane,
       next.context,
       next.summary,
       next.due,

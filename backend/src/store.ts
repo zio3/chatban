@@ -163,7 +163,11 @@ CREATE TABLE IF NOT EXISTS summary_cards (
     }
   };
   addColumn("ALTER TABLE tasks ADD COLUMN sort REAL");
-  addColumn("ALTER TABLE tasks ADD COLUMN lane TEXT");
+  // #107: lane (demo/later) は廃止。「今回やる/後で」は他ツールでも列(Backlog)やスプリントで
+  // 表すもので、フィールドは代用でしかなかった。実データでも47件中1件しか使われず、
+  // rejected と意味が近いせいで「後回しは却下ではない」という注記をプロンプトに書く羽目になっていた。
+  // #91 で並べ替えをLLMに任せられるようになったので、列の下へ落とすことで表現する
+  addColumn("ALTER TABLE tasks DROP COLUMN lane");
   addColumn("ALTER TABLE tasks ADD COLUMN archived INTEGER NOT NULL DEFAULT 0");
   addColumn("ALTER TABLE tasks ADD COLUMN summary_card_id INTEGER");
   addColumn("ALTER TABLE tasks ADD COLUMN context TEXT");

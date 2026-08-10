@@ -112,6 +112,27 @@ export function currentUser(req: Request): SessionUser | null {
   return verify((req as any).cookies?.[COOKIE]);
 }
 
+/** ループバックからの呼び出しか (初期設定の足場)。プロキシ越しは信用しない */
+function isLocal(req: Request): boolean {
+  const ip = req.socket.remoteAddress ?? "";
+  return ip === "::1" || ip === "127.0.0.1" || ip === "::ffff:127.0.0.1";
+}
+
+/** #113: ログイン設定そのものを触れる相手。
+ *
+ * 他のAPIと違い、ここは「いまのデータ」ではなく「これから誰を通すか」を決める。
+ * 認証offのあいだ誰でも allowedEmails を書けると、自分のメールを仕込んでおいて
+ * onにした瞬間に入れる — 認証を先回りして乗っ取れてしまう (自動レビュー指摘)。
+ *
+ * オーナーが決まっていれば本人だけ、まだ誰も居なければローカルからだけ。
+ * 認証のon/offに関わらず同じ判定にする (offだから緩い、にしない) */
+export function canEditAuthSettings(req: Request): boolean {
+  const list = allowedEmails();
+  if (list.length === 0) return isLocal(req);
+  const me = currentUser(req);
+  return !!me && list.includes(me.email.toLowerCase());
+}
+
 /** 保護。認証offなら素通し。MCPはこのミドルウェアの外に置く */
 export function requireAuth(req: Request, res: Response, next: NextFunction) {
   if (!authEnabled()) return next();

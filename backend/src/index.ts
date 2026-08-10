@@ -9,7 +9,15 @@ import { estimateCallCost, fetchBillingUsage, fetchModelCatalog, getModel, MODEL
 import { generateSuggestions, runChatTurn } from "./chat.js";
 import { archiveState, hooks } from "./hooks.js";
 import { log } from "./log.js";
-import { authEnabled, cookieMaxAge, cookieName, currentUser, loginWithGoogle, requireAuth } from "./auth.js";
+import {
+  authEnabled,
+  canEditAuthSettings,
+  cookieMaxAge,
+  cookieName,
+  currentUser,
+  loginWithGoogle,
+  requireAuth,
+} from "./auth.js";
 import { buildMcpServer } from "./mcp.js";
 import { resetPromptState } from "./promptState.js";
 import { assertTimezone } from "./timezone.js";
@@ -447,7 +455,8 @@ const SLOTS: ModelSlot[] = ["main", "archive", "cheap"];
 // #113: ログイン設定 (GoogleクライアントIDと、通してよいメール)。
 // env ではなくDBに置くのは、⚙設定タブから再起動なしで変えられるようにするため (#88と同じ)。
 // クライアントIDは公開情報 (フロントに出る)。シークレットはこの方式では使わないので持たない
-app.get("/api/settings/auth", (_req, res) => {
+app.get("/api/settings/auth", (req, res) => {
+  if (!canEditAuthSettings(req)) return res.status(403).json({ error: "forbidden", canEdit: false });
   res.json({
     clientId: getSetting("auth.googleClientId") ?? "",
     allowedEmails: getSetting("auth.allowedEmails") ?? "",
@@ -456,6 +465,11 @@ app.get("/api/settings/auth", (_req, res) => {
 });
 
 app.post("/api/settings/auth", (req, res) => {
+  // 「これから誰を通すか」を決める口なので、認証offでも素通しにしない
+  if (!canEditAuthSettings(req))
+    return res.status(403).json({
+      error: "ログイン設定を変更できるのは、許可リストに載っているアカウントでログインした場合だけです",
+    });
   const { clientId, allowedEmails } = req.body ?? {};
   if (typeof clientId === "string") setSetting("auth.googleClientId", clientId.trim());
   if (typeof allowedEmails === "string") setSetting("auth.allowedEmails", allowedEmails.trim());

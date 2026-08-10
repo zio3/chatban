@@ -196,6 +196,9 @@ export function updateTasks(patches: { id: number; patch: TaskPatch }[]): (Task 
   const results = patches.map(({ id, patch }) => {
     const cur = getTask(id);
     if (!cur) return undefined;
+    // #87: 空文字の担当は「未割り当て」の意図。文字列""のまま保存すると
+    // 誰にも割り当たっていないのにフィルタにも負荷計算にも乗らない幽霊状態になる
+    if (patch.assignee === "") patch = { ...patch, assignee: null };
     const next = { ...cur, ...patch };
     db.prepare(
       "UPDATE tasks SET title = ?, status = ?, assignee = ?, reason = ?, sort = ?, lane = ?, context = ?, due = ?, blocked_by = ?, rejected = ?, updated_at = datetime('now', 'localtime') WHERE id = ?"

@@ -251,21 +251,43 @@ async function execTool(name: string, args: any, uiActions: UiAction[], events: 
       // 一括更新は db 層でまとめて処理 (完了遷移の通知=要約再生成が1回で済む #60)
       const updated = updateTasks(
         (args.updates as any[]).map((u) => {
+          // #87: 「差分だけ送る」モデルを前提にしない。全フィールドをエコーバックするモデル
+          // (実測: gpt-5.6-terra) だと、変更していない値まで patch に載って既存値を壊す。
+          // 現在値と突き合わせ、実際に変わったフィールドだけを通す
+          const cur = getTask(u.id);
+          const changed = <T>(incoming: T | undefined, current: T) => incoming !== undefined && incoming !== current;
+          const assignee = u.assignee === "" ? null : u.assignee; // 空文字は「未割り当て」の意図とみなす
+          const lane = u.lane === "" ? null : u.lane;
+          const due = u.due === "" ? null : u.due;
+          const blockedBy = u.blocked_by === undefined ? undefined : (u.blocked_by ?? null);
+          const sameDeps =
+            blockedBy !== undefined &&
+            JSON.stringify(blockedBy ?? []) === JSON.stringify(cur?.blockedBy ?? []);
+
+          const statusChanged = changed(u.status, cur?.status);
+          const assigneeChanged = changed(assignee, cur?.assignee ?? null);
+          const rejectedChanged = u.rejected !== undefined && !!u.rejected !== !!cur?.rejected;
+
           // reason上書きガード: 担当・状態の変更を伴わない更新(lane/due/依存のみ等)で
-          // LLMがreasonを添えると既存の割り振り理由が破壊されるため無視する (実事故2件の再発防止)
+          // LLMがreasonを添えると既存の割り振り理由が破壊されるため無視する (実事故2件の再発防止)。
+          // 空文字のreasonは常に拒否する — 理由を「消す」操作に意味はない
           const keepReason =
-            u.reason !== undefined && (u.assignee !== undefined || u.status !== undefined || u.rejected !== undefined);
+            typeof u.reason === "string" &&
+            u.reason.trim() !== "" &&
+            u.reason !== cur?.reason &&
+            (assigneeChanged || statusChanged || rejectedChanged);
+
           return {
             id: u.id,
             patch: {
-              ...(u.title !== undefined ? { title: u.title } : {}),
-              ...(u.status !== undefined ? { status: u.status as TaskStatus } : {}),
-              ...(u.assignee !== undefined ? { assignee: u.assignee } : {}),
+              ...(changed(u.title, cur?.title) ? { title: u.title } : {}),
+              ...(statusChanged ? { status: u.status as TaskStatus } : {}),
+              ...(assigneeChanged ? { assignee } : {}),
               ...(keepReason ? { reason: u.reason } : {}),
-              ...(u.lane !== undefined ? { lane: u.lane } : {}),
-              ...(u.due !== undefined ? { due: u.due } : {}),
-              ...(u.blocked_by !== undefined ? { blockedBy: u.blocked_by } : {}),
-              ...(u.rejected !== undefined ? { rejected: !!u.rejected } : {}),
+              ...(changed(lane, cur?.lane ?? null) ? { lane } : {}),
+              ...(changed(due, cur?.due ?? null) ? { due } : {}),
+              ...(blockedBy !== undefined && !sameDeps ? { blockedBy } : {}),
+              ...(rejectedChanged ? { rejected: !!u.rejected } : {}),
             },
           };
         })

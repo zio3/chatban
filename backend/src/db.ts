@@ -528,3 +528,44 @@ export function reorderTasks(ids: number[], status?: TaskStatus): { ordered: num
   db().transaction(() => final.forEach((t, i) => stmt.run(i + 1, t.id)))();
   return { ordered: ordered.length, appended: appended.length };
 }
+
+// #103: 経緯の横断検索。LLMが表記ゆれを自分で展開して複数語を投げ、コードは総当たりするだけ。
+//
+// ベクトル検索を入れなかったのは、埋め込みが持つ「意味の近さ」をLLM自身が既に持っているから。
+// 「DBを分ける」と「ファイル分離」が近いことを知っているのはLLMなので、そこを外部インデックスに
+// 出す必要がない。LLMが語を並べ(判断)、コードが総当たりする(機械的処理) — #91の並べ替えと同じ形。
+//
+// アーカイブ済みも対象にする。経緯を後から辿りたい場面はDoneになった後のほうが多い。
+export function searchTasks(terms: string[], limit = 10) {
+  const words = terms.map((t) => t.trim()).filter(Boolean).slice(0, 10);
+  if (words.length === 0) return { hits: [] };
+  const rows = db()
+    .prepare(
+      "SELECT id, title, status, assignee, summary, assign_reason, context, archived FROM tasks WHERE trashed_at IS NULL"
+    )
+    .all() as any[];
+
+  const scored = rows
+    .map((r) => {
+      const haystack = [r.title, r.summary, r.assign_reason, r.context].filter(Boolean).join("\n");
+      const lower = haystack.toLowerCase();
+      const matched = words.filter((w) => lower.includes(w.toLowerCase()));
+      if (matched.length === 0) return null;
+      // 当たった箇所の前後だけ返す。全文を返すとトークンがそのままコストになる
+      const at = lower.indexOf(matched[0].toLowerCase());
+      const snippet = haystack.slice(Math.max(0, at - 70), at + 130).replace(/\s+/g, " ");
+      return {
+        id: r.id,
+        title: r.title,
+        status: r.archived ? "archived" : r.status,
+        assignee: r.assignee,
+        matched, // どの語で当たったか (LLMが次の語を選び直す材料になる)
+        snippet,
+      };
+    })
+    .filter(Boolean) as any[];
+
+  // 多くの語に当たったものほど関連が強い、という素朴な順位付けで十分
+  scored.sort((a, b) => b.matched.length - a.matched.length || b.id - a.id);
+  return { hits: scored.slice(0, limit), searched: words };
+}

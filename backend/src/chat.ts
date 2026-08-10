@@ -15,6 +15,7 @@ import {
   recentActivity,
   reorderTasks,
   resolveProposal,
+  searchTasks,
   setProjectContext,
   updateTask,
   updateTasks,
@@ -232,6 +233,21 @@ const tools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
   {
     type: "function",
     function: {
+      name: "search_tasks",
+      description:
+        "タスクの本文(タイトル・現況・経緯メモ・担当理由)を横断検索する。アーカイブ済みも対象。表記ゆれや言い換えは自分で展開して複数語を渡すこと(OR検索・当たった語が返る)。例: 「なんでDB分けたんだっけ」→ terms:[\"DB\",\"データベース\",\"ファイル分離\",\"分割\",\"プロジェクト\"]",
+      parameters: {
+        type: "object",
+        properties: {
+          terms: { type: "array", items: { type: "string" }, description: "検索語(最大10)。言い換え・英日表記を並べる" },
+        },
+        required: ["terms"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
       name: "compact_archive",
       description: "要約カードを1枚の過去ログに統合する",
       parameters: { type: "object", properties: {} },
@@ -405,6 +421,17 @@ async function execTool(name: string, args: any, uiActions: UiAction[], events: 
         ...(r.appended > 0 ? { note: `${r.appended}件は順番の指定に含まれていなかったので末尾に置きました` } : {}),
       };
     }
+    case "search_tasks": {
+      const r = searchTasks(args.terms ?? []);
+      // スニペットは「当たった箇所の周辺」でしかないので、判断の核心が範囲外にあることが多い。
+      // 検索は「どのタスクか」を絞るまでの道具と位置づけ、中身は get_task_details で読ませる
+      return {
+        ...r,
+        ...(r.hits.length > 0
+          ? { note: "snippetは当たった箇所の周辺のみ。理由や判断を答えるときは get_task_details で経緯メモの全文を読むこと" }
+          : {}),
+      };
+    }
     case "compact_archive": {
       try {
         const result = await compactArchive();
@@ -452,6 +479,7 @@ function buildSystemPrompt(taskFocus?: ReturnType<typeof getTask>, speaker?: str
     "- 特定タスクの経緯・決定事項・補足(「#22は◯◯方式でいくことにした」等)は update_task_context でそのタスクの経緯メモに記録する。",
     "- assign_reason は「なぜこの担当か」、summary は「いまどうなっているか」。別の情報なので混ぜない。進捗・完了報告は summary に一言で書き、詳細な根拠は経緯メモ(context)に書く。",
     "- 「ログ整頓して」は compact_archive を使う。完了タスクのアーカイブは自動なので手動操作は不要。",
+    "- 過去の判断や経緯を聞かれたら(「なんで◯◯にしたんだっけ」)、索引のタイトルだけで答えず search_tasks で本文を引く。言い換え・英日表記を自分で並べて渡し、空振りしたら語を変えて引き直す。検索結果のsnippetは断片なので、理由を答える前に get_task_details で経緯メモの全文を読む。",
     "- 削除と却下は文脈で使い分ける: 誤登録・重複・ダミー(「消して」「間違えた」)は delete_tasks (ゴミ箱行きで復元可。返答で復元方法を説明する必要はない)。やらない決定(「見送り」「却下」「やらないことにした」)は削除せず update_tasks で status=review + rejected=true にし、reason に却下の根拠を書いて「却下としてReviewに置きました。検収で確定します」と返す (検収後、決定として要約アーカイブに残る)。",
     "- 「消して」がタスクそのものを指すのか、タイトルや文言の一部の修正を指すのか曖昧なときは、操作せず確認する (実例:「#95だけ発言者の話が入っていて不自然なので消せますか?」はタイトルの修正依頼だったが、タスクごと削除してしまった)。",
     "- ボードから退場するもの(完了・却下)は必ずReviewを通り、人間の検収チェックで確定する。チャットからdoneへ直行する経路は存在しない。",
@@ -544,6 +572,7 @@ const TOOL_LABELS: Record<string, string> = {
   compact_archive: "過去ログを整頓",
   get_activity: "最近の動きを確認",
   reorder_tasks: "並び順を変更",
+  search_tasks: "経緯を検索",
   get_task_details: "タスク詳細を取得",
   update_task_context: "経緯メモを更新",
   resolve_proposals: "提案を承認/却下",

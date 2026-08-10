@@ -11,6 +11,7 @@ import {
   listTasks,
   memberLoads,
   metrics,
+  searchTasks,
   setProjectContext,
   updateTasks,
 } from "./db.js";
@@ -161,6 +162,16 @@ export function buildMcpServer(onEvent: (kind: "board" | "proposals") => void): 
       onEvent("proposals");
       return text({ ok: true, proposals: created });
     }
+  );
+
+  server.registerTool(
+    "search_tasks",
+    {
+      description:
+        "タスクの本文(タイトル・現況・経緯メモ・担当理由)を横断検索する。アーカイブ済みも対象。表記ゆれや言い換えは自分で展開して複数語を渡す(OR検索)",
+      inputSchema: { terms: z.array(z.string()).describe("検索語(最大10)。言い換え・英日表記を並べる") },
+    },
+    async ({ terms }) => text(searchTasks(terms))
   );
 
   server.registerTool(

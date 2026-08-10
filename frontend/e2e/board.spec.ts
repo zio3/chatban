@@ -501,3 +501,25 @@ test("依存チップをクリックすると依存先の詳細が開く (カー
   await expect(panel).toContainText("依存先のタスク");
   await expect(panel).not.toContainText("依存元のタスク");
 });
+
+test("パネルから依存を双方向に辿れる (これ待ち → 待ち) (#111)", async ({ page }) => {
+  const depId = await createTask("先に終わらせるタスク", "inprogress");
+  const id = await createTask("それを待っているタスク");
+  await fetch(`${API}/api/tasks/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ blockedBy: [depId] }),
+  });
+
+  await page.goto("/");
+  const panel = page.getByTestId("task-detail-panel");
+
+  // 依存先を開くと「これ待ち」に依存元が出る (逆引き。片方向だと行き止まりになる)
+  await page.getByTestId(`task-card-${depId}`).click();
+  await expect(panel).toContainText("これ待ち");
+  await panel.getByTestId(`dep-chip-${id}`).click();
+
+  // 戻ってきた側には「待ち」で依存先が出る
+  await expect(panel).toContainText("それを待っているタスク");
+  await expect(panel.getByTestId(`dep-chip-${depId}`)).toBeVisible();
+});

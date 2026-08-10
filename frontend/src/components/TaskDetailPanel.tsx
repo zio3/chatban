@@ -34,6 +34,9 @@ export default function TaskDetailPanel({
   onOpenTask?: (id: number) => void;
 }) {
   const status = STATUS_LABELS[task.status];
+  // #111: このタスクを待っている側 (被依存)。データは blocked_by にあるので逆引きで足りる。
+  // 索引に載るのは未完了タスクだけだが、完了したものはもう待っていないので実用上それでよい
+  const dependents = [...(taskById?.values() ?? [])].filter((t) => t.blockedBy?.includes(task.id));
   const [width, setWidth] = useState(() => {
     const saved = Number(localStorage.getItem("chatban.panelWidth"));
     return saved >= 320 ? saved : 400;
@@ -165,8 +168,8 @@ export default function TaskDetailPanel({
             <span className="rounded bg-amber-50 px-1.5 py-0.5 text-[10px] text-amber-700">⏰ 期限 {task.due}</span>
           )}
           {task.blockedBy && task.blockedBy.length > 0 && (
-            <span className="text-[10px] text-slate-400">
-              ⛓{" "}
+            <span className="text-[10px] text-slate-400" title="このタスクが待っている先">
+              ⛓ 待ち{" "}
               {task.blockedBy.map((id) => (
                 <DepChip
                   key={id}
@@ -175,6 +178,16 @@ export default function TaskDetailPanel({
                   unresolved={(taskById?.get(id)?.status ?? "done") !== "done"}
                   onOpen={onOpenTask}
                 />
+              ))}
+            </span>
+          )}
+          {/* #111: 逆方向。依存は片方向にしか辿れないと行き止まりになる。
+              「これを終わらせると何が動き出すか」は優先順位の判断材料そのもの */}
+          {dependents.length > 0 && (
+            <span className="text-[10px] text-slate-400" title="このタスクの完了を待っているタスク">
+              🔓 これ待ち{" "}
+              {dependents.map((d) => (
+                <DepChip key={d.id} id={d.id} dep={d} unresolved tone="waiting" onOpen={onOpenTask} />
               ))}
             </span>
           )}

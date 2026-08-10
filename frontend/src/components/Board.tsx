@@ -44,11 +44,14 @@ export function DepChip({
   dep,
   unresolved,
   onOpen,
+  tone = "blocking",
 }: {
   id: number;
   dep?: Task;
   unresolved: boolean;
   onOpen?: (id: number) => void;
+  /** blocking=このタスクが待っている先 / waiting=このタスクを待っている側 (#111) */
+  tone?: "blocking" | "waiting";
 }) {
   const label = dep
     ? `#${id} ${dep.title}
@@ -65,7 +68,11 @@ ${dep.summary}` : ""}
         onOpen?.(id);
       }}
       className={`mr-1 inline-block cursor-pointer rounded px-1 py-0.5 text-[10px] hover:ring-1 hover:ring-violet-300 ${
-        unresolved ? "bg-violet-100 font-bold text-violet-700" : "bg-slate-100 text-slate-400 line-through"
+        tone === "waiting"
+          ? "bg-sky-100 text-sky-700"
+          : unresolved
+            ? "bg-violet-100 font-bold text-violet-700"
+            : "bg-slate-100 text-slate-400 line-through"
       }`}
     >
       #{id}

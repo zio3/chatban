@@ -41,11 +41,16 @@ export async function regenerateCard(cardId: number): Promise<SummaryCard | unde
     updateCardContent(cardId, null, card.elements.filter((e) => e.checked));
     return getSummaryCard(cardId);
   }
+  // #92: 経緯メモ(context)と現況(summary)も渡す。タイトルだけでは「何をしたか」しか残らず、
+  // 「なぜそうしたか」が蒸留に入らない — 経緯を貯めても要約に活きないなら貯める意味が薄い。
+  // contextは長くなりがちなので頭を切る (要約の材料には結論と理由があれば足りる)
   const taskData = tasks.map((t) => ({
     id: t.id,
     title: t.title,
     assignee: t.assignee,
     reason: t.assignReason,
+    ...(t.summary ? { summary: t.summary } : {}),
+    ...(t.context ? { context: t.context.slice(0, 800) } : {}),
     ...(t.rejected ? { rejected: true } : {}),
   }));
   const checkedElements = card.elements.filter((e) => e.checked);
@@ -59,6 +64,7 @@ export async function regenerateCard(cardId: number): Promise<SummaryCard | unde
           "完了タスク群を、人間が後で確認する価値のある単位に分解して要約する。",
           "ルール:",
           "- 単なる件数ではなく、決定事項・担当の偏り・成果の内容が残る形に凝縮する",
+          "- context(経緯メモ)には「なぜそうしたか」「何を検討して何を捨てたか」が書かれている。タイトルの言い換えで終わらせず、そこにしかない判断を要素文に残す (例: 「並べ替えを実装」ではなく「並べ替えはソートキー方式を捨て、LLMが決めた順番を受け取る方式にした」)",
           "- 関連するタスクはまとめて1要素にする。タスクIDを #n 形式で含める",
           "- 些末なタスク(動作検証・軽微な修正等)は独立要素にせず省いてよい。省いた分は末尾に「ほか軽微N件 (#x, #y)」として1行でまとめる",
           "- rejected=true のタスクは「やらないと決めた」決定。省かず、要素の先頭に【却下】と付け、reason の却下理由を要素文に残す (なぜやらないかが後から分かるように)",

@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <!-- ChatBan: 吹き出し(会話)の中にかんばんの列。「会話がそのままタスク管理になる」を1つの形にする -->
+  <rect width="32" height="32" rx="7" fill="#4f46e5" />
+  <!-- 吹き出し本体 + 左下のしっぽ -->
+  <path
+    d="M8 5h16a4 4 0 0 1 4 4v9a4 4 0 0 1-4 4h-9l-6 5v-5H8a4 4 0 0 1-4-4V9a4 4 0 0 1 4-4z"
+    fill="#ffffff"
+  />
+  <!-- かんばんの3列。高さを変えて「積まれ方が違う」ことを出す -->
+  <rect x="8" y="9" width="4" height="9" rx="1.2" fill="#4f46e5" />
+  <rect x="14" y="12" width="4" height="6" rx="1.2" fill="#818cf8" />
+  <rect x="20" y="10.5" width="4" height="7.5" rx="1.2" fill="#4f46e5" />
+</svg>

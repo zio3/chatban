@@ -44,6 +44,9 @@ export default function App() {
   const [archiveWorking, setArchiveWorking] = useState(false);
   // #21/#33: ボード以外の閲覧ビューへの遷移 (簡易タブ)
   const [view, setView] = useState<"board" | "context" | "metrics" | "audit" | "settings" | "trash">("board");
+  // #93: チャットは常設なので、いま見ている画面をメタ情報としてLLMへ渡す (発言者と同じ扱い)
+  const viewRef = useRef(view);
+  viewRef.current = view;
   // #14 → #90: なりきりの切替UIは撤去。デモでは人フィルタが見えれば足りると判断した。
   // 発言者(speaker)の配線自体は残してあるので、localStorage の chatban.currentUser を
   // 書き換えれば別人として発言できる (音声入力#20と同じく「入口だけ外す」扱い)
@@ -53,7 +56,7 @@ export default function App() {
 
   // メインチャット: ライフサイクル(送信/考え中/停止/タイムアウト/再送)は共有フックに集約 (#23/#28/#29/#30)
   const mainChat = useChatTurn({
-    request: (m, h, signal, attachments) => api.chat(m, h, signal, currentUserRef.current, attachments),
+    request: (m, h, signal, attachments) => api.chat(m, h, signal, currentUserRef.current, attachments, viewRef.current),
     onResponse: (res) => {
       for (const a of res.uiActions) {
         // チャットからの絞り込みは単一指定。nullで解除 (#90でSetに変わったため詰め替える)
@@ -229,14 +232,24 @@ export default function App() {
     fetchAiSuggestions();
   }, [mainChat.stop, mainChat.setLog, fetchAiSuggestions]);
 
-  // 「何を話しかければいいか分からない人」向けのユースケース導線。ボード状態で出し分ける
+  // 「何を話しかければいいか分からない人」向けのユースケース導線。ボード状態で出し分ける。
+  // #93: チャットは常設(#74)なので、ボード以外を見ているときはその画面の話ができるチップを出す
   const suggestions: Suggestion[] = [];
   const unassigned = tasks.filter((t) => t.status !== "done" && !t.assignee);
+  const VIEW_SUGGESTIONS: Partial<Record<typeof view, Suggestion[]>> = {
+    context: [{ label: "📋 前提情報に追記したい", message: "前提情報に追記したいことがある。いまの内容を踏まえて相談したい" }],
+    metrics: [{ label: "💰 何にお金がかかってる?", message: "AI利用のコストは何にかかっている? 節約する余地はある?" }],
+    audit: [{ label: "🕘 直近なにをしてた?", message: "直近の作業を時系列で簡潔にまとめて" }],
+    trash: [{ label: "↩ 消したものを戻したい", message: "ゴミ箱に入れたタスクを戻したい" }],
+    settings: [{ label: "🤖 モデルの選び方を教えて", message: "用途別モデルはどう選ぶのがいい? いまの設定の意図も教えて" }],
+  };
   // 新規プロジェクト(まだ何も無い)では、レポートも割り振りも中身が無い。
   // 最初にやるべきは方針を伝えること — 前提情報はAIの振る舞いを決める介入チャネル (#81) なので、
   // ここを埋めるところから始まるのが自然。チップは1つに絞る
   const isEmptyBoard = tasks.length === 0 && summaryCards.length === 0;
-  if (isEmptyBoard) {
+  if (view !== "board") {
+    suggestions.push(...(VIEW_SUGGESTIONS[view] ?? []));
+  } else if (isEmptyBoard) {
     suggestions.push({
       label: "🧭 このプロジェクトの方針を伝える",
       message: "このプロジェクトの前提や方針を登録したい。何を教えればいい?",

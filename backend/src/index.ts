@@ -216,7 +216,7 @@ app.post("/api/proposals/:id/:action", (req, res) => {
 
 let chatSeq = 0;
 app.post("/api/chat", async (req, res) => {
-  const { message, history, speaker, attachments } = req.body ?? {};
+  const { message, history, speaker, attachments, view } = req.body ?? {};
   if (!message) return res.status(400).json({ error: "message required" });
   const id = ++chatSeq;
   const t0 = Date.now();
@@ -239,7 +239,8 @@ app.post("/api/chat", async (req, res) => {
       (label) => io.to(room(currentProjectId())).emit("chat:progress", { label }), // 応答完了前の逐次フィードバック
       undefined,
       speaker,
-      attachments
+      attachments,
+      view
     );
     // 会話ログはサーバーに永続化する (添付は原本を保存せず名前だけ記録 #68)
     saveChatMessage("user", message + (attachments?.length ? ` [添付: ${attachments.map((a: any) => a.name).join(", ")}]` : ""));
@@ -263,7 +264,7 @@ app.get("/api/chat/log", (req, res) => {
 // タスク専用チャット (#24): 対象タスクの全詳細をシステムプロンプトに注入し、会話はtask_id付きで分離保存
 app.post("/api/tasks/:id/chat", async (req, res) => {
   const taskId = Number(req.params.id);
-  const { message, history, speaker, attachments } = req.body ?? {};
+  const { message, history, speaker, attachments, view } = req.body ?? {};
   if (!message) return res.status(400).json({ error: "message required" });
   const id = ++chatSeq;
   const t0 = Date.now();
@@ -279,7 +280,8 @@ app.post("/api/tasks/:id/chat", async (req, res) => {
       (label) => io.to(room(currentProjectId())).emit("chat:progress", { label, taskId }),
       taskId,
       speaker,
-      attachments
+      attachments,
+      view
     );
     saveChatMessage(
       "user",

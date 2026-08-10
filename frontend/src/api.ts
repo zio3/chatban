@@ -88,12 +88,14 @@ export const api = {
     history: { role: "user" | "assistant"; content: string }[],
     signal?: AbortSignal,
     speaker?: string,
-    attachments?: { kind: "image" | "pdf"; name: string; dataUrl: string }[]
+    attachments?: { kind: "image" | "pdf"; name: string; dataUrl: string }[],
+    /** #93: いま見ている画面。曖昧な指示語をタブの文脈で解決するためのメタ情報 */
+    view?: string
   ) =>
     apiFetch("/api/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message, history, speaker, attachments }),
+      body: JSON.stringify({ message, history, speaker, attachments, view }),
       signal,
     }).then((r) => json<ChatResponse>(r)),
 };

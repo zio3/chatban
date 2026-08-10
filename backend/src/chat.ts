@@ -383,7 +383,7 @@ async function execTool(name: string, args: any, uiActions: UiAction[], events: 
   }
 }
 
-function buildSystemPrompt(taskFocus?: ReturnType<typeof getTask>, speaker?: string): string {
+function buildSystemPrompt(taskFocus?: ReturnType<typeof getTask>, speaker?: string, view?: string): string {
   const loads = memberLoads();
   const history = assignmentHistory();
   const pending = listPendingProposals();
@@ -436,6 +436,9 @@ function buildSystemPrompt(taskFocus?: ReturnType<typeof getTask>, speaker?: str
     JSON.stringify(history.slice(0, 10).map((h) => ({ t: h.taskTitle.slice(0, 30), a: h.assignee }))),
     "",
     pending.length ? `## 承認待ちの割り振り提案\n${JSON.stringify(pending)}` : "",
+    // #93: いま見ている画面。発言者と同じくメタ情報 (本文には混ぜない)。
+    // 「これ何?」「これ高くない?」のような指示語をタブの文脈で解決するために渡す
+    VIEW_HINTS[view ?? ""] ?? "",
     // 発言者はメタ情報。本文に混ぜるとタスクへ書き写されるので、ここで「書き写すな」と添えて渡す
     speaker
       ? `\n## いまの発言者: ${speaker}\n「終わりました」等の曖昧な言い回しの主語はこの人。これはメタ情報であって発言内容ではないので、タスクのタイトル・経緯メモ・理由には書き写さないこと。`
@@ -453,6 +456,37 @@ function buildSystemPrompt(taskFocus?: ReturnType<typeof getTask>, speaker?: str
     .filter(Boolean)
     .join("\n");
 }
+
+// #93: 画面ごとの文脈。チャットは常設 (#74) なので、ボード以外を見ているときも
+// 「その画面の話」ができないと噛み合わない。操作できないものは断り方まで決めておく。
+// 発言者と同じくメタ情報なので、動的セクションの末尾に置く (キャッシュのプレフィックスを崩さない)
+const VIEW_HINTS: Record<string, string> = {
+  context: [
+    "",
+    "## いま見ている画面: 📋前提情報",
+    "チームの前提情報を見ている。「ここに◯◯を足して」等は update_project_context で反映する。",
+  ].join("\n"),
+  metrics: [
+    "",
+    "## いま見ている画面: 📊コスト",
+    "AI利用のコストを見ている。「これ高い?」等はこの画面の話。個々の金額はシステムプロンプトに無いので、憶測で数字を言わず画面の値を読むよう促す。",
+  ].join("\n"),
+  audit: [
+    "",
+    "## いま見ている画面: 📜監査",
+    "会話・LLM呼び出し・割り振り履歴のログを見ている。「直近何やってた?」等はボードの状態と経緯メモから答える。",
+  ].join("\n"),
+  trash: [
+    "",
+    "## いま見ている画面: 🗑ゴミ箱",
+    "削除したタスクを見ている。「#xxを戻して」は restore_tasks で復元する。",
+  ].join("\n"),
+  settings: [
+    "",
+    "## いま見ている画面: ⚙設定",
+    "モデル設定を見ている。設定を変えるツールは持っていないので、頼まれても実行せず、意味を説明したうえで「この画面から変更してください」と案内する (例: 対話モデルは応答速度とプロンプトキャッシュが効くので日付つきIDで固定するのが安全)。",
+  ].join("\n"),
+};
 
 const TOOL_LABELS: Record<string, string> = {
   create_tasks: "タスクを追加",
@@ -548,7 +582,8 @@ export async function runChatTurn(
   onProgress?: (label: string) => void,
   taskFocusId?: number,
   speaker?: string,
-  attachments?: ChatAttachment[]
+  attachments?: ChatAttachment[],
+  view?: string
 ): Promise<ChatResult> {
   const t0 = Date.now();
   const taskFocus = taskFocusId != null ? getTask(taskFocusId) : undefined;
@@ -566,7 +601,7 @@ export async function runChatTurn(
   const userContent: OpenAI.Chat.Completions.ChatCompletionUserMessageParam["content"] =
     fileParts.length > 0 ? [{ type: "text", text: baseText }, ...fileParts] : baseText;
   const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
-    { role: "system", content: buildSystemPrompt(taskFocus, speaker) },
+    { role: "system", content: buildSystemPrompt(taskFocus, speaker, view) },
     ...history.slice(-20),
     { role: "user", content: userContent },
   ];

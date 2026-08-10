@@ -30,12 +30,14 @@ cd backend; npx tsc --noEmit           # 型チェック (frontendも同様)
 ## APIキー・モデル
 
 - OrcaRouter APIキー: 環境変数 `ORCAROUTER_API_KEY` または `~\.orcarouter\apikey.txt` (1行)。**キーの値をチャットやログに出さない**
-- モデルは用途別 (Day2実測で決定): 対話=`anthropic/claude-haiku-4.5`固定 / 要約分解=`orcarouter/auto` / 定型=`orcarouter/fusion-mini`。env `ORCA_MODEL_MAIN` / `ORCA_MODEL_ARCHIVE` / `ORCA_MODEL_CHEAP` で上書き可
+- モデルは用途別: 対話=`openai/gpt-5.4-mini-2026-03-17`固定 / 要約分解=`orcarouter/auto` / 定型=`orcarouter/fusion-mini`。env `ORCA_MODEL_MAIN` / `ORCA_MODEL_ARCHIVE` / `ORCA_MODEL_CHEAP` で上書き可。**実行時の切り替えは⚙設定タブから** (#88、再起動不要)
+- 対話モデルは**日付つきスナップショットIDで固定する**。プロンプトキャッシュはモデルごとに別物なので、エイリアスや`orcarouter/auto`だとキャッシュが乗らない (「プレフィックスを安定させる」だけでは足りず「モデルを固定する」が対になる)
 - モデルIDは `provider/model` 形式必須 (`gpt-4o-mini` 等は model_not_found)
 
 ## 開発運用 (ドッグフーディング)
 
-- **ChatBan自体の改修タスクは ChatBan のボードで管理する**。MCPツール (`mcp__chatban__*`) で登録→担当Claude→実装→review。障害級の問題だけチャット直
+- **ChatBan自体の改修タスクは ChatBan のボードで管理する**。MCPツール (`mcp__chatban__*`) で登録→実装→review。障害級の問題だけチャット直
+- **担当者は責任を持つ人間。Claudeを担当者にしない**。依頼元の人間を担当者のままにし、実装したのがClaudeであることは経緯メモに書く (「実装完了 (commit xxx)」)。AIは道具であって責任主体ではない — 「AIは提案、確定は人間」と同じ線引き
 - **完了はreview検収経由 (#57)**: 実装が終わったら status=review に置く (doneにしない)。done は人間 (zio) の検収のみ。Doneは「置き場」でなく「検収の結果」
 - **Reviewに置くとき検収エビデンスを経緯メモに添付する (#66)**: 実測結果・コミットID・スクショ(docs/evidence/)・未検証項目の明示。人間は根拠を見て✓するだけにする
 - **タスク1件 = 1コミット**。コミットメッセージは `#<taskId> <要約>` 形式

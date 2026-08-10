@@ -111,7 +111,7 @@ const tools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
     type: "function",
     function: {
       name: "delete_tasks",
-      description: "タスクをゴミ箱に入れる(複数可)。実データは残り「戻して」で復元できる",
+      description: "タスクをゴミ箱に入れる(複数可)。実データは残り restore_tasks や画面から復元できる",
       parameters: {
         type: "object",
         properties: { ids: { type: "array", items: { type: "integer" } } },
@@ -407,7 +407,8 @@ function buildSystemPrompt(taskFocus?: ReturnType<typeof getTask>, speaker?: str
     "- チーム共通の前提・決まりごと(締切、方針、用語など)を伝えられたら update_project_context で前提情報に反映する。",
     "- 特定タスクの経緯・決定事項・補足(「#22は◯◯方式でいくことにした」等)は update_task_context でそのタスクの経緯メモに記録する。",
     "- 「ログ整頓して」は compact_archive を使う。完了タスクのアーカイブは自動なので手動操作は不要。",
-    "- 削除と却下は文脈で使い分ける: 誤登録・重複・ダミー(「消して」「間違えた」)は delete_tasks。やらない決定(「見送り」「却下」「やらないことにした」)は削除せず update_tasks で status=review + rejected=true にし、reason に却下の根拠を書いて「却下としてReviewに置きました。検収で確定します」と返す (検収後、決定として要約アーカイブに残る)。どちらか曖昧なら操作せず確認する。",
+    "- 削除と却下は文脈で使い分ける: 誤登録・重複・ダミー(「消して」「間違えた」)は delete_tasks (ゴミ箱行きで復元可。返答で復元方法を説明する必要はない)。やらない決定(「見送り」「却下」「やらないことにした」)は削除せず update_tasks で status=review + rejected=true にし、reason に却下の根拠を書いて「却下としてReviewに置きました。検収で確定します」と返す (検収後、決定として要約アーカイブに残る)。",
+    "- 「消して」がタスクそのものを指すのか、タイトルや文言の一部の修正を指すのか曖昧なときは、操作せず確認する (実例:「#95だけ発言者の話が入っていて不自然なので消せますか?」はタイトルの修正依頼だったが、タスクごと削除してしまった)。",
     "- ボードから退場するもの(完了・却下)は必ずReviewを通り、人間の検収チェックで確定する。チャットからdoneへ直行する経路は存在しない。",
     "- 「後回し」「今はやらない」「凍結後で」は却下ではない: update_tasks で lane を \"later\" にするだけ。status は変えない (done にするとアーカイブに吸い込まれる)。デモに必要なら lane を \"demo\" に。",
     "- 「金曜まで」「明日まで」等の期限表現は今日の日付から YYYY-MM-DD に解決して due に入れる。期限が近い/過ぎたタスクはレポートや割り振り提案で優先的に言及する。",
@@ -422,7 +423,6 @@ function buildSystemPrompt(taskFocus?: ReturnType<typeof getTask>, speaker?: str
     "- 分類したい → lane (demo/later) か、タイトルの付け方で表現する",
     "- 優先したい → 並び順 (「これ上にして」) で表現する",
     "断るときは設計理由 (語彙が固定だから一言が正確に通じる) を一言添える。",
-    "- 削除はゴミ箱行き (復元可、UIが「元に戻す」を出す)。返答で復元方法を説明する必要はない。ただし「消して」がタスクの削除を指すのか文言の修正を指すのか曖昧なときは、消す前に確認する。",
     "",
     // ---- ここから動的セクション ----
     // #50: ボード状態は「基準スナップショット+変更イベント追記」でプレフィックスを安定させる (promptState.ts)。

@@ -64,18 +64,48 @@ app.use(express.json({ limit: "25mb" })); // #68: 添付(画像/PDFのbase64)を
 const server = http.createServer(app);
 const io = new Server(server, { cors: { origin: "*" } });
 
-function broadcastBoard() {
-  io.emit("board:changed", { tasks: listTasks(), summaryCards: listSummaryCards() });
-}
-function broadcastProposals() {
-  io.emit("proposals:changed", { proposals: listPendingProposals() });
+// #99: 配信はプロジェクト単位のroomへ。全クライアントへの一斉送信だと、
+// タブごとに別プロジェクトを開けるようにした瞬間(#97)に他プロジェクトの更新で画面が壊れる。
+// 「どのプロジェクトの通知か」を送信側が必ず意識する形にしておく。
+//
+// クライアントは接続時に project を指定できる (指定なし=表示中のプロジェクトに追従)。
+// 追従組はプロジェクト切替時にサーバー側でroomを移し替える
+const room = (projectId: number) => `project:${projectId}`;
+
+io.on("connection", (socket) => {
+  const q = socket.handshake.query.project;
+  const requested = q != null ? Number(q) : NaN;
+  const pinned = Number.isFinite(requested) && !!getProject(requested);
+  socket.data.pinned = pinned;
+  socket.join(room(pinned ? requested : activeProjectId()));
+});
+
+/** 表示中プロジェクトが変わったとき、追従組を新しいroomへ移す (明示指定のクライアントはそのまま) */
+function rejoinFollowers(projectId: number) {
+  for (const socket of io.sockets.sockets.values()) {
+    if (socket.data.pinned) continue;
+    for (const r of socket.rooms) if (r.startsWith("project:")) socket.leave(r);
+    socket.join(room(projectId));
+  }
 }
 
-// 要約再生成は非同期で15〜30秒かかるため、実行中件数をUIへ通知する (#56)
-let archiveJobs = 0;
-function archiveJobDelta(delta: number) {
-  archiveJobs = Math.max(0, archiveJobs + delta);
-  io.emit("archive:working", { count: archiveJobs });
+function broadcastBoard(projectId = currentProjectId()) {
+  // 中身の取得もそのプロジェクトのスコープで行う (非同期フックから呼ばれる場合があるため)
+  withProject(projectId, () =>
+    io.to(room(projectId)).emit("board:changed", { tasks: listTasks(), summaryCards: listSummaryCards() })
+  );
+}
+function broadcastProposals(projectId = currentProjectId()) {
+  withProject(projectId, () => io.to(room(projectId)).emit("proposals:changed", { proposals: listPendingProposals() }));
+}
+
+// 要約再生成は非同期で15〜30秒かかるため、実行中件数をUIへ通知する (#56)。
+// 件数はプロジェクトごとに数える — 別プロジェクトの再生成でスピナーが回ると誤解を生む
+const archiveJobs = new Map<number, number>();
+function archiveJobDelta(projectId: number, delta: number) {
+  const next = Math.max(0, (archiveJobs.get(projectId) ?? 0) + delta);
+  archiveJobs.set(projectId, next);
+  io.to(room(projectId)).emit("archive:working", { count: next });
 }
 
 // 完了→即アーカイブ+要約合流 (E2E等ではAUTO_ARCHIVE=0で無効化)
@@ -83,17 +113,15 @@ function archiveJobDelta(delta: number) {
 // #98: フックはリクエストが終わった後に走るので、そのままだとプロジェクトのスコープから外れる。
 // 「MCPでプロジェクト3のタスクを完了 → プロジェクト1の要約カードに合流」という静かな事故を防ぐため、
 // 呼ばれた時点(=まだスコープ内)のプロジェクトIDを捕まえ、非同期処理の中で入り直す。
-// UIへの通知は、そのプロジェクトが表示中のときだけ送る (別プロジェクトの画面を汚さない)
 if (process.env.AUTO_ARCHIVE !== "0") {
   const runScoped = (label: string, job: () => Promise<unknown>) => {
     const projectId = currentProjectId();
-    archiveJobDelta(1);
+    archiveJobDelta(projectId, 1);
     withProject(projectId, job)
-      .then(() => {
-        if (projectId === activeProjectId()) withProject(projectId, async () => broadcastBoard());
-      })
+      // #99: roomへ送るので、表示中かどうかを気にせず「そのプロジェクトの購読者」に届く
+      .then(() => broadcastBoard(projectId))
       .catch((e) => log("archive", `${label} (project #${projectId}) failed: ${e?.message ?? e}`))
-      .finally(() => archiveJobDelta(-1));
+      .finally(() => archiveJobDelta(projectId, -1));
   };
   hooks.tasksCompleted = (taskIds) => runScoped(`tasksCompleted [${taskIds.join(",")}]`, () => onTasksCompleted(taskIds));
   hooks.taskReopened = (taskId) => runScoped(`taskReopened #${taskId}`, () => onTaskReopened(taskId));
@@ -198,7 +226,7 @@ app.post("/api/chat", async (req, res) => {
         if (kind === "board") broadcastBoard();
         else broadcastProposals();
       },
-      (label) => io.emit("chat:progress", { label }), // 応答完了前の逐次フィードバック
+      (label) => io.to(room(currentProjectId())).emit("chat:progress", { label }), // 応答完了前の逐次フィードバック
       undefined,
       speaker,
       attachments
@@ -238,7 +266,7 @@ app.post("/api/tasks/:id/chat", async (req, res) => {
         if (kind === "board") broadcastBoard();
         else broadcastProposals();
       },
-      (label) => io.emit("chat:progress", { label, taskId }),
+      (label) => io.to(room(currentProjectId())).emit("chat:progress", { label, taskId }),
       taskId,
       speaker,
       attachments
@@ -317,6 +345,7 @@ app.post("/api/projects/:id/activate", (req, res) => {
     return res.status(400).json({ error: e?.message ?? "activate failed" });
   }
   resetPromptState(); // ボードが総取っ替えになるのでプロンプトの基準スナップショットを作り直す
+  rejoinFollowers(activeProjectId()); // 追従組を新しいプロジェクトのroomへ移してから配信する
   io.emit("project:changed", { projects: projectSummaries() });
   broadcastBoard();
   broadcastProposals();
@@ -329,7 +358,7 @@ app.patch("/api/projects/:id", (req, res) => {
   if (typeof name === "string" && name.trim()) renameProject(id, name.trim());
   if (Array.isArray(members)) setProjectMembers(id, members);
   io.emit("project:changed", { projects: projectSummaries() });
-  if (id === activeProjectId()) broadcastBoard();
+  broadcastBoard(id);
   res.json({ ok: true, projects: projectSummaries() });
 });
 
@@ -400,10 +429,10 @@ app.post("/mcp/:projectId", async (req, res) => {
     return res.status(400).json({ error: `project #${req.params.projectId} not found`, available: projectList() });
   }
   // 書き込みはこの接続のプロジェクトに対して行う。UIへの通知は表示中のときだけ
+  // #99: 接続先プロジェクトのroomへ送るだけでよい (購読していないクライアントには届かない)
   const mcpServer = buildMcpServer((kind) => {
-    if (projectId !== activeProjectId()) return;
-    if (kind === "board") broadcastBoard();
-    else broadcastProposals();
+    if (kind === "board") broadcastBoard(projectId);
+    else broadcastProposals(projectId);
   });
   const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
   res.on("close", () => {

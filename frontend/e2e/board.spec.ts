@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { io } from "socket.io-client";
 
 const API = "http://localhost:8799";
 
@@ -254,4 +255,41 @@ test("削除はゴミ箱行きで復元できる。実体を消せるのはゴ�
   await expect(page.getByText("ゴミ箱は空です")).toBeVisible(); // 反映を待ってから実体を確認する
   const after = await (await fetch(`${API}/api/trash`)).json();
   expect(after.tasks.some((t: any) => t.id === id)).toBe(false);
+});
+
+test("配信はプロジェクト単位のroomへ届く (#99)", async () => {
+  // ブラウザ2枚での検証はまだできない (サーバー側アクティブが1つなので全画面が同じプロジェクトを見る。
+  // タブごとに別プロジェクトを開けるのは #97)。ここでは接続時にプロジェクトを明示した購読者で確かめる
+  const other = (
+    await (
+      await fetch(`${API}/api/projects`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: "E2E: 配信テスト", members: [] }),
+      })
+    ).json()
+  ).project.id as number;
+
+  const sock = io(API, { query: { project: 1 }, transports: ["websocket"] });
+  const received: number[] = [];
+  sock.on("board:changed", (p: { tasks: unknown[] }) => received.push(p.tasks.length));
+  await new Promise<void>((r) => sock.on("connect", () => r()));
+
+  // プロジェクト1への変更は届く
+  await createTask("E2E: room検証(プロジェクト1)");
+  await expect.poll(() => received.length).toBeGreaterThan(0);
+  const afterFirst = received.length;
+
+  // 別プロジェクトに切り替えて、そちらでタスクを作っても届かない
+  await fetch(`${API}/api/projects/${other}/activate`, { method: "POST" });
+  await fetch(`${API}/api/tasks`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ title: "E2E: room検証(別プロジェクト)" }),
+  });
+  await new Promise((r) => setTimeout(r, 500));
+  expect(received.length).toBe(afterFirst);
+
+  sock.close();
+  await fetch(`${API}/api/projects/1/activate`, { method: "POST" }); // 後続テストのため戻す
 });

@@ -328,3 +328,16 @@ test("タブごとに別プロジェクトを開ける。片方の更新はも�
   await expect(other2.getByTestId("count-todo")).toHaveText("1");
   await ctx.close();
 });
+
+test("Done列のカードはドラッグで持ち出せない (#105)", async ({ page }) => {
+  const id = await createTask("E2E: Doneから持ち出し禁止", "done");
+  await page.goto("/");
+  const card = page.getByTestId("column-done").getByTestId(`task-card-${id}`);
+  await expect(card).toBeVisible();
+
+  // Todo列へドラッグしても動かない (検収後アーカイブ完了までの間に持ち出せると
+  // あとから走るアーカイブ処理が archived=1 にして幽霊タスクになる)
+  await drag(page, card, page.getByTestId("column-todo"));
+  await expect(page.getByTestId("column-done").getByTestId(`task-card-${id}`)).toBeVisible();
+  expect(await getTaskStatus(id)).toBe("done");
+});

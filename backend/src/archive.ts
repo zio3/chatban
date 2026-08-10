@@ -4,6 +4,7 @@ import {
   getSummaryCard,
   assignTaskToCard,
   deleteSummaryCards,
+  getTask,
   listSummaryCards,
   reassignTasksToCard,
   setCardSettled,
@@ -159,8 +160,19 @@ async function rollUpOldCards(): Promise<void> {
 export async function onTasksCompleted(taskIds: number[]): Promise<SummaryCard | undefined> {
   if (taskIds.length === 0) return undefined;
   await rollUpOldCards(); // 先に古いぶんを畳んでから、今回のバッチを新しいカードにする
+
+  // #105: 要約生成は15〜30秒かかる。その間にDoneから戻されたタスクをアーカイブすると
+  // 「todoなのに archived=1 でボードから消える」幽霊ができるので、いまも done のものだけ入れる
+  const stillDone = taskIds.filter((id) => getTask(id)?.status === "done");
+  if (stillDone.length === 0) {
+    log("archive", `tasksCompleted [${taskIds.join(",")}]: 全件doneでなくなっていたのでアーカイブしない`);
+    return undefined;
+  }
+  if (stillDone.length < taskIds.length) {
+    log("archive", `tasksCompleted: ${taskIds.length - stillDone.length}件はdoneでなくなっていたので除外`);
+  }
   const card = createSummaryCard();
-  for (const id of taskIds) assignTaskToCard(id, card.id);
+  for (const id of stillDone) assignTaskToCard(id, card.id);
   return regenerateCard(card.id);
 }
 

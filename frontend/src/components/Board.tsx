@@ -273,16 +273,24 @@ function Column({
             <SummaryCardView key={c.id} card={c} onOpenTask={onOpenTask} defaultOpen={i === 0 && !c.settled} />
           ))}
       <SortableContext items={tasks.map((t) => t.id)} strategy={verticalListSortingStrategy}>
-        {tasks.map((t) => (
-          <SortableCard
-            key={t.id}
-            task={t}
-            onOpen={onOpenTask}
-            approved={approvedIds?.has(t.id)}
-            onToggleApproved={onToggleApproved}
-            openIds={openIds}
-          />
-        ))}
+        {tasks.map((t) =>
+          // #105: Done列の生カードはドラッグさせない。検収後アーカイブ完了までの15〜30秒に
+          // 他の列へ動かせてしまい、あとから走るアーカイブ処理が archived=1 にするため、
+          // 「todoなのにボードから消える」幽霊タスクができる。
+          // Doneへは入れられない(#57)ので、出られないほうが一貫する。戻したいときはチャットで「#xxを戻して」
+          col.key === "done" ? (
+            <TaskCard key={t.id} task={t} onOpen={onOpenTask} openIds={openIds} />
+          ) : (
+            <SortableCard
+              key={t.id}
+              task={t}
+              onOpen={onOpenTask}
+              approved={approvedIds?.has(t.id)}
+              onToggleApproved={onToggleApproved}
+              openIds={openIds}
+            />
+          )
+        )}
         {tasks.length === 0 && !(summaryCards && summaryCards.length > 0) && (
           <p className="rounded-lg border border-dashed border-slate-200 py-4 text-center text-xs text-slate-400">
             タスクなし

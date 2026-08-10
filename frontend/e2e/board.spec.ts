@@ -206,24 +206,26 @@ test("プロジェクト: 切り替えるとボードが入れ替わり、#IDは
   await expect(page.getByTestId("task-detail-panel")).toBeVisible();
 
   await page.getByTestId("project-select").selectOption(String(pid));
+  await expect(page).toHaveURL(new RegExp(`/p/${pid}$`)); // #97: 表示中のプロジェクトはURLが持つ
 
-  // パネルは閉じる
+  // ページ遷移なのでパネルは残らない
   await expect(page.getByTestId("task-detail-panel")).toBeHidden();
   // 元プロジェクトのタスクは見えない (ファイルごと別なので混ざらない)
   await expect(page.getByTestId(`task-card-${inFirst}`)).toBeHidden();
   // メンバーもプロジェクト側のものに入れ替わる
   await expect(page.getByRole("button", { name: "さくら", exact: true })).toBeVisible();
 
-  // 新プロジェクトの最初のタスクは #1
+  // 新プロジェクトの最初のタスクは #1 (対象プロジェクトはヘッダで明示する #97)
   const res = await fetch(`${API}/api/tasks`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", "X-ChatBan-Project": String(pid) },
     body: JSON.stringify({ title: "E2E: 新プロジェクトの1件目" }),
   });
   expect((await res.json()).id).toBe(1);
 
   // 元へ戻すと元のタスクが復活する
   await page.getByTestId("project-select").selectOption("1");
+  await expect(page).toHaveURL(/\/p\/1$/);
   await expect(page.getByTestId(`task-card-${inFirst}`)).toBeVisible();
 });
 
@@ -280,16 +282,49 @@ test("配信はプロジェクト単位のroomへ届く (#99)", async () => {
   await expect.poll(() => received.length).toBeGreaterThan(0);
   const afterFirst = received.length;
 
-  // 別プロジェクトに切り替えて、そちらでタスクを作っても届かない
-  await fetch(`${API}/api/projects/${other}/activate`, { method: "POST" });
+  // 別プロジェクトを触っても届かない (#97: 対象はヘッダで明示する)
   await fetch(`${API}/api/tasks`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", "X-ChatBan-Project": String(other) },
     body: JSON.stringify({ title: "E2E: room検証(別プロジェクト)" }),
   });
   await new Promise((r) => setTimeout(r, 500));
   expect(received.length).toBe(afterFirst);
 
   sock.close();
-  await fetch(`${API}/api/projects/1/activate`, { method: "POST" }); // 後続テストのため戻す
+});
+
+test("タブごとに別プロジェクトを開ける。片方の更新はもう片方に届かない (#97)", async ({ page, browser }) => {
+  const other = (
+    await (
+      await fetch(`${API}/api/projects`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: "E2E: 別タブ用", members: [] }),
+      })
+    ).json()
+  ).project.id as number;
+
+  // 1枚目はプロジェクト1、2枚目は別プロジェクトを直接URLで開く
+  await page.goto("/p/1");
+  const beforeTodo = await page.getByTestId("count-todo").textContent();
+
+  const ctx = await browser.newContext();
+  const other2 = await ctx.newPage();
+  await other2.goto(`/p/${other}`);
+  await expect(other2.getByTestId("count-todo")).toHaveText("0");
+
+  // 2枚目のプロジェクトにタスクを足すと、2枚目だけが増える
+  await fetch(`${API}/api/tasks`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-ChatBan-Project": String(other) },
+    body: JSON.stringify({ title: "E2E: 別タブのタスク" }),
+  });
+  await expect(other2.getByTestId("count-todo")).toHaveText("1");
+  await expect(page.getByTestId("count-todo")).toHaveText(beforeTodo ?? "");
+
+  // リロードしてもURLのプロジェクトのまま (F5で戻らない)
+  await other2.reload();
+  await expect(other2.getByTestId("count-todo")).toHaveText("1");
+  await ctx.close();
 });

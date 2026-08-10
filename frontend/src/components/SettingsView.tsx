@@ -1,3 +1,4 @@
+import { apiFetch } from "../api";
 import { useEffect, useMemo, useState } from "react";
 import ProjectSettings from "./ProjectSettings";
 
@@ -42,14 +43,14 @@ export default function SettingsView() {
   const [error, setError] = useState<string | null>(null);
 
   async function load() {
-    const s = await fetch("/api/settings/models").then((r) => r.json());
+    const s = await apiFetch("/api/settings/models").then((r) => r.json());
     setSlots(s.slots);
     setDraft(Object.fromEntries(s.slots.map((x: SlotRow) => [x.slot, x.model])));
   }
 
   useEffect(() => {
     load().catch((e) => setError(String(e)));
-    fetch("/api/models")
+    apiFetch("/api/models")
       .then((r) => r.json())
       .then((d) => setModels(d.models ?? []))
       .catch(() => setModels([]));
@@ -69,7 +70,7 @@ export default function SettingsView() {
     setSaving(slot);
     setError(null);
     try {
-      const res = await fetch("/api/settings/models", {
+      const res = await apiFetch("/api/settings/models", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ [slot]: value }),

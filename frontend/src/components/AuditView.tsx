@@ -1,3 +1,4 @@
+import { apiFetch } from "../api";
 import { useEffect, useState } from "react";
 
 // #33: オーディットログ。会話・LLM呼び出し・割り振り履歴の時系列閲覧 (読み取り専用)
@@ -28,7 +29,7 @@ export default function AuditView() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    fetch("/api/audit")
+    apiFetch("/api/audit")
       .then((r) => r.json())
       .then(setData)
       .catch((e) => setError(String(e)));

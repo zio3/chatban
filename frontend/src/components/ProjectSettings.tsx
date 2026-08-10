@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, type Project } from "../api";
 import { socket } from "../socket";
+import { gotoProject, projectIdFromUrl } from "../project";
 
 // #86: プロジェクト管理。プロジェクト = SQLiteファイル1つ。
 // 切り替えるとボード・チャット・前提情報・メンバーがまとめて入れ替わる。
@@ -102,18 +103,17 @@ export default function ProjectSettings() {
             ) : (
               <div className="flex flex-wrap items-center gap-2">
                 <span className="text-sm font-bold">{p.name}</span>
-                {p.active && (
+                {p.id === projectIdFromUrl() && (
                   <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-bold text-emerald-700">表示中</span>
                 )}
                 <span className="text-xs text-slate-400">
                   未完了{p.openTasks}件 / {p.members.length > 0 ? p.members.join("・") : "メンバーなし"}
                 </span>
                 <span className="ml-auto flex gap-1.5">
-                  {!p.active && (
+                  {p.id !== projectIdFromUrl() && (
                     <button
-                      disabled={busy}
-                      onClick={() => run(() => api.activateProject(p.id))}
-                      className="rounded-lg bg-slate-900 px-3 py-1.5 text-xs text-white disabled:opacity-30"
+                      onClick={() => gotoProject(p.id)}
+                      className="rounded-lg bg-slate-900 px-3 py-1.5 text-xs text-white"
                     >
                       開く
                     </button>
@@ -128,7 +128,7 @@ export default function ProjectSettings() {
                   >
                     編集
                   </button>
-                  {!p.active && projects.length > 1 && (
+                  {p.id !== projectIdFromUrl() && projects.length > 1 && (
                     <button
                       disabled={busy}
                       onClick={() => run(() => api.deleteProject(p.id))}
@@ -175,7 +175,8 @@ export default function ProjectSettings() {
           </button>
         </div>
         <p className="mt-2 text-[11px] text-slate-400">
-          作成しただけでは切り替わりません。「開く」を押すか、ヘッダーのプロジェクト選択から移動してください。
+          作成しただけでは切り替わりません。「開く」を押すか、ヘッダーのプロジェクト選択から移動してください
+          (URL <span className="font-mono">/p/&lt;id&gt;</span> が表示中のプロジェクトを持つので、タブごとに別プロジェクトを開けます)。
         </p>
       </div>
     </div>

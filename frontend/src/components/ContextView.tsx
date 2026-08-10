@@ -1,3 +1,4 @@
+import { apiFetch } from "../api";
 import { useEffect, useState } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -9,7 +10,7 @@ export default function ContextView() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    fetch("/api/project-context")
+    apiFetch("/api/project-context")
       .then((r) => r.json())
       .then(setData)
       .catch((e) => setError(String(e)));

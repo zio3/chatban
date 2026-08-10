@@ -1,8 +1,15 @@
+import { currentProjectHeader } from "./project";
 import type { ChatResponse, Member, Proposal, SummaryCard, Task, TaskStatus } from "./types";
 
 async function json<T>(res: Response): Promise<T> {
   if (!res.ok) throw new Error(`${res.status}: ${await res.text()}`);
   return res.json();
+}
+
+/** #97: どのプロジェクトへの操作かをヘッダで明示する。
+ * URLが持つ状態をそのままリクエストに載せるので、タブごとに違うプロジェクトを触っても混ざらない */
+export function apiFetch(input: string, init: RequestInit = {}): Promise<Response> {
+  return fetch(input, { ...init, headers: { ...currentProjectHeader(), ...(init.headers ?? {}) } });
 }
 
 // #86: プロジェクト。SQLiteファイルごと分かれており、切り替えるとボード・チャット・
@@ -18,48 +25,48 @@ export interface Project {
 }
 
 export const api = {
-  projects: () => fetch("/api/projects").then((r) => json<{ projects: Project[] }>(r)),
+  projects: () => apiFetch("/api/projects").then((r) => json<{ projects: Project[] }>(r)),
   createProject: (name: string, members: string[]) =>
-    fetch("/api/projects", {
+    apiFetch("/api/projects", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name, members }),
     }).then((r) => json<{ ok: boolean }>(r)),
   activateProject: (id: number) =>
-    fetch(`/api/projects/${id}/activate`, { method: "POST" }).then((r) => json<{ projects: Project[] }>(r)),
+    apiFetch(`/api/projects/${id}/activate`, { method: "POST" }).then((r) => json<{ projects: Project[] }>(r)),
   updateProject: (id: number, patch: { name?: string; members?: string[] }) =>
-    fetch(`/api/projects/${id}`, {
+    apiFetch(`/api/projects/${id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(patch),
     }).then((r) => json<{ projects: Project[] }>(r)),
   deleteProject: (id: number) =>
-    fetch(`/api/projects/${id}`, { method: "DELETE" }).then((r) => json<{ projects: Project[] }>(r)),
+    apiFetch(`/api/projects/${id}`, { method: "DELETE" }).then((r) => json<{ projects: Project[] }>(r)),
   // #102: 削除はゴミ箱行き。実体を消せるのはゴミ箱からの purge だけ (人間のUI操作)
-  trash: () => fetch("/api/trash").then((r) => json<{ tasks: Task[] }>(r)),
-  restoreTask: (id: number) => fetch(`/api/tasks/${id}/restore`, { method: "POST" }).then((r) => json<Task>(r)),
-  purgeTask: (id: number) => fetch(`/api/trash/${id}`, { method: "DELETE" }).then((r) => json<{ ok: boolean }>(r)),
+  trash: () => apiFetch("/api/trash").then((r) => json<{ tasks: Task[] }>(r)),
+  restoreTask: (id: number) => apiFetch(`/api/tasks/${id}/restore`, { method: "POST" }).then((r) => json<Task>(r)),
+  purgeTask: (id: number) => apiFetch(`/api/trash/${id}`, { method: "DELETE" }).then((r) => json<{ ok: boolean }>(r)),
   board: () =>
-    fetch("/api/board").then((r) =>
+    apiFetch("/api/board").then((r) =>
       json<{ tasks: Task[]; members: Member[]; proposals: Proposal[]; summaryCards: SummaryCard[] }>(r)
     ),
   updateTask: (id: number, patch: Partial<Pick<Task, "title" | "assignee" | "reason" | "sort">> & { status?: TaskStatus }) =>
-    fetch(`/api/tasks/${id}`, {
+    apiFetch(`/api/tasks/${id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(patch),
     }).then((r) => json<Task>(r)),
-  getTask: (id: number) => fetch(`/api/tasks/${id}`).then((r) => json<Task>(r)),
+  getTask: (id: number) => apiFetch(`/api/tasks/${id}`).then((r) => json<Task>(r)),
   approveTasks: (ids: number[]) =>
-    fetch("/api/tasks/approve", {
+    apiFetch("/api/tasks/approve", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ ids }),
     }).then((r) => json<{ ok: boolean }>(r)),
   resolveProposal: (id: number, action: "approve" | "reject") =>
-    fetch(`/api/proposals/${id}/${action}`, { method: "POST" }).then((r) => json<Proposal>(r)),
+    apiFetch(`/api/proposals/${id}/${action}`, { method: "POST" }).then((r) => json<Proposal>(r)),
   chatLog: (taskId?: number) =>
-    fetch(`/api/chat/log${taskId != null ? `?taskId=${taskId}` : ""}`).then((r) =>
+    apiFetch(`/api/chat/log${taskId != null ? `?taskId=${taskId}` : ""}`).then((r) =>
       json<{ messages: { role: "user" | "assistant"; content: string; trace?: unknown; usage?: unknown }[] }>(r)
     ),
   taskChat: (
@@ -70,7 +77,7 @@ export const api = {
     speaker?: string,
     attachments?: { kind: "image" | "pdf"; name: string; dataUrl: string }[]
   ) =>
-    fetch(`/api/tasks/${taskId}/chat`, {
+    apiFetch(`/api/tasks/${taskId}/chat`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ message, history, speaker, attachments }),
@@ -83,7 +90,7 @@ export const api = {
     speaker?: string,
     attachments?: { kind: "image" | "pdf"; name: string; dataUrl: string }[]
   ) =>
-    fetch("/api/chat", {
+    apiFetch("/api/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ message, history, speaker, attachments }),

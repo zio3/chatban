@@ -1,3 +1,4 @@
+import { apiFetch } from "../api";
 import { useEffect, useState } from "react";
 
 // #21 (zio方針 8/9): 上部は「こんだけやったけど、いくらでした」の2数字だけ。金額の正は請求APIの実費。
@@ -40,7 +41,7 @@ export default function MetricsView() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    fetch("/api/metrics")
+    apiFetch("/api/metrics")
       .then((r) => r.json())
       .then(setData)
       .catch((e) => setError(String(e)));

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, type Project } from "./api";
+import { api, apiFetch, type Project } from "./api";
+import { ensureProjectInUrl, gotoProject, projectIdFromUrl } from "./project";
 import AuditView from "./components/AuditView";
 import Board, { type MovePayload } from "./components/Board";
 import Chat, { type Suggestion } from "./components/Chat";
@@ -64,7 +65,14 @@ export default function App() {
   // #86: プロジェクト一覧。切り替えるとボード・チャット・前提情報・メンバーが総取っ替えになる
   const [projects, setProjects] = useState<Project[]>([]);
   const loadProjects = useCallback(() => {
-    api.projects().then((d) => setProjects(d.projects)).catch(() => {});
+    api
+      .projects()
+      .then((d) => {
+        setProjects(d.projects);
+        // 素の / で来たら既定プロジェクトのURLへ置き換える (以降はURLが表示中を持つ)
+        ensureProjectInUrl(d.projects.find((p) => p.active)?.id ?? d.projects[0]?.id ?? 1);
+      })
+      .catch(() => {});
   }, []);
 
   const reload = useCallback(async () => {
@@ -95,10 +103,7 @@ export default function App() {
     // Done要約カードの非同期再生成中インジケータ (#56)
     const onArchive = (p: { count: number }) => setArchiveWorking(p.count > 0);
     // プロジェクトが切り替わったら全部読み直す (他のタブ/端末での切り替えにも追従する)
-    const onProject = (p: { projects: Project[] }) => {
-      setProjects(p.projects);
-      reload();
-    };
+    const onProject = (p: { projects: Project[] }) => setProjects(p.projects);
     socket.on("board:changed", onBoard);
     socket.on("proposals:changed", onProposals);
     socket.on("archive:working", onArchive);
@@ -200,7 +205,7 @@ export default function App() {
   // ✨AI提案チップ (#75): ボードの文脈を読んだ提案を非同期で追加 (固定チップは即時表示の保険)
   const [aiSuggestions, setAiSuggestions] = useState<Suggestion[]>([]);
   const fetchAiSuggestions = useCallback(() => {
-    fetch("/api/suggestions")
+    apiFetch("/api/suggestions")
       .then((r) => r.json())
       .then((d) =>
         setAiSuggestions(
@@ -283,29 +288,9 @@ export default function App() {
       : undefined;
   const detailArchived = detailTaskId !== null && !foundDetailTask && !!detailTask;
 
-  // #86: プロジェクトが切り替わったら画面の持ち越しを全部落とす。
-  // 詳細パネルは「タスクが消えても最後のスナップショットで開き続ける」設計 (#53) なので、
-  // 明示的に閉じないと別プロジェクトのタスクを開いたまま操作できてしまう (危険)。
-  // 切替はヘッダー・設定タブ・他タブからの通知と入口が複数あるので、
-  // アクティブIDの変化を1箇所で監視する (どの入口から来ても必ず通る)
-  const activeProjectId = projects.find((p) => p.active)?.id;
-  const prevProjectRef = useRef<number | undefined>(undefined);
-  useEffect(() => {
-    if (activeProjectId === undefined) return;
-    if (prevProjectRef.current !== undefined && prevProjectRef.current !== activeProjectId) {
-      mainChat.stop();
-      mainChat.setLog([]);
-      setDetailTaskId(null);
-      lastDetailTaskRef.current = undefined;
-      setArchivedTask(null);
-      setApprovedIds(new Set());
-      setFilter(new Set());
-      fetchAiSuggestions();
-    }
-    prevProjectRef.current = activeProjectId;
-    // mainChatは毎レンダで作り直されるため依存に入れない (IDの変化だけを引き金にする)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeProjectId]);
+  // #97: プロジェクト切替はページ遷移 (/p/<id>) にしたので、画面の持ち越しを個別に消す処理は不要になった。
+  // 「切り替えたら詳細パネルもフィルタも検収チェックも落とす」を手で書いていたが、
+  // URLに状態を持たせたら読み込み直しで自然に消える — 状態の置き場所を変えると後始末が消える例
 
   return (
     <div className="flex h-full bg-slate-100 text-slate-900">
@@ -317,8 +302,8 @@ export default function App() {
               ボード・チャット・前提情報・メンバーがまとめて入れ替わる */}
           <select
             data-testid="project-select"
-            value={projects.find((p) => p.active)?.id ?? ""}
-            onChange={(e) => api.activateProject(Number(e.target.value)).then((d) => setProjects(d.projects))}
+            value={projectIdFromUrl() ?? projects.find((p) => p.active)?.id ?? ""}
+            onChange={(e) => gotoProject(Number(e.target.value))}
             className="rounded-full border border-slate-300 bg-white px-3 py-1 text-xs font-bold text-slate-900 outline-none"
           >
             {projects.map((p) => (

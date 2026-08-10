@@ -61,6 +61,16 @@ const app = express();
 app.use(cors());
 app.use(express.json({ limit: "25mb" })); // #68: 添付(画像/PDFのbase64)を受けるため拡大
 
+// #97: どのプロジェクトへの操作かはクライアントがヘッダで明示する (UIはURL /p/<id> が持つ)。
+// 指定が無ければ既定プロジェクト (スクリプトやcurlからの素の呼び出し用)。
+// MCPがURLで固定しているのと同じ考え方 — サーバー側に隠れた「いま見ているもの」を持たない
+app.use((req, _res, next) => {
+  const raw = req.header("X-ChatBan-Project");
+  const id = raw != null ? Number(raw) : NaN;
+  if (Number.isFinite(id) && getProject(id)) return withProject(id, () => next());
+  next();
+});
+
 const server = http.createServer(app);
 const io = new Server(server, { cors: { origin: "*" } });
 

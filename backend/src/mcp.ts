@@ -69,7 +69,10 @@ export function buildMcpServer(onEvent: (kind: "board" | "proposals") => void): 
 
   server.registerTool(
     "list_tasks",
-    { description: "かんばんボードの全タスクとメンバー(負荷つき)を取得する" },
+    {
+      description:
+        "かんばんボードの全タスクとメンバー(負荷つき)を取得する。経緯メモを全文含むので重い(Reviewが溜まっていると2万字近くなる)。状態を眺めるだけ・件数を数えるだけなら query_log の軽い一覧クエリを使う",
+    },
     async () =>
       text({
         // #96: この接続が固定されているプロジェクト。エージェントが自分の作業対象を確認できるように

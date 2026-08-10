@@ -22,6 +22,14 @@ let lastSeen: Snapshot | null = null; // 直近リクエストでプロンプト
 let events: string[] = [];
 let lastRequestAt = 0;
 
+/** #86: プロジェクト切り替え時に呼ぶ。ボードが総取っ替えになるので差分イベントでは表現できない
+ * (次のリクエストで基準スナップショットを作り直させる) */
+export function resetPromptState(): void {
+  lastSeen = null;
+  events = [];
+  baselineText = "";
+}
+
 function todayLabel(): string {
   return new Date().toLocaleDateString("ja-JP", { year: "numeric", month: "2-digit", day: "2-digit", weekday: "short" });
 }

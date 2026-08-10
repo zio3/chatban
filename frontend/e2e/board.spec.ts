@@ -183,3 +183,45 @@ test("担当フィルタ: メンバー未登録の担当者にもトグルが出
   await chip.click();
   await expect(page.getByTestId(`task-card-${id}`)).toBeVisible();
 });
+
+test("プロジェクト: 切り替えるとボードが入れ替わり、#IDは1から振り直される (#86)", async ({ page }) => {
+  const inFirst = await createTask("E2E: 元プロジェクトのタスク");
+
+  // 新規プロジェクトを作って切り替える
+  const created = await (
+    await fetch(`${API}/api/projects`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "E2E: 別プロジェクト", members: ["さくら"] }),
+    })
+  ).json();
+  const pid = created.project.id as number;
+
+  await page.goto("/");
+  await expect(page.getByTestId(`task-card-${inFirst}`)).toBeVisible();
+
+  // 詳細パネルを開いたまま切り替える (前プロジェクトのタスクが残ると危険)
+  await page.getByTestId(`task-card-${inFirst}`).click();
+  await expect(page.getByTestId("task-detail-panel")).toBeVisible();
+
+  await page.getByTestId("project-select").selectOption(String(pid));
+
+  // パネルは閉じる
+  await expect(page.getByTestId("task-detail-panel")).toBeHidden();
+  // 元プロジェクトのタスクは見えない (ファイルごと別なので混ざらない)
+  await expect(page.getByTestId(`task-card-${inFirst}`)).toBeHidden();
+  // メンバーもプロジェクト側のものに入れ替わる
+  await expect(page.getByRole("button", { name: "さくら", exact: true })).toBeVisible();
+
+  // 新プロジェクトの最初のタスクは #1
+  const res = await fetch(`${API}/api/tasks`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ title: "E2E: 新プロジェクトの1件目" }),
+  });
+  expect((await res.json()).id).toBe(1);
+
+  // 元へ戻すと元のタスクが復活する
+  await page.getByTestId("project-select").selectOption("1");
+  await expect(page.getByTestId(`task-card-${inFirst}`)).toBeVisible();
+});

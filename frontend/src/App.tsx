@@ -269,6 +269,30 @@ export default function App() {
       : undefined;
   const detailArchived = detailTaskId !== null && !foundDetailTask && !!detailTask;
 
+  // #86: プロジェクトが切り替わったら画面の持ち越しを全部落とす。
+  // 詳細パネルは「タスクが消えても最後のスナップショットで開き続ける」設計 (#53) なので、
+  // 明示的に閉じないと別プロジェクトのタスクを開いたまま操作できてしまう (危険)。
+  // 切替はヘッダー・設定タブ・他タブからの通知と入口が複数あるので、
+  // アクティブIDの変化を1箇所で監視する (どの入口から来ても必ず通る)
+  const activeProjectId = projects.find((p) => p.active)?.id;
+  const prevProjectRef = useRef<number | undefined>(undefined);
+  useEffect(() => {
+    if (activeProjectId === undefined) return;
+    if (prevProjectRef.current !== undefined && prevProjectRef.current !== activeProjectId) {
+      mainChat.stop();
+      mainChat.setLog([]);
+      setDetailTaskId(null);
+      lastDetailTaskRef.current = undefined;
+      setArchivedTask(null);
+      setApprovedIds(new Set());
+      setFilter(new Set());
+      fetchAiSuggestions();
+    }
+    prevProjectRef.current = activeProjectId;
+    // mainChatは毎レンダで作り直されるため依存に入れない (IDの変化だけを引き金にする)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeProjectId]);
+
   return (
     <div className="flex h-full bg-slate-100 text-slate-900">
       <div className="flex min-w-0 flex-1 flex-col">
@@ -280,11 +304,7 @@ export default function App() {
           <select
             data-testid="project-select"
             value={projects.find((p) => p.active)?.id ?? ""}
-            onChange={(e) => {
-              mainChat.stop();
-              mainChat.setLog([]);
-              api.activateProject(Number(e.target.value)).then((d) => setProjects(d.projects));
-            }}
+            onChange={(e) => api.activateProject(Number(e.target.value)).then((d) => setProjects(d.projects))}
             className="rounded-full border border-slate-300 bg-white px-3 py-1 text-xs font-bold text-slate-900 outline-none"
           >
             {projects.map((p) => (

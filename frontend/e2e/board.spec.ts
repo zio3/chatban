@@ -200,8 +200,14 @@ test("プロジェクト: 切り替えるとボードが入れ替わり、#IDは
   await page.goto("/");
   await expect(page.getByTestId(`task-card-${inFirst}`)).toBeVisible();
 
+  // 詳細パネルを開いたまま切り替える (前プロジェクトのタスクが残ると危険)
+  await page.getByTestId(`task-card-${inFirst}`).click();
+  await expect(page.getByTestId("task-detail-panel")).toBeVisible();
+
   await page.getByTestId("project-select").selectOption(String(pid));
 
+  // パネルは閉じる
+  await expect(page.getByTestId("task-detail-panel")).toBeHidden();
   // 元プロジェクトのタスクは見えない (ファイルごと別なので混ざらない)
   await expect(page.getByTestId(`task-card-${inFirst}`)).toBeHidden();
   // メンバーもプロジェクト側のものに入れ替わる

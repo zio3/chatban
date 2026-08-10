@@ -53,6 +53,9 @@ function coerceStatus(status: string | undefined): { status?: TaskStatus; coerce
   return { status: status as TaskStatus, coerced: false };
 }
 
+const CONFLICT_NOTE =
+  "経緯メモの版が合わないため、この行の更新は一切適用していません (他のフィールドも保存されていません)。conflicts の context に自分の追記をマージし、その contextVersion を添えて再実行してください。上書きに失敗したことをユーザーにも伝えてください";
+
 const DONE_NOTE =
   "done を指定されましたが review に置きました。done への確定はボードの検収チェック(人間)のみが行えます。その旨をユーザーに伝えてください";
 
@@ -79,6 +82,7 @@ export function createTasksAsAgent(tasks: AgentTaskInput[]): { created: unknown[
 }
 
 export function updateTasksAsAgent(updates: AgentTaskUpdate[]): {
+  ok: boolean;
   updated: unknown[];
   coerced: number[];
   conflicts?: ContextConflict[];
@@ -134,6 +138,10 @@ export function updateTasksAsAgent(updates: AgentTaskUpdate[]): {
       });
     }
 
+    // 版が合わなければ、その行は何も適用しない (contextだけ弾いて他を通すと、
+    // updated に載ったのを見て「書けた」と読まれる。成功と失敗は排他にする #120)
+    if (contextStale) return null;
+
     return {
       id: u.id,
       patch: {
@@ -151,11 +159,18 @@ export function updateTasksAsAgent(updates: AgentTaskUpdate[]): {
   });
 
   // 一括更新は db 層でまとめて処理 (完了遷移の通知=要約再生成が1回で済む #60)
-  const updated = updateTasks(patches);
+  const updated = updateTasks(patches.filter((p): p is NonNullable<typeof p> => p !== null));
+  const notes = [
+    ...(coerced.length > 0 ? [`#${coerced.join(", #")} は${DONE_NOTE}`] : []),
+    ...(conflicts.length > 0 ? [`#${conflicts.map((c) => c.id).join(", #")} は${CONFLICT_NOTE}`] : []),
+  ];
   return {
+    // 部分成功を ok:true と返すと、多くのエージェントはここで分岐して先へ進む。
+    // 1件でも弾いたなら false にして、中身を読ませる (#120)
+    ok: conflicts.length === 0,
     updated,
     coerced,
     ...(conflicts.length > 0 ? { conflicts } : {}),
-    ...(coerced.length > 0 ? { note: `#${coerced.join(", #")} は${DONE_NOTE}` } : {}),
+    ...(notes.length > 0 ? { note: notes.join(" / ") } : {}),
   };
 }

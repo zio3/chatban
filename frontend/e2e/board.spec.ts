@@ -365,6 +365,9 @@ test("経緯メモの上書きは版が合うときだけ通る。状態変更�
   const noVersion = await mcp("update_tasks", { updates: [{ id, context: "版なしで書く" }] });
   expect(noVersion.conflicts?.[0]?.id).toBe(id);
   expect(noVersion.conflicts[0].contextVersion).toBe(1);
+  // #120: 弾いたものを updated に載せない。成功と失敗を排他にする
+  expect(noVersion.ok).toBe(false);
+  expect(noVersion.updated).toHaveLength(0);
 
   // 正しい版なら通り、版が上がる
   const ok = await mcp("update_tasks", { updates: [{ id, context: "Aの追記", context_version: 1 }] });
@@ -578,4 +581,22 @@ test("設定のプロジェクト一覧からMCP接続先をコピーできる (
   await btn.click();
   await expect(btn).toContainText("コピーしました");
   expect(await page.evaluate(() => navigator.clipboard.readText())).toMatch(/\/mcp\/1$/);
+});
+
+test("版が合わない更新は、同じ行の他のフィールドも保存しない (#120)", async () => {
+  const id = await createTask("部分適用しないことの検証");
+  const before = (await (await fetch(`${API}/api/tasks/${id}`)).json()) as any;
+
+  // context と summary を一緒に送り、context の版だけ古い
+  const r = await mcp("update_tasks", {
+    updates: [{ id, context: "古い版で書く", context_version: 999, summary: "これも保存されてはいけない" }],
+  });
+
+  expect(r.ok).toBe(false);
+  expect(r.updated).toHaveLength(0); // 弾いた行は updated に載らない
+  expect(r.note).toContain("一切適用していません");
+
+  const after = (await (await fetch(`${API}/api/tasks/${id}`)).json()) as any;
+  expect(after.summary).toBe(before.summary); // 巻き添えで保存されない
+  expect(after.updatedAt).toBe(before.updatedAt); // 拒否された書き込みで最終更新も動かない
 });

@@ -139,10 +139,11 @@ export function buildMcpServer(onEvent: (kind: "board" | "proposals") => void): 
       },
     },
     async ({ updates }) => {
-      const { updated, note, conflicts } = updateTasksAsAgent(updates as any);
+      const { ok, updated, note, conflicts } = updateTasksAsAgent(updates as any);
       onEvent("board");
       return text({
-        ok: true,
+        // #120: 1件でも弾いたら false。成功レスポンスの中身を疑って読ませない
+        ok,
         updated: (updated as any[]).map((t: any) => brief(t, isPersonal)),
         // #112: 経緯メモの版が合わなかったものは適用していない。現在の全文を返すのでマージして再実行する
         ...(conflicts ? { conflicts } : {}),

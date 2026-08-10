@@ -372,10 +372,10 @@ async function execTool(name: string, args: any, uiActions: UiAction[], events: 
       return { ok: true, ...r };
     }
     case "update_tasks": {
-      const { updated, note, conflicts } = updateTasksAsAgent(args.updates ?? []);
+      const { ok, updated, note, conflicts } = updateTasksAsAgent(args.updates ?? []);
       events.add("board");
       // #112: 版が合わなかった経緯メモは適用していない。現在の全文を返すのでマージして再実行する
-      return { ok: true, updated, ...(conflicts ? { conflicts } : {}), ...(note ? { note } : {}) };
+      return { ok, updated, ...(conflicts ? { conflicts } : {}), ...(note ? { note } : {}) };
     }
     case "delete_tasks": {
       // #102: 実データは消さずゴミ箱へ。誤解釈で消えても取り返しがつくようにする
@@ -412,7 +412,7 @@ async function execTool(name: string, args: any, uiActions: UiAction[], events: 
       const r = updateTasksAsAgent([
         { id: args.id, context: stripSpeakerLabel(args.text) ?? "", context_version: args.context_version },
       ]);
-      if (r.conflicts?.length) return r.conflicts[0];
+      if (r.conflicts?.length) return { ok: false, conflict: r.conflicts[0], note: r.note };
       const updated = r.updated[0] as ReturnType<typeof getTask>;
       if (!updated) return { error: `task #${args.id} not found` };
       events.add("board");

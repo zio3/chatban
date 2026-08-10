@@ -204,6 +204,9 @@ CREATE TABLE IF NOT EXISTS summary_cards (
   // updated_at は潰れていない)。近似値だが、null のまま「不明」にするより答えられることが増える。
   // 何度流しても既に入っている行は触らないので、DBを開くたびに走って構わない
   db.exec("UPDATE tasks SET done_at = updated_at WHERE done_at IS NULL AND (status = 'done' OR archived = 1)");
+  // #115/#116: 前提情報も全文上書きなので、タスクの経緯メモ(#112)と同じく版で守る。
+  // こちらの方が失うものが大きい — プロジェクト全員の前提で、チャットのシステムプロンプトに常時載る
+  addColumn("ALTER TABLE project_context ADD COLUMN version INTEGER NOT NULL DEFAULT 1");
   addColumn("ALTER TABLE summary_cards ADD COLUMN settled INTEGER NOT NULL DEFAULT 0");
   addColumn("ALTER TABLE chat_messages ADD COLUMN task_id INTEGER");
 }
@@ -376,11 +379,33 @@ export function projectSummaries(): ProjectSummary[] {
 }
 
 /** 新規プロジェクト。メンバーはこのプロジェクトのDBに入る (プロジェクトごとの参加者) */
+/** #115/#116: 新規プロジェクトの前提情報の下書き。
+ * 列の意味と完了の条件はプロジェクトごとに違うのに、埋める枠が無いと誰も書かない。
+ * 実例: あるプロジェクトは review=検収待ち、別のプロジェクトは review=相手待ち(返答・承認待ち)。
+ * エージェントには列の enum しか見えないので、ここに書いてあることが唯一の手がかりになる。
+ * 空欄のまま残っても害はない (「まだ決めていない」と読める) */
+const CONTEXT_TEMPLATE = [
+  "## このプロジェクトについて",
+  "(何をするプロジェクトか、関係者、参照先など)",
+  "",
+  "## 列の意味",
+  "todo=  / inprogress=  / review=  / done=",
+  "(reviewが「検収待ち」なのか「相手待ち」なのかはプロジェクトによる)",
+  "",
+  "## 完了の条件",
+  "(何が済んだら review に置くか。done は人間の検収でしか付かない)",
+  "",
+  "## できなかったとき・やらないとき",
+  "(前提が足りず止まったものをどこに置くか。やらない決定をどう残すか)",
+  "",
+].join("\n");
+
 export function createProjectWithMembers(name: string, memberNames: string[] = []): ProjectRow {
   const p = insertProject(name);
   const pdb = projectDb(p.id);
   const ins = pdb.prepare("INSERT OR IGNORE INTO members (name, skills) VALUES (?, NULL)");
   for (const n of memberNames.map((s) => s.trim()).filter(Boolean)) ins.run(n);
+  pdb.prepare("INSERT OR IGNORE INTO project_context (id, text) VALUES (1, ?)").run(CONTEXT_TEMPLATE);
   log("project", `created #${p.id} ${name} (members: ${memberNames.join(", ") || "なし"})`);
   return p;
 }

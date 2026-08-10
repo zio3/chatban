@@ -312,18 +312,24 @@ export function getProjectContext(): string {
   return r?.text ?? "";
 }
 
-/** 前提情報の閲覧用 (#73): 最終更新日時つき */
-export function getProjectContextRow(): { text: string; updatedAt: string | null } {
-  const r = db().prepare("SELECT text, updated_at FROM project_context WHERE id = 1").get() as
-    | { text: string; updated_at: string }
+/** 前提情報の閲覧用 (#73): 最終更新日時つき。version は上書きの突き合わせに使う (#115) */
+export function getProjectContextRow(): { text: string; updatedAt: string | null; version: number } {
+  const r = db().prepare("SELECT text, updated_at, version FROM project_context WHERE id = 1").get() as
+    | { text: string; updated_at: string; version: number }
     | undefined;
-  return { text: r?.text ?? "", updatedAt: r?.updated_at ?? null };
+  return { text: r?.text ?? "", updatedAt: r?.updated_at ?? null, version: r?.version ?? 1 };
 }
 
-export function setProjectContext(text: string) {
+/** #115: 前提情報は全文上書き。エージェントからは版を添えないと書けない。
+ * タスクの経緯メモ(#112)と同じ形だが、こちらは全員の前提でシステムプロンプトに常時載るため、
+ * 読まずに書かれると運用ルールごと消える。人間のUI経路は version を省略して従来どおり上書きできる */
+export function setProjectContext(text: string, version?: number): { ok: boolean; current?: ReturnType<typeof getProjectContextRow> } {
+  const cur = getProjectContextRow();
+  if (version !== undefined && version !== cur.version) return { ok: false, current: cur };
   db().prepare(
-    "INSERT INTO project_context (id, text, updated_at) VALUES (1, ?, datetime('now', 'localtime')) ON CONFLICT(id) DO UPDATE SET text = excluded.text, updated_at = excluded.updated_at"
-  ).run(text);
+    "INSERT INTO project_context (id, text, updated_at, version) VALUES (1, ?, datetime('now', 'localtime'), ?) ON CONFLICT(id) DO UPDATE SET text = excluded.text, updated_at = excluded.updated_at, version = excluded.version"
+  ).run(text, cur.version + 1);
+  return { ok: true };
 }
 
 // #88: 実行時設定 (管理画面から変更可能な値)。未設定ならenv/既定値にフォールバックする。

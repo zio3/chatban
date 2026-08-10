@@ -78,6 +78,16 @@ export const QUERY_LOG_DESCRIPTION = [
   "estimated_usd は呼び出し時点の単価で打刻した概算。全体の実額は請求APIの値(画面上部)が正",
 ].join("\n");
 
+/** #115/#116: 列の意味と完了の条件はプロジェクトごとに違う。
+ * 実例: あるプロジェクトは review=検収待ち、別のプロジェクトは review=相手待ち(返答・承認待ち)。
+ * エージェントから見ると status の enum はどのプロジェクトでも同じに見えるので、契約側で断る */
+export const STATUS_DESCRIPTION =
+  "列の意味と「いつそこへ置くか」はプロジェクトごとに違う(例: reviewが検収待ちのプロジェクトと、相手待ちのプロジェクトがある)。状態を変える前にプロジェクトの前提情報を読み、そこの定義に従うこと。done はどのプロジェクトでも人間の検収でしか付かない";
+
+/** #115: 前提情報は全文上書き。読まずに書くと全員の運用ルールが消える */
+export const PROJECT_CONTEXT_WRITE_DESCRIPTION =
+  "プロジェクトの前提情報(全員共有、チャットのシステムプロンプトに常時含まれる)を上書き更新する。全文を渡すので、必ず先に読んで自分の変更をマージした全文にすること。完了の定義・却下や保留の扱い・稼働日など、そのプロジェクト固有の運用ルールが入っている";
+
 const tools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
   {
     type: "function",
@@ -122,7 +132,7 @@ const tools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
               properties: {
                 id: { type: "integer", description: "タスクID。会話で「#112」と呼ばれるものと同じで、tasks テーブルの主キー(id)。プロジェクトごとに1から振られるので、別プロジェクトの#112とは別物" },
                 title: { type: "string" },
-                status: { type: "string", enum: STATUS_VALUES },
+                status: { type: "string", enum: STATUS_VALUES, description: STATUS_DESCRIPTION },
                 assignee: { type: "string" },
                 assign_reason: { type: "string", description: "担当変更・却下の判断理由を一言で。期限だけの変更では渡さない(既存の理由を上書きしてしまう)。進捗や作業結果は書かない — それは summary" },
                 summary: { type: "string", description: "現況の一言。カードに表示される(「実装完了 (commit xxx)」「原因調査中」など)。検収の要点はここ、詳細な根拠は経緯メモ(context)へ" },
@@ -282,14 +292,14 @@ const tools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
     type: "function",
     function: {
       name: "update_project_context",
-      description:
-        "プロジェクトの前提情報(全員共有、システムプロンプトに常時含まれる)を上書き更新する。既存内容を踏まえ、ユーザーの要望を反映した新しい全文を渡す",
+      description: PROJECT_CONTEXT_WRITE_DESCRIPTION,
       parameters: {
         type: "object",
         properties: {
           text: { type: "string", description: "新しい前提情報の全文" },
+          version: { type: "integer", description: "直前に読んだ前提情報の version。合わないと更新されず現在値が返る" },
         },
-        required: ["text"],
+        required: ["text", "version"],
       },
     },
   },
@@ -434,7 +444,13 @@ async function execTool(name: string, args: any, uiActions: UiAction[], events: 
       }
     }
     case "update_project_context": {
-      setProjectContext(args.text ?? "");
+      const r = setProjectContext(args.text ?? "", args.version);
+      if (!r.ok)
+        return {
+          ok: false,
+          conflict: r.current,
+          note: "前提情報が他から更新されています。返した text に自分の変更をマージし、この version を添えて再実行してください",
+        };
       return { ok: true };
     }
     case "set_view": {
@@ -475,6 +491,7 @@ function buildSystemPrompt(taskFocus?: ReturnType<typeof getTask>, speaker?: str
     "- 削除と却下は文脈で使い分ける: 誤登録・重複・ダミー(「消して」「間違えた」)は delete_tasks (ゴミ箱行きで復元可。返答で復元方法を説明する必要はない)。やらない決定(「見送り」「却下」「やらないことにした」)は削除せず update_tasks で status=review + rejected=true にし、reason に却下の根拠を書いて「却下としてReviewに置きました。検収で確定します」と返す (検収後、決定として要約アーカイブに残る)。",
     "- 「消して」がタスクそのものを指すのか、タイトルや文言の一部の修正を指すのか曖昧なときは、操作せず確認する (実例:「#95だけ発言者の話が入っていて不自然なので消せますか?」はタイトルの修正依頼だったが、タスクごと削除してしまった)。",
     "- ボードから退場するもの(完了・却下)は必ずReviewを通り、人間の検収チェックで確定する。チャットからdoneへ直行する経路は存在しない。",
+    "- 着手したが前提が足りず進められないときは、勝手に却下にも完了にもしない。summary に「前提不足で保留 (◯◯が必要)」と現況を書き、必要な情報を人に尋ねる。status をどこに置くかはプロジェクトの前提情報の定義に従う (列の意味はプロジェクトごとに違う)。",
     "- 検収の印(checked_at)は人が実物で確かめた記録で、AIには書く手段が無い。「確認しておきました」と自分で付けることはできないし、付いたことにして話さない。誰が何を確かめたかを聞かれたら query_log(scope=audit) の tasks.checked_at を読む。",
     "- 「後回し」「今はやらない」は却下ではない。status は変えず (done にするとアーカイブに吸い込まれる)、reorder_tasks でその列の下へ落とす。「今やりたい」は逆に上へ。",
     "- 「金曜まで」「明日まで」等の期限表現は今日の日付から YYYY-MM-DD に解決して due に入れる。期限が近い/過ぎたタスクはレポートや割り振り提案で優先的に言及する。",

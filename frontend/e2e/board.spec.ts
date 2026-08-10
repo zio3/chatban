@@ -523,3 +523,22 @@ test("パネルから依存を双方向に辿れる (これ待ち → 待ち) (#
   await expect(panel).toContainText("それを待っているタスク");
   await expect(panel.getByTestId(`dep-chip-${depId}`)).toBeVisible();
 });
+
+test("前提情報は版が合うときだけ上書きできる (読まずに書くと全員の運用ルールが消える) (#115)", async () => {
+  const before = await mcp("get_project_context", {});
+  const v = before.version as number;
+
+  const ok = await mcp("update_project_context", { text: "Aが書いた運用ルール", version: v });
+  expect(ok.ok).toBe(true);
+
+  // 古い版のまま別の全文を投げても通らない。現在値が返るのでマージして再実行できる
+  const stale = await mcp("update_project_context", { text: "Bが読まずに書いた", version: v });
+  expect(stale.ok).toBe(false);
+  expect(stale.conflict.text).toBe("Aが書いた運用ルール");
+
+  const after = await mcp("get_project_context", {});
+  expect(after.text).toBe("Aが書いた運用ルール");
+
+  // 元に戻す (このプロジェクトは他のテストと共用)
+  await mcp("update_project_context", { text: before.text, version: after.version });
+});

@@ -1,6 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { createTasksAsAgent, updateTasksAsAgent } from "./agentWrite.js";
-import { QUERY_LOG_DESCRIPTION } from "./chat.js";
+import { PROJECT_CONTEXT_WRITE_DESCRIPTION, QUERY_LOG_DESCRIPTION, STATUS_DESCRIPTION } from "./chat.js";
 import { z } from "zod";
 import {
   queryLlmCalls,
@@ -11,6 +11,7 @@ import {
   restoreTask,
   trashTask,
   getProjectContext,
+  getProjectContextRow,
   getTask,
   listMembers,
   listPendingProposals,
@@ -75,7 +76,7 @@ export function buildMcpServer(onEvent: (kind: "board" | "proposals") => void): 
         tasks: z.array(
           z.object({
             title: z.string(),
-            status: STATUS.optional().describe("省略時はtodo"),
+            status: STATUS.optional().describe(`省略時はtodo。${STATUS_DESCRIPTION}`),
             ...(isPersonal
               ? {}
               : {
@@ -108,7 +109,7 @@ export function buildMcpServer(onEvent: (kind: "board" | "proposals") => void): 
           z.object({
             id: z.number().int().describe("タスクID。会話で「#112」と呼ばれるものと同じで、tasks テーブルの主キー(id)。プロジェクトごとに1から振られるので、別プロジェクトの#112とは別物"),
             title: z.string().optional(),
-            status: STATUS.optional(),
+            status: STATUS.optional().describe(STATUS_DESCRIPTION),
             ...(isPersonal
               ? {}
               : {
@@ -251,7 +252,7 @@ export function buildMcpServer(onEvent: (kind: "board" | "proposals") => void): 
         // #96: 接続がどのプロジェクトに向いているか。SQL窓口は
         // プロジェクトDBしか見えないので、これはここでしか確認できない
         project: currentProject(),
-        text: getProjectContext(),
+        ...getProjectContextRow(), // text と version (上書きするとき版が要る #115)
         // #108: 要約の再生成は15〜80秒かかる。生成中に「完了した」と誤認しないように知らせる
         ...(archiveState.running.get(currentProjectId())
           ? { archiveRunning: "要約カードを再生成中。結果を見るなら少し待って引き直すこと" }
@@ -262,11 +263,23 @@ export function buildMcpServer(onEvent: (kind: "board" | "proposals") => void): 
   server.registerTool(
     "update_project_context",
     {
-      description: "プロジェクトの前提情報を上書き更新する(全文を渡す)",
-      inputSchema: { text: z.string() },
+      description: PROJECT_CONTEXT_WRITE_DESCRIPTION,
+      inputSchema: {
+        text: z.string().describe("新しい前提情報の全文"),
+        version: z
+          .number()
+          .int()
+          .describe("直前に get_project_context で読んだ version。合わないと更新されず現在値が返る"),
+      },
     },
-    async ({ text: t }) => {
-      setProjectContext(t);
+    async ({ text: t, version }) => {
+      const r = setProjectContext(t, version);
+      if (!r.ok)
+        return text({
+          ok: false,
+          conflict: r.current,
+          note: "前提情報が他から更新されています。返した text に自分の変更をマージし、この version を添えて再実行してください",
+        });
       return text({ ok: true });
     }
   );

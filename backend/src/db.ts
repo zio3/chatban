@@ -1,5 +1,5 @@
 import { hooks } from "./hooks.js";
-import { admin, adminReadonly, currentProjectId, db } from "./store.js";
+import { admin, adminReadonly, currentProjectId, db, projectReadonly } from "./store.js";
 import type { Member, Proposal, Task, TaskStatus } from "./types.js";
 
 // #86: スキーマ定義とファイルの置き場は store.ts が持つ。
@@ -575,7 +575,30 @@ export function searchTasks(terms: string[], limit = 10) {
 
   // 多くの語に当たったものほど関連が強い、という素朴な順位付けで十分
   scored.sort((a, b) => b.matched.length - a.matched.length || b.id - a.id);
-  return { hits: scored.slice(0, limit), searched: words };
+
+  // #106追補: 会話ログも同じ語で引く。UIを作らず「あんな話してたっけ?」をAIに拾わせる。
+  // チャットは揮発させる方針(#72)なので常時プロンプトには載せない — 聞かれたときだけ掘る
+  const chatRows = db()
+    .prepare("SELECT id, role, content, task_id, created_at FROM chat_messages ORDER BY id DESC")
+    .all() as any[];
+  const chatHits = chatRows
+    .map((r) => {
+      const lower = String(r.content).toLowerCase();
+      const matched = words.filter((w) => lower.includes(w.toLowerCase()));
+      if (matched.length === 0) return null;
+      const at = lower.indexOf(matched[0].toLowerCase());
+      return {
+        role: r.role,
+        at: r.created_at,
+        ...(r.task_id ? { taskId: r.task_id } : {}),
+        matched,
+        snippet: String(r.content).slice(Math.max(0, at - 60), at + 140).replace(/\s+/g, " "),
+      };
+    })
+    .filter(Boolean)
+    .slice(0, 6) as any[];
+
+  return { hits: scored.slice(0, limit), chatHits, searched: words };
 }
 
 // #106: 料金表をDBに保存する。呼び出しごとに単価を打刻するので、外部APIが落ちていても
@@ -607,14 +630,38 @@ export function loadModelPrices() {
   }));
 }
 
-/** #106: コスト分析はLLMにSQLを書かせ、コードは安全性だけ守る (#91の並べ替え・#103の検索と同じ形)。
- * 集計軸を先に決め打ちすると、そこから外れた問い(「今日の午後だけ」「1回あたりが高い順」)に答えられない。
- * 守り: 書き込めない接続 / SELECT・WITH のみ / 文は1つ / 行数上限。
+/** #106: 記録の集計はLLMにSQLを書かせ、コードは安全性だけ守る (#91の並べ替え・#103の検索と同じ形)。
+ * 集計軸を先に決め打ちすると、そこから外れた問い(「今日の午後だけ」「8/9の午前に何を話したか」)に答えられない。
+ * 守り: 書き込めない接続 / SELECT・WITH のみ / 文は1つ / 機密テーブルの遮断 / 行数上限。
  * プロンプトで「SELECTだけ」と言っても漏れるが、readonly接続は漏れない */
-export function queryLlmCalls(sql: string, limit = 200): { rows: unknown[]; sql: string; truncated: boolean } {
+
+/** SQLで開放しないもの。「機密以外は読み取り専用で開放する」方針なので、隠す側を列挙する —
+ * 公開側を列挙すると、テーブルを足したときに閉じ忘れではなく「開き忘れ」で気づけるが、
+ * 逆に隠す側を列挙すると足したテーブルは黙って開く。ここでは後者を選び、
+ * 機密になりうるものだけを閉じる (APIキーはDBに入れていない。ファイルとenvのみ) */
+const PRIVATE_TABLES = ["settings", "sqlite_master", "sqlite_schema"];
+
+export function queryLlmCalls(sql: string, limit = 200) {
+  return runReadonly(adminReadonly(), sql, limit);
+}
+
+/** #106追補: 会話ログ・割り振り履歴などプロジェクト側の記録もSQLで引く。
+ * キーワード検索では「8/9の午前に何を話していたか」のような時間軸での切り出しができない。
+ * 会話は揮発させる方針(#72)なので常時プロンプトには載せず、聞かれたときだけ掘る */
+export function queryProjectData(sql: string, limit = 200) {
+  return runReadonly(projectReadonly(), sql, limit);
+}
+
+function runReadonly(
+  conn: ReturnType<typeof adminReadonly>,
+  sql: string,
+  limit: number
+): { rows: unknown[]; sql: string; truncated: boolean } {
   const trimmed = sql.trim().replace(/;\s*$/, "");
   if (!/^(select|with)\b/i.test(trimmed)) throw new Error("SELECT か WITH で始まる読み取りクエリだけ実行できます");
   if (trimmed.includes(";")) throw new Error("複数の文は実行できません");
-  const rows = adminReadonly().prepare(trimmed).all() as unknown[];
+  const hit = PRIVATE_TABLES.find((t) => new RegExp(`\\b${t}\\b`, "i").test(trimmed));
+  if (hit) throw new Error(`${hit} は参照できません (機密として閉じているテーブル)`);
+  const rows = conn.prepare(trimmed).all() as unknown[];
   return { rows: rows.slice(0, limit), sql: trimmed, truncated: rows.length > limit };
 }

@@ -281,6 +281,21 @@ export function setActiveProjectId(id: number): void {
   log("project", `active -> #${id} (${getProject(id)!.name})`);
 }
 
+/** #106追補: いま対象のプロジェクトDBへの書き込めない接続。LLMにSQLを書かせるための安全境界 */
+const roHandles = new Map<number, Database.Database>();
+export function projectReadonly(): Database.Database {
+  const id = currentProjectId();
+  let h = roHandles.get(id);
+  if (!h) {
+    const row = getProject(id);
+    if (!row) throw new Error(`project #${id} not found`);
+    projectDb(id); // ファイルとスキーマを確実に作ってから読み取り専用で開く
+    h = new Database(projectFilePath(row), { readonly: true });
+    roHandles.set(id, h);
+  }
+  return h;
+}
+
 /** いま操作対象のプロジェクトDB (処理単位の上書き > UIが表示中のもの) */
 export function db(): Database.Database {
   return projectDb(currentProjectId());

@@ -13,6 +13,7 @@ import {
   listTasks,
   memberLoads,
   queryLlmCalls,
+  queryProjectData,
   recentActivity,
   reorderTasks,
   resolveProposal,
@@ -236,7 +237,7 @@ const tools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
     function: {
       name: "search_tasks",
       description:
-        "タスクの本文(タイトル・現況・経緯メモ・担当理由)を横断検索する。アーカイブ済みも対象。表記ゆれや言い換えは自分で展開して複数語を渡すこと(OR検索・当たった語が返る)。例: 「なんでDB分けたんだっけ」→ terms:[\"DB\",\"データベース\",\"ファイル分離\",\"分割\",\"プロジェクト\"]",
+        "タスクの本文(タイトル・現況・経緯メモ・担当理由)と会話ログを横断検索する。アーカイブ済みも対象。会話は新しい順に最大6件返る(「あんな話してたっけ?」用)。表記ゆれや言い換えは自分で展開して複数語を渡すこと(OR検索・当たった語が返る)。例: 「なんでDB分けたんだっけ」→ terms:[\"DB\",\"データベース\",\"ファイル分離\",\"分割\",\"プロジェクト\"]",
       parameters: {
         type: "object",
         properties: {
@@ -249,18 +250,25 @@ const tools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
   {
     type: "function",
     function: {
-      name: "query_costs",
+      name: "query_log",
       description: [
-        "AI利用コストの記録(llm_calls)にSQLで問い合わせる。読み取り専用。集計軸は自由に決めてよい。",
-        "列: id, purpose(chat/suggest/archive-decompose/archive-title), model(指定したID), routed_model(実際に使われたモデル), prompt_tokens, completion_tokens, cached_tokens, elapsed_ms, project_id, price_in_per_m, price_out_per_m, estimated_usd, created_at(YYYY-MM-DD HH:MM:SS)",
+        "記録にSQLで問い合わせる(読み取り専用)。集計軸・期間・条件は自由に決めてよい。",
+        "scope='cost': llm_calls — id, purpose(chat/suggest/archive-decompose/archive-title), model, routed_model, prompt_tokens, completion_tokens, cached_tokens, elapsed_ms, project_id, price_in_per_m, price_out_per_m, estimated_usd, created_at",
+        "scope='audit': このプロジェクトの記録。chat_messages(id, role, content, trace, usage, task_id, created_at) / assignment_history(task_title, assignee, note, created_at) / proposals(task_id, assignee, reason, status, created_at) / tasks / summary_cards",
         "例: SELECT routed_model, COUNT(*) n, ROUND(SUM(estimated_usd),4) usd FROM llm_calls GROUP BY 1 ORDER BY usd DESC LIMIT 10",
-        "例: SELECT ROUND(SUM(estimated_usd),4) usd FROM llm_calls WHERE date(created_at) = date('now','localtime')",
+        "例: SELECT ROUND(SUM(estimated_usd),4) usd FROM llm_calls WHERE date(created_at)=date('now','localtime')",
+        "例: SELECT created_at, role, substr(content,1,120) FROM chat_messages WHERE date(created_at)='2026-08-09' ORDER BY id LIMIT 30",
+        "例: SELECT substr(created_at,1,13) h, COUNT(*) n FROM chat_messages GROUP BY 1 ORDER BY 1",
+        "会話ログは常時プロンプトに載せていないので、過去の話を聞かれたらここを掘る。",
         "estimated_usd は呼び出し時点の単価で打刻した概算。全体の実額は請求APIの値(画面上部)が正",
       ].join("\n"),
       parameters: {
         type: "object",
-        properties: { sql: { type: "string", description: "SELECT または WITH で始まる1文" } },
-        required: ["sql"],
+        properties: {
+          scope: { type: "string", enum: ["cost", "audit"], description: "cost=LLM呼び出し記録 / audit=会話・割り振り・タスク" },
+          sql: { type: "string", description: "SELECT または WITH で始まる1文" },
+        },
+        required: ["scope", "sql"],
       },
     },
   },
@@ -458,9 +466,9 @@ async function execTool(name: string, args: any, uiActions: UiAction[], events: 
           : {}),
       };
     }
-    case "query_costs": {
+    case "query_log": {
       try {
-        return queryLlmCalls(args.sql ?? "");
+        return args.scope === "audit" ? queryProjectData(args.sql ?? "") : queryLlmCalls(args.sql ?? "");
       } catch (e: any) {
         return { ok: false, error: e?.message ?? String(e) };
       }
@@ -512,7 +520,7 @@ function buildSystemPrompt(taskFocus?: ReturnType<typeof getTask>, speaker?: str
     "- 特定タスクの経緯・決定事項・補足(「#22は◯◯方式でいくことにした」等)は update_task_context でそのタスクの経緯メモに記録する。",
     "- assign_reason は「なぜこの担当か」、summary は「いまどうなっているか」。別の情報なので混ぜない。進捗・完了報告は summary に一言で書き、詳細な根拠は経緯メモ(context)に書く。",
     "- 「ログ整頓して」は compact_archive を使う。完了タスクのアーカイブは自動なので手動操作は不要。",
-    "- 過去の判断や経緯を聞かれたら(「なんで◯◯にしたんだっけ」)、索引のタイトルだけで答えず search_tasks で本文を引く。言い換え・英日表記を自分で並べて渡し、空振りしたら語を変えて引き直す。検索結果のsnippetは断片なので、理由を答える前に get_task_details で経緯メモの全文を読む。",
+    "- 過去の判断や経緯・過去の会話を聞かれたら(「なんで◯◯にしたんだっけ」「あんな話してたっけ」)、索引のタイトルだけで答えず search_tasks で本文と会話ログを引く。言い換え・英日表記を自分で並べて渡し、空振りしたら語を変えて引き直す。検索結果のsnippetは断片なので、理由を答える前に get_task_details で経緯メモの全文を読む。時期や条件で絞りたいとき(「8/9の午前に何を話していたか」等)は query_log(scope=audit) を使う。",
     "- 削除と却下は文脈で使い分ける: 誤登録・重複・ダミー(「消して」「間違えた」)は delete_tasks (ゴミ箱行きで復元可。返答で復元方法を説明する必要はない)。やらない決定(「見送り」「却下」「やらないことにした」)は削除せず update_tasks で status=review + rejected=true にし、reason に却下の根拠を書いて「却下としてReviewに置きました。検収で確定します」と返す (検収後、決定として要約アーカイブに残る)。",
     "- 「消して」がタスクそのものを指すのか、タイトルや文言の一部の修正を指すのか曖昧なときは、操作せず確認する (実例:「#95だけ発言者の話が入っていて不自然なので消せますか?」はタイトルの修正依頼だったが、タスクごと削除してしまった)。",
     "- ボードから退場するもの(完了・却下)は必ずReviewを通り、人間の検収チェックで確定する。チャットからdoneへ直行する経路は存在しない。",
@@ -587,12 +595,12 @@ const VIEW_HINTS: Record<string, string> = {
   metrics: [
     "",
     "## いま見ている画面: 📊コスト",
-    "AI利用のコストを見ている。「これ高い?」「何にかかってる?」等は query_costs でSQLを書いて実データを集計してから答える。回数が多いモデルと金額が大きいモデルは一致しないので、金額で見ること。全体の実額は請求APIの値(画面上部)が正で、estimated_usd は概算。",
+    "AI利用のコストを見ている。「これ高い?」「何にかかってる?」等は query_log(scope=cost) でSQLを書いて実データを集計してから答える。回数が多いモデルと金額が大きいモデルは一致しないので、金額で見ること。全体の実額は請求APIの値(画面上部)が正で、estimated_usd は概算。",
   ].join("\n"),
   audit: [
     "",
     "## いま見ている画面: 📜監査",
-    "会話・LLM呼び出し・割り振り履歴のログを見ている。「直近何やってた?」等は get_activity で実データを見てから答える。",
+    "会話・LLM呼び出し・割り振り履歴のログを見ている。「直近何やってた?」は get_activity、「あの日どんな話をしていたか」「いつ何を決めたか」は query_log(scope=audit) で会話ログを掘る。",
   ].join("\n"),
   trash: [
     "",
@@ -618,7 +626,7 @@ const TOOL_LABELS: Record<string, string> = {
   get_activity: "最近の動きを確認",
   reorder_tasks: "並び順を変更",
   search_tasks: "経緯を検索",
-  query_costs: "コストを集計",
+  query_log: "記録を集計",
   get_task_details: "タスク詳細を取得",
   update_task_context: "経緯メモを更新",
   resolve_proposals: "提案を承認/却下",

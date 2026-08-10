@@ -10,6 +10,7 @@ import { archiveState, hooks } from "./hooks.js";
 import { log } from "./log.js";
 import { buildMcpServer } from "./mcp.js";
 import { resetPromptState } from "./promptState.js";
+import { assertTimezone } from "./timezone.js";
 import {
   activeProjectId,
   createProjectWithMembers,
@@ -56,6 +57,8 @@ const PORT = Number(process.env.PORT ?? 8787);
 
 // #86: 旧構成 (backend/chatban.db 単一ファイル) があればプロジェクト1として取り込む。
 // 以降は data/ 配下 (管理DB + プロジェクトDB) だけを見る。DBに触る前に必ず通す
+// #108: DBに触る前にタイムゾーンを確かめる。ずれたまま書き込むと元に戻せない
+assertTimezone();
 migrateLegacyDbIfNeeded();
 reportOrphanFiles();
 

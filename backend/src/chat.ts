@@ -13,6 +13,7 @@ import {
   listTasks,
   memberLoads,
   recentActivity,
+  reorderTasks,
   resolveProposal,
   setProjectContext,
   updateTask,
@@ -214,6 +215,22 @@ const tools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
   {
     type: "function",
     function: {
+      name: "reorder_tasks",
+      description:
+        "列の並び順を付け替える。並べたい順にタスクIDを渡す(「番号の降順」だけでなく「重要そうな順」など意味のある並びも可)。表示設定ではなく並び順そのものを書き換える操作で、あとから手で並べ直せる。書き忘れたタスクは末尾に残るので消えない",
+      parameters: {
+        type: "object",
+        properties: {
+          status: { type: "string", enum: STATUS_VALUES, description: "対象の列。省略で全列" },
+          ids: { type: "array", items: { type: "integer" }, description: "並べたい順のタスクID" },
+        },
+        required: ["ids"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
       name: "compact_archive",
       description: "要約カードを1枚の過去ログに統合する",
       parameters: { type: "object", properties: {} },
@@ -376,6 +393,16 @@ async function execTool(name: string, args: any, uiActions: UiAction[], events: 
     case "get_activity": {
       return recentActivity(Math.min(Number(args.limit) || 15, 30));
     }
+    case "reorder_tasks": {
+      const r = reorderTasks(args.ids ?? [], args.status);
+      events.add("board");
+      // 指定漏れがあったことはLLMに伝える (黙って末尾に置くと「並べたつもり」とズレる)
+      return {
+        ok: true,
+        ...r,
+        ...(r.appended > 0 ? { note: `${r.appended}件は順番の指定に含まれていなかったので末尾に置きました` } : {}),
+      };
+    }
     case "compact_archive": {
       try {
         const result = await compactArchive();
@@ -513,6 +540,7 @@ const TOOL_LABELS: Record<string, string> = {
   update_project_context: "前提情報を更新",
   compact_archive: "過去ログを整頓",
   get_activity: "最近の動きを確認",
+  reorder_tasks: "並び順を変更",
   get_task_details: "タスク詳細を取得",
   update_task_context: "経緯メモを更新",
   resolve_proposals: "提案を承認/却下",

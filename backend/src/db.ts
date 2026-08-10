@@ -497,3 +497,32 @@ export function recentActivity(limit = 15) {
   ).map((r) => ({ task: r.task_title, to: r.assignee, note: r.note ? String(r.note).slice(0, 80) : null, at: r.created_at }));
   return { updatedTasks: tasks, assignments };
 }
+
+// #91: 並べ替えはLLMが決めた順番(ID列)をそのまま受け取る。
+//
+// ソートキー(id/due/title…)を渡す方式も作りかけたが捨てた。キーで表現できる並びしか作れず、
+// 「重要そうな順」「デモに必要な順」「関連するものをまとめて」といった、LLMを使う意味のある
+// 並びが表現できないため。ツール契約も status + ids だけで済み、スキーマの固定費が小さい。
+//
+// 代わりにLLMが列を作る以上の事故は必ず起きるので、コード側で正規化する:
+//   - 書き忘れたタスクは元の順で末尾に付ける (「並べ替えたら消えた」を作らない)
+//   - 重複は最初の1回だけ
+//   - 対象列に実在しないIDは無視する
+// 表示設定ではなく操作なので「いまソート中」という画面の隠れ状態は生まれず、あとから手で直せる。
+export function reorderTasks(ids: number[], status?: TaskStatus): { ordered: number; appended: number } {
+  const targets = listTasks().filter((t) => !status || t.status === status);
+  const byId = new Map(targets.map((t) => [t.id, t]));
+  const seen = new Set<number>();
+  const ordered: Task[] = [];
+  for (const id of ids) {
+    const t = byId.get(id);
+    if (!t || seen.has(id)) continue;
+    seen.add(id);
+    ordered.push(t);
+  }
+  const appended = targets.filter((t) => !seen.has(t.id)); // 指定漏れは元の順のまま末尾へ
+  const final = [...ordered, ...appended];
+  const stmt = db().prepare("UPDATE tasks SET sort = ? WHERE id = ?");
+  db().transaction(() => final.forEach((t, i) => stmt.run(i + 1, t.id)))();
+  return { ordered: ordered.length, appended: appended.length };
+}

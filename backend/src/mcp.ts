@@ -6,15 +6,19 @@ import {
   restoreTask,
   trashTask,
   getProjectContext,
+  getTask,
   listMembers,
   listPendingProposals,
+  listSummaryCards,
   listTasks,
+  listTrashedTasks,
   memberLoads,
   metrics,
   searchTasks,
   setProjectContext,
   updateTasks,
 } from "./db.js";
+import { archiveState } from "./hooks.js";
 import { currentProjectId, getProject } from "./store.js";
 import type { TaskStatus } from "./types.js";
 
@@ -22,6 +26,24 @@ const STATUS = z.enum(["todo", "inprogress", "review", "done"]);
 
 function text(data: unknown) {
   return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] };
+}
+
+/** #108: 更新結果は要点だけ返す。以前は context を含む全フィールドが返っており、
+ * 経緯メモを更新するたびに自分が書いた1,800字がそっくり戻ってきていた (トークンの無駄) */
+function brief(t: ReturnType<typeof getTask>) {
+  if (!t) return null;
+  return {
+    id: t.id,
+    title: t.title,
+    status: t.status,
+    assignee: t.assignee,
+    ...(t.summary ? { summary: t.summary } : {}),
+    ...(t.due ? { due: t.due } : {}),
+    ...(t.lane ? { lane: t.lane } : {}),
+    ...(t.blockedBy?.length ? { blockedBy: t.blockedBy } : {}),
+    ...(t.rejected ? { rejected: true } : {}),
+    ...(t.context ? { contextChars: t.context.length } : {}),
+  };
 }
 
 /** この接続が対象としているプロジェクト (URLで固定されている #96) */
@@ -45,6 +67,19 @@ export function buildMcpServer(onEvent: (kind: "board" | "proposals") => void): 
         tasks: listTasks(),
         members: memberLoads(),
         pendingProposals: listPendingProposals(),
+        // #108: 要約カードの状態が取れず、毎回RESTを叩いていた。要素は件数だけ返す(全文は重い)
+        summaryCards: listSummaryCards().map((c) => ({
+          id: c.id,
+          title: c.title,
+          taskIds: c.taskIds,
+          settled: c.settled,
+          elements: c.elements.length,
+        })),
+        trashedCount: listTrashedTasks().length,
+        // #108: 要約の再生成は15〜80秒かかる。生成中に「完了した」と誤認しないように知らせる
+        ...(archiveState.running.get(currentProjectId())
+          ? { archiveRunning: "要約カードを再生成中。結果を見るなら少し待って list_tasks を呼び直すこと" }
+          : {}),
       })
   );
 
@@ -60,17 +95,30 @@ export function buildMcpServer(onEvent: (kind: "board" | "proposals") => void): 
             assignee: z.string().optional().describe("担当者名。未定なら省略"),
             assign_reason: z.string().optional().describe("なぜこの担当かを一言で。進捗は書かない"),
             context: z.string().optional().describe("登録に至った経緯・論点・決定事項 (経緯メモの初期値)"),
+            summary: z.string().optional().describe("現況の一言。カードに表示される"),
+            due: z.string().optional().describe("期限 YYYY-MM-DD"),
+            blocked_by: z.array(z.number().int()).optional().describe("依存先タスクID(これらが終わるまで着手不可)"),
+            lane: z.enum(["demo", "later"]).optional().describe("demo=デモ台本に必要 / later=機能凍結後"),
           })
         ),
       },
     },
     async ({ tasks }) => {
+      // #108: 作成時に due/blocked_by/lane まで渡せるようにした。以前は無かったので
+      // create → update と2回叩く必要があった (チャット側の契約とズレていた)
       const created = tasks.map((t) => {
         const task = createTask(t.title, (t.status ?? "todo") as TaskStatus, t.assignee ?? null, t.assign_reason ?? null);
-        return t.context ? updateTasks([{ id: task.id, patch: { context: t.context } }])[0] : task;
+        const patch = {
+          ...(t.context !== undefined ? { context: t.context } : {}),
+          ...(t.summary !== undefined ? { summary: t.summary } : {}),
+          ...(t.due !== undefined ? { due: t.due } : {}),
+          ...(t.blocked_by !== undefined ? { blockedBy: t.blocked_by } : {}),
+          ...(t.lane !== undefined ? { lane: t.lane } : {}),
+        };
+        return Object.keys(patch).length > 0 ? updateTasks([{ id: task.id, patch }])[0] : task;
       });
       onEvent("board");
-      return text({ ok: true, created });
+      return text({ ok: true, created: created.map(brief) });
     }
   );
 
@@ -116,7 +164,7 @@ export function buildMcpServer(onEvent: (kind: "board" | "proposals") => void): 
         }))
       );
       onEvent("board");
-      return text({ ok: true, updated });
+      return text({ ok: true, updated: updated.map(brief) });
     }
   );
 
@@ -142,7 +190,7 @@ export function buildMcpServer(onEvent: (kind: "board" | "proposals") => void): 
     async ({ ids }) => {
       const restored = ids.map((id) => restoreTask(id));
       onEvent("board");
-      return text({ ok: true, restored });
+      return text({ ok: true, restored: restored.map(brief) });
     }
   );
 
@@ -172,6 +220,12 @@ export function buildMcpServer(onEvent: (kind: "board" | "proposals") => void): 
       inputSchema: { terms: z.array(z.string()).describe("検索語(最大10)。言い換え・英日表記を並べる") },
     },
     async ({ terms }) => text(searchTasks(terms))
+  );
+
+  server.registerTool(
+    "list_trash",
+    { description: "ゴミ箱に入っているタスクを取得する (restore_tasks で戻せる)" },
+    async () => text({ tasks: listTrashedTasks().map(brief) })
   );
 
   server.registerTool(

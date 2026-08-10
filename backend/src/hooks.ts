@@ -7,3 +7,7 @@ export const hooks: {
   tasksCompleted: null,
   taskReopened: null,
 };
+
+/** #108: 要約の再生成中かどうか。MCP越しのエージェントからは進捗が見えず、
+ * 生成中なのに「完了した」と誤認しうるので list_tasks で知らせる */
+export const archiveState = { running: new Map<number, number>() };

@@ -6,7 +6,7 @@ import { Server } from "socket.io";
 import { onTaskReopened, onTasksCompleted } from "./archive.js";
 import { estimateCallCost, fetchBillingUsage, fetchModelCatalog, getModel, MODEL_DEFAULTS, type ModelSlot } from "./llm.js";
 import { generateSuggestions, runChatTurn } from "./chat.js";
-import { hooks } from "./hooks.js";
+import { archiveState, hooks } from "./hooks.js";
 import { log } from "./log.js";
 import { buildMcpServer } from "./mcp.js";
 import { resetPromptState } from "./promptState.js";
@@ -112,7 +112,7 @@ function broadcastProposals(projectId = currentProjectId()) {
 
 // 要約再生成は非同期で15〜30秒かかるため、実行中件数をUIへ通知する (#56)。
 // 件数はプロジェクトごとに数える — 別プロジェクトの再生成でスピナーが回ると誤解を生む
-const archiveJobs = new Map<number, number>();
+const archiveJobs = archiveState.running; // #108: MCPからも参照する
 function archiveJobDelta(projectId: number, delta: number) {
   const next = Math.max(0, (archiveJobs.get(projectId) ?? 0) + delta);
   archiveJobs.set(projectId, next);

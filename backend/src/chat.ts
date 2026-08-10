@@ -12,6 +12,7 @@ import {
   listSummaryCards,
   listTasks,
   memberLoads,
+  recentActivity,
   resolveProposal,
   setProjectContext,
   updateTask,
@@ -202,6 +203,17 @@ const tools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
   {
     type: "function",
     function: {
+      name: "get_activity",
+      description: "最近の動き(更新されたタスクと割り振り履歴)を新しい順に取得する。「直近なにをしてた?」等に使う",
+      parameters: {
+        type: "object",
+        properties: { limit: { type: "integer", description: "タスクの件数。既定15" } },
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
       name: "compact_archive",
       description: "要約カードを1枚の過去ログに統合する",
       parameters: { type: "object", properties: {} },
@@ -361,6 +373,9 @@ async function execTool(name: string, args: any, uiActions: UiAction[], events: 
       events.add("board");
       return { ok: true, id: updated.id };
     }
+    case "get_activity": {
+      return recentActivity(Math.min(Number(args.limit) || 15, 30));
+    }
     case "compact_archive": {
       try {
         const result = await compactArchive();
@@ -474,7 +489,7 @@ const VIEW_HINTS: Record<string, string> = {
   audit: [
     "",
     "## いま見ている画面: 📜監査",
-    "会話・LLM呼び出し・割り振り履歴のログを見ている。「直近何やってた?」等はボードの状態と経緯メモから答える。",
+    "会話・LLM呼び出し・割り振り履歴のログを見ている。「直近何やってた?」等は get_activity で実データを見てから答える。",
   ].join("\n"),
   trash: [
     "",
@@ -497,6 +512,7 @@ const TOOL_LABELS: Record<string, string> = {
   set_view: "ビューを切替",
   update_project_context: "前提情報を更新",
   compact_archive: "過去ログを整頓",
+  get_activity: "最近の動きを確認",
   get_task_details: "タスク詳細を取得",
   update_task_context: "経緯メモを更新",
   resolve_proposals: "提案を承認/却下",

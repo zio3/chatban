@@ -470,3 +470,30 @@ export function auditLog() {
   ).map((r) => ({ id: r.id, taskTitle: r.task_title, assignee: r.assignee, note: r.note, createdAt: r.created_at }));
   return { chat, llm, assignments };
 }
+
+/** #93: 「直近なにをしてた?」に実データで答えるための活動ログ。
+ * 監査タブの生ログ全部ではなく、経緯を語るのに要る分だけを絞って返す
+ * (ツールの戻り値がそのままプロンプトに乗るので、量がコストに直結する)。
+ * 会話ログは含めない — 進行中の会話は履歴として既にモデルの手元にあるため */
+export function recentActivity(limit = 15) {
+  const tasks = (
+    db()
+      .prepare(
+        "SELECT id, title, status, assignee, rejected, updated_at FROM tasks WHERE trashed_at IS NULL ORDER BY updated_at DESC, id DESC LIMIT ?"
+      )
+      .all(limit) as any[]
+  ).map((r) => ({
+    id: r.id,
+    title: r.title,
+    status: r.status,
+    assignee: r.assignee,
+    ...(r.rejected ? { rejected: true } : {}),
+    at: r.updated_at,
+  }));
+  const assignments = (
+    db()
+      .prepare("SELECT task_title, assignee, note, created_at FROM assignment_history ORDER BY id DESC LIMIT 10")
+      .all() as any[]
+  ).map((r) => ({ task: r.task_title, to: r.assignee, note: r.note ? String(r.note).slice(0, 80) : null, at: r.created_at }));
+  return { updatedTasks: tasks, assignments };
+}

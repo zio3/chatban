@@ -55,6 +55,7 @@ const REORDERABLE_STATUSES = ["todo", "inprogress", "review"];
 export const QUERY_LOG_DESCRIPTION = [
   "記録にSQLで問い合わせる(読み取り専用)。集計軸・期間・条件は自由に決めてよい。",
   "DBは SQLite。方言はSQLiteに合わせる — 日付は date()/datetime()/strftime() と修飾子('start of month', '-2 months' など)を使い、date_trunc/INTERVAL/NOW() のような他DBの関数は無い。真偽値は 0/1。文字列連結は || 。日時はISO 8601風の文字列で入っている",
+  "2つのscopeは分離ポリシーが違う。cost=全プロジェクト横断 (LLMの請求は口座単位なので、プロジェクトで割ると総額が出せない。project_id 列で絞り込みは可能) / audit=接続中のプロジェクトのみ (別プロジェクトのタスクや会話は見えない)",
   "scope='cost': llm_calls — id, purpose(chat/suggest/archive-decompose/archive-title), model, routed_model, prompt_tokens, completion_tokens, cached_tokens, elapsed_ms, project_id, price_in_per_m, price_out_per_m, estimated_usd, created_at",
   "scope='audit': このプロジェクトの記録。chat_messages(id, role, content, trace, usage, task_id, created_at) / assignment_history(task_title, assignee, note, created_at) / proposals(task_id, assignee, reason, status, created_at) / summary_cards(id, title, elements, task_ids, settled, created_at)",
   "scope='audit' の tasks(id, title, status, assignee, assign_reason, summary, context, context_version, due, blocked_by, rejected, checked_at, done_at, trashed_at, sort, archived, summary_card_id, created_at, updated_at)",

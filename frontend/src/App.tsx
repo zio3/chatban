@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { api, apiFetch, type Project } from "./api";
+import { api, apiFetch, type AuthState, type Project } from "./api";
 import { ensureProjectInUrl, gotoProject, projectIdFromUrl } from "./project";
 import AuditView from "./components/AuditView";
 import Board, { type MovePayload } from "./components/Board";
+import LoginView from "./components/LoginView";
 import Chat, { type Suggestion } from "./components/Chat";
 import ContextView from "./components/ContextView";
 import MetricsView from "./components/MetricsView";
@@ -44,6 +45,15 @@ export default function App() {
   const [archiveWorking, setArchiveWorking] = useState(false);
   // #21/#33: ボード以外の閲覧ビューへの遷移 (簡易タブ)
   const [view, setView] = useState<"board" | "context" | "metrics" | "audit" | "settings" | "trash">("board");
+
+  // #113: ログインは任意。していれば右上に誰として入っているかが出る。
+  // enabled は「必須にするか」のフラグで、既定オフ = ログインしなくても使える
+  const [auth, setAuth] = useState<AuthState | null>(null);
+  const [loginOpen, setLoginOpen] = useState(false);
+  const loadAuth = useCallback(() => api.authMe().then(setAuth).catch(() => setAuth(null)), []);
+  useEffect(() => {
+    loadAuth();
+  }, [loadAuth]);
   // #93: チャットは常設なので、いま見ている画面をメタ情報としてLLMへ渡す (発言者と同じ扱い)
   const viewRef = useRef(view);
   viewRef.current = view;
@@ -316,6 +326,11 @@ export default function App() {
   // 「切り替えたら詳細パネルもフィルタも検収チェックも落とす」を手で書いていたが、
   // URLに状態を持たせたら読み込み直しで自然に消える — 状態の置き場所を変えると後始末が消える例
 
+  // #113: enabled は「ログインを必須にするか」。既定オフ = ログインしなくても使えるが、
+  // ログインしたい人はヘッダーからできる (デモで「Googleでログインしている」事実を見せる用)
+  if (auth?.enabled && !auth.user)
+    return <LoginView clientId={auth.clientId} onLoggedIn={loadAuth} />;
+
   return (
     <div className="flex h-full bg-slate-100 text-slate-900">
       <div className="flex min-w-0 flex-1 flex-col">
@@ -392,8 +407,49 @@ export default function App() {
               </button>
             </span>
           )}
+          {/* #113: ログインしていれば誰として入っているかを出す。していなければ入口だけ置く。
+              どちらでも操作は同じ (ログインは任意) */}
+          {auth?.user ? (
+            <span className="ml-2 flex items-center gap-1.5" data-testid="account">
+              {auth.user.picture ? (
+                <img src={auth.user.picture} alt="" className="h-6 w-6 rounded-full" referrerPolicy="no-referrer" />
+              ) : (
+                <span className="flex h-6 w-6 items-center justify-center rounded-full bg-slate-300 text-[10px]">
+                  {auth.user.name.slice(0, 1)}
+                </span>
+              )}
+              <span className="text-xs text-slate-600" title={auth.user.email}>
+                {auth.user.name}
+              </span>
+              <button
+                data-testid="logout"
+                onClick={() => api.authLogout().then(loadAuth)}
+                className="rounded-full bg-slate-200 px-2 py-0.5 text-[11px] hover:bg-slate-300"
+              >
+                ログアウト
+              </button>
+            </span>
+          ) : (
+            <button
+              data-testid="login"
+              onClick={() => setLoginOpen(true)}
+              className="ml-2 rounded-full bg-slate-200 px-3 py-1 text-xs hover:bg-slate-300"
+            >
+              ログイン
+            </button>
+          )}
         </div>
       </header>
+      {loginOpen && auth && (
+        <LoginView
+          clientId={auth.clientId}
+          onLoggedIn={() => {
+            setLoginOpen(false);
+            loadAuth();
+          }}
+          onClose={() => setLoginOpen(false)}
+        />
+      )}
       <main className="min-h-0 flex-1 overflow-auto p-3">
         {view === "context" && <ContextView />}
         {view === "metrics" && <MetricsView />}

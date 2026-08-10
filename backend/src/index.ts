@@ -1,5 +1,6 @@
 import http from "node:http";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import cookieParser from "cookie-parser";
 import cors from "cors";
 import express from "express";
 import { Server } from "socket.io";
@@ -8,6 +9,7 @@ import { estimateCallCost, fetchBillingUsage, fetchModelCatalog, getModel, MODEL
 import { generateSuggestions, runChatTurn } from "./chat.js";
 import { archiveState, hooks } from "./hooks.js";
 import { log } from "./log.js";
+import { authEnabled, cookieMaxAge, cookieName, currentUser, loginWithGoogle, requireAuth } from "./auth.js";
 import { buildMcpServer } from "./mcp.js";
 import { resetPromptState } from "./promptState.js";
 import { assertTimezone } from "./timezone.js";
@@ -63,8 +65,48 @@ migrateLegacyDbIfNeeded();
 reportOrphanFiles();
 
 const app = express();
-app.use(cors());
+// #113: Cookieセッションを載せる以上、任意のオリジンを反射してはいけない
+// (origin:true + credentials:true だと、他サイトから認証済みリクエストを投げられる)。
+// Originヘッダの無い呼び出し (curl・同一オリジン・MCP) は通す
+const ALLOWED_ORIGINS = (process.env.CHATBAN_ALLOWED_ORIGINS ?? "http://localhost:5173,http://localhost:5199")
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);
+app.use(
+  cors({
+    origin: (origin, cb) => cb(null, !origin || ALLOWED_ORIGINS.includes(origin)),
+    credentials: true,
+  })
+);
+app.use(cookieParser());
 app.use(express.json({ limit: "25mb" })); // #68: 添付(画像/PDFのbase64)を受けるため拡大
+
+// #113: ログインの口。認証オフのときも動く (offなら誰も見に来ないだけ)
+app.get("/api/auth/me", (req, res) => {
+  res.json({ enabled: authEnabled(), user: currentUser(req), clientId: getSetting("auth.googleClientId") ?? "" });
+});
+
+app.post("/api/auth/google", async (req, res) => {
+  const r = await loginWithGoogle(String(req.body?.credential ?? ""));
+  if ("error" in r) return res.status(401).json(r);
+  res.cookie(cookieName, r.cookie, {
+    httpOnly: true,
+    sameSite: "lax",
+    // HTTPS で運用するときは平文で飛ばさない。ローカルのhttpでは付けられないので環境で切り替える
+    secure: process.env.CHATBAN_SECURE_COOKIE === "on",
+    maxAge: cookieMaxAge,
+  });
+  res.json({ user: r.user });
+});
+
+app.post("/api/auth/logout", (_req, res) => {
+  res.clearCookie(cookieName);
+  res.json({ ok: true });
+});
+
+// ここから下が保護対象。/mcp は下で別に定義していて、このミドルウェアを通らない
+// (ローカルのエージェント用の口なので塞がない #113)
+app.use("/api", requireAuth);
 
 // #97: どのプロジェクトへの操作かはクライアントがヘッダで明示する (UIはURL /p/<id> が持つ)。
 // 指定が無ければ既定プロジェクト (スクリプトやcurlからの素の呼び出し用)。
@@ -402,6 +444,28 @@ app.delete("/api/projects/:id", (req, res) => {
 
 // 管理画面 (#88): 用途別モデルの実効値と既定値。source=どこから来た値か
 const SLOTS: ModelSlot[] = ["main", "archive", "cheap"];
+// #113: ログイン設定 (GoogleクライアントIDと、通してよいメール)。
+// env ではなくDBに置くのは、⚙設定タブから再起動なしで変えられるようにするため (#88と同じ)。
+// クライアントIDは公開情報 (フロントに出る)。シークレットはこの方式では使わないので持たない
+app.get("/api/settings/auth", (_req, res) => {
+  res.json({
+    clientId: getSetting("auth.googleClientId") ?? "",
+    allowedEmails: getSetting("auth.allowedEmails") ?? "",
+    enabled: authEnabled(),
+  });
+});
+
+app.post("/api/settings/auth", (req, res) => {
+  const { clientId, allowedEmails } = req.body ?? {};
+  if (typeof clientId === "string") setSetting("auth.googleClientId", clientId.trim());
+  if (typeof allowedEmails === "string") setSetting("auth.allowedEmails", allowedEmails.trim());
+  res.json({
+    clientId: getSetting("auth.googleClientId") ?? "",
+    allowedEmails: getSetting("auth.allowedEmails") ?? "",
+    enabled: authEnabled(),
+  });
+});
+
 app.get("/api/settings/models", (_req, res) => {
   res.json({
     slots: SLOTS.map((slot) => ({

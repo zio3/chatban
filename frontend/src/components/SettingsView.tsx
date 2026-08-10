@@ -1,5 +1,6 @@
 import { apiFetch } from "../api";
 import { useEffect, useMemo, useState } from "react";
+import AuthSettings from "./AuthSettings";
 import ProjectSettings from "./ProjectSettings";
 
 // #88: 管理画面。用途別モデルを実行時に切り替える (再起動不要)。
@@ -90,6 +91,7 @@ export default function SettingsView() {
   return (
     <div className="mx-auto max-w-4xl space-y-5 p-6">
       <ProjectSettings />
+      <AuthSettings />
 
       <div>
         <h2 className="text-base font-bold">モデル設定</h2>

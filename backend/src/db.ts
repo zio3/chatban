@@ -34,6 +34,7 @@ function rowToTask(r: any): Task {
     rejected: !!r.rejected,
     trashedAt: r.trashed_at ?? null,
     checkedAt: r.checked_at ?? null,
+    doneAt: r.done_at ?? null,
     contextVersion: r.context_version ?? 1,
     sort: r.sort ?? r.id,
     createdAt: r.created_at,
@@ -77,7 +78,7 @@ export function updateTasks(patches: { id: number; patch: TaskPatch }[]): (Task 
     // done と review では消さない (done=検収の結果、review=検収待ちで印は進捗そのもの)
     const backToWork = next.status === "todo" || next.status === "inprogress";
     db().prepare(
-      "UPDATE tasks SET title = ?, status = ?, assignee = ?, assign_reason = ?, sort = ?, context = ?, summary = ?, due = ?, blocked_by = ?, rejected = ?, context_version = context_version + ?, checked_at = ?, updated_at = datetime('now', 'localtime') WHERE id = ?"
+      "UPDATE tasks SET title = ?, status = ?, assignee = ?, assign_reason = ?, sort = ?, context = ?, summary = ?, due = ?, blocked_by = ?, rejected = ?, context_version = context_version + ?, checked_at = ?, done_at = ?, updated_at = datetime('now', 'localtime') WHERE id = ?"
     ).run(
       next.title,
       next.status,
@@ -91,6 +92,8 @@ export function updateTasks(patches: { id: number; patch: TaskPatch }[]): (Task 
       next.rejected ? 1 : 0,
       contextChanged ? 1 : 0,
       backToWork ? null : (cur.checkedAt ?? null),
+      // 完了に入った瞬間だけ打刻する。以降の編集では動かさない (updated_at と違い「終わった日」)
+      next.status === "done" ? (cur.doneAt ?? new Date().toLocaleString("sv-SE")) : null,
       id
     );
     if (patch.assignee && patch.assignee !== cur.assignee) {

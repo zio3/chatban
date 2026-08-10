@@ -448,3 +448,34 @@ test("MCPの読み取りはSQL窓口1本。落とした一覧ツールは同じ�
   const anchor = await mcp("get_project_context", {});
   expect(anchor.project.id).toBe(1);
 });
+
+test("done_at は完了に入った瞬間だけ打刻され、その後の編集では動かない (#108)", async () => {
+  const id = await createTask("done_atの検証", "review");
+  const patch = (body: unknown) =>
+    fetch(`${API}/api/tasks/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  const get = async () => (await (await fetch(`${API}/api/tasks/${id}`)).json()) as any;
+
+  expect((await get()).doneAt).toBeFalsy();
+
+  await fetch(`${API}/api/tasks/approve`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ids: [id] }),
+  });
+  const done = await get();
+  expect(done.doneAt).toBeTruthy();
+
+  // 完了後の編集で「終わった日」は動かない (updated_at とはここが違う)
+  await patch({ summary: "完了後に編集" });
+  const edited = await get();
+  expect(edited.summary).toBe("完了後に編集"); // 更新自体は通っている
+  expect(edited.doneAt).toBe(done.doneAt); // それでも「終わった日」は動かない
+
+  // 完了から外れたらクリアされる (終わっていないものに完了日が残らない)
+  await patch({ status: "review" });
+  expect((await get()).doneAt).toBeFalsy();
+});

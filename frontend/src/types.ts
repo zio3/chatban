@@ -19,6 +19,7 @@ export interface Task {
   /** #102: ゴミ箱に入れた日時。nullなら通常のタスク */
   trashedAt?: string | null;
   checkedAt?: string | null;
+  doneAt?: string | null;
   sort: number;
   createdAt: string;
   updatedAt: string;

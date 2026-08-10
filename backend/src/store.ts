@@ -193,6 +193,12 @@ CREATE TABLE IF NOT EXISTS summary_cards (
   // 一塊の完了を管理する重要なフラグなので、UIの一時状態ではなくDBに持つ。
   // 書けるのは人間のUI経路(REST)だけで、エージェント(agentWrite)からは触れない
   addColumn("ALTER TABLE tasks ADD COLUMN checked_at TEXT");
+  // #108: Doneへ確定した日時。「いつ終わったか」を持つ列がどこにも無く、
+  // created_at(登録日) や summary_cards.created_at(#105の日次まとめで引き継がれる) では
+  // 完了の集計ができなかった。SQL窓口にしたことで露呈した穴 —
+  // 固定集計のツールでは聞ける質問が決まっているので見えなかった。
+  // この列より前に終わったものは null (埋めると嘘になるので記録が無いままにする)
+  addColumn("ALTER TABLE tasks ADD COLUMN done_at TEXT");
   addColumn("ALTER TABLE summary_cards ADD COLUMN settled INTEGER NOT NULL DEFAULT 0");
   addColumn("ALTER TABLE chat_messages ADD COLUMN task_id INTEGER");
 }

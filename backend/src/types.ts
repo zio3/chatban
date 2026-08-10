@@ -19,6 +19,8 @@ export interface Task {
   rejected: boolean;
   /** #102: ゴミ箱に入れた日時。nullなら通常のタスク */
   trashedAt?: string | null;
+  /** #108: Doneへ確定した日時。nullなら未完了、またはこの列より前に終わったもの */
+  doneAt?: string | null;
   /** #108: 人が実物で確かめた日時。nullなら未検収。AIは読むだけで書けない */
   checkedAt?: string | null;
   /** #112: 経緯メモの版。contextが変わるたびに +1。

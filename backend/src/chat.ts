@@ -5,7 +5,8 @@ import {
   assignmentHistory,
   createProposal,
   createTask,
-  deleteTask,
+  restoreTask,
+  trashTask,
   getTask,
   listPendingProposals,
   listSummaryCards,
@@ -110,7 +111,19 @@ const tools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
     type: "function",
     function: {
       name: "delete_tasks",
-      description: "タスクを削除する(複数可)",
+      description: "タスクをゴミ箱に入れる(複数可)。実データは残り「戻して」で復元できる",
+      parameters: {
+        type: "object",
+        properties: { ids: { type: "array", items: { type: "integer" } } },
+        required: ["ids"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "restore_tasks",
+      description: "ゴミ箱に入れたタスクを元に戻す(複数可)",
       parameters: {
         type: "object",
         properties: { ids: { type: "array", items: { type: "integer" } } },
@@ -225,13 +238,20 @@ const tools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
   },
 ];
 
+/** 発言者ラベルが本文として書き写されたときの保険。プロンプトは漏れるがツール契約は漏れない (#87と同じ考え方)。
+ * 先頭だけでなく行頭のどこに出ても落とす (経緯メモに段落として混ざる例があった) */
+function stripSpeakerLabel<T extends string | undefined | null>(v: T): T {
+  if (typeof v !== "string") return v;
+  return v.replace(/^\s*\[発言者:[^\]]*\]\s*/gm, "") as T;
+}
+
 async function execTool(name: string, args: any, uiActions: UiAction[], events: Set<string>): Promise<unknown> {
   switch (name) {
     case "create_tasks": {
       const created = (args.tasks as any[]).map((t) => {
-        const task = createTask(t.title, "todo", t.assignee ?? null, t.reason ?? null);
+        const task = createTask(stripSpeakerLabel(t.title), "todo", t.assignee ?? null, stripSpeakerLabel(t.reason) ?? null);
         const extra = {
-          ...(t.context ? { context: t.context } : {}),
+          ...(t.context ? { context: stripSpeakerLabel(t.context) } : {}),
           ...(t.due ? { due: t.due } : {}),
           ...(t.blocked_by?.length ? { blockedBy: t.blocked_by } : {}),
         };
@@ -282,10 +302,10 @@ async function execTool(name: string, args: any, uiActions: UiAction[], events: 
           return {
             id: u.id,
             patch: {
-              ...(changed(u.title, cur?.title) ? { title: u.title } : {}),
+              ...(changed(stripSpeakerLabel(u.title), cur?.title) ? { title: stripSpeakerLabel(u.title) } : {}),
               ...(statusChanged ? { status: u.status as TaskStatus } : {}),
               ...(assigneeChanged ? { assignee } : {}),
-              ...(keepReason ? { reason: u.reason } : {}),
+              ...(keepReason ? { reason: stripSpeakerLabel(u.reason) } : {}),
               ...(changed(lane, cur?.lane ?? null) ? { lane } : {}),
               ...(changed(due, cur?.due ?? null) ? { due } : {}),
               ...(blockedBy !== undefined && !sameDeps ? { blockedBy } : {}),
@@ -303,10 +323,20 @@ async function execTool(name: string, args: any, uiActions: UiAction[], events: 
           : {}),
       };
     }
-    case "delete_tasks": {
-      const results = (args.ids as number[]).map((id) => ({ id, deleted: deleteTask(id) }));
+    case "restore_tasks": {
+      const restored = (args.ids as number[]).map((id) => restoreTask(id));
       events.add("board");
-      return { ok: true, results };
+      return { ok: true, restored };
+    }
+    case "delete_tasks": {
+      // #102: 実データは消さずゴミ箱へ。誤解釈で消えても取り返しがつくようにする
+      const results = (args.ids as number[]).map((id) => ({ id, trashed: trashTask(id) }));
+      events.add("board");
+      return {
+        ok: true,
+        results,
+        note: "ゴミ箱に入れました (実データは残っています)。ユーザーには『取り消す場合は「#xxを戻して」と言ってください』と伝えてください",
+      };
     }
     case "propose_assignments": {
       const created = (args.proposals as any[]).map((p) => createProposal(p.taskId, p.assignee, p.reason));
@@ -329,7 +359,7 @@ async function execTool(name: string, args: any, uiActions: UiAction[], events: 
       return { tasks: details };
     }
     case "update_task_context": {
-      const updated = updateTask(args.id, { context: args.text ?? "" });
+      const updated = updateTask(args.id, { context: stripSpeakerLabel(args.text) ?? "" });
       if (!updated) return { error: `task #${args.id} not found` };
       events.add("board");
       return { ok: true, id: updated.id };
@@ -356,7 +386,7 @@ async function execTool(name: string, args: any, uiActions: UiAction[], events: 
   }
 }
 
-function buildSystemPrompt(taskFocus?: ReturnType<typeof getTask>): string {
+function buildSystemPrompt(taskFocus?: ReturnType<typeof getTask>, speaker?: string): string {
   const loads = memberLoads();
   const history = assignmentHistory();
   const pending = listPendingProposals();
@@ -395,6 +425,7 @@ function buildSystemPrompt(taskFocus?: ReturnType<typeof getTask>): string {
     "- 分類したい → lane (demo/later) か、タイトルの付け方で表現する",
     "- 優先したい → 並び順 (「これ上にして」) で表現する",
     "断るときは設計理由 (語彙が固定だから一言が正確に通じる) を一言添える。",
+    "- 削除はゴミ箱行き (復元可)。ただし「消して」がタスクの削除を指すのか文言の修正を指すのか曖昧なときは、消す前に確認する。",
     "",
     // ---- ここから動的セクション ----
     // #50: ボード状態は「基準スナップショット+変更イベント追記」でプレフィックスを安定させる (promptState.ts)。
@@ -408,6 +439,10 @@ function buildSystemPrompt(taskFocus?: ReturnType<typeof getTask>): string {
     JSON.stringify(history.slice(0, 10).map((h) => ({ t: h.taskTitle.slice(0, 30), a: h.assignee }))),
     "",
     pending.length ? `## 承認待ちの割り振り提案\n${JSON.stringify(pending)}` : "",
+    // 発言者はメタ情報。本文に混ぜるとタスクへ書き写されるので、ここで「書き写すな」と添えて渡す
+    speaker
+      ? `\n## いまの発言者: ${speaker}\n「終わりました」等の曖昧な言い回しの主語はこの人。これはメタ情報であって発言内容ではないので、タスクのタイトル・経緯メモ・理由には書き写さないこと。`
+      : "",
     taskFocus
       ? [
           "",
@@ -425,7 +460,8 @@ function buildSystemPrompt(taskFocus?: ReturnType<typeof getTask>): string {
 const TOOL_LABELS: Record<string, string> = {
   create_tasks: "タスクを追加",
   update_tasks: "タスクを更新",
-  delete_tasks: "タスクを削除",
+  delete_tasks: "ゴミ箱へ移動",
+  restore_tasks: "ゴミ箱から復元",
   propose_assignments: "割り振りを検討",
   set_view: "ビューを切替",
   update_project_context: "前提情報を更新",
@@ -521,9 +557,11 @@ export async function runChatTurn(
   const taskFocus = taskFocusId != null ? getTask(taskFocusId) : undefined;
   // #68: 添付はそのままコンテンツパートでLLMへ (画像=vision / PDF=file直投げ)。原本は保存しない
   const fileParts = attachments && attachments.length > 0 ? buildAttachmentParts(attachments) : [];
-  // #14: なりすまし切替の記名。発言者が分かると「終わりました」等の曖昧参照が解決できる
+  // #14: 発言者の記名。「終わりました」等の曖昧参照を解決するためのメタ情報であって発言内容ではない。
+  // 以前は本文の先頭に [発言者: xxx] を足していたが、LLMがそれをタスクのタイトルや経緯メモへ
+  // そのまま書き写す事故が起きた (#95のタイトルに混入)。メタ情報は本文に混ぜず、
+  // システムプロンプト側に「書き写すな」と添えて置く
   const baseText =
-    (speaker ? `[発言者: ${speaker}] ` : "") +
     userMessage +
     (fileParts.length > 0
       ? `\n[添付${fileParts.length}件 (${attachments!.map((a) => a.name).join(", ")}) — 内容を読み取って活用すること]`
@@ -531,7 +569,7 @@ export async function runChatTurn(
   const userContent: OpenAI.Chat.Completions.ChatCompletionUserMessageParam["content"] =
     fileParts.length > 0 ? [{ type: "text", text: baseText }, ...fileParts] : baseText;
   const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
-    { role: "system", content: buildSystemPrompt(taskFocus) },
+    { role: "system", content: buildSystemPrompt(taskFocus, speaker) },
     ...history.slice(-20),
     { role: "user", content: userContent },
   ];

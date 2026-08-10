@@ -6,6 +6,7 @@ import Chat, { type Suggestion } from "./components/Chat";
 import ContextView from "./components/ContextView";
 import MetricsView from "./components/MetricsView";
 import SettingsView from "./components/SettingsView";
+import TrashView from "./components/TrashView";
 import TaskDetailPanel from "./components/TaskDetailPanel";
 import { useChatTurn } from "./hooks/useChatTurn";
 import { socket } from "./socket";
@@ -39,7 +40,7 @@ export default function App() {
   const [detailTaskId, setDetailTaskId] = useState<number | null>(null);
   const [archiveWorking, setArchiveWorking] = useState(false);
   // #21/#33: ボード以外の閲覧ビューへの遷移 (簡易タブ)
-  const [view, setView] = useState<"board" | "context" | "metrics" | "audit" | "settings">("board");
+  const [view, setView] = useState<"board" | "context" | "metrics" | "audit" | "settings" | "trash">("board");
   // #14 → #90: なりきりの切替UIは撤去。デモでは人フィルタが見えれば足りると判断した。
   // 発言者(speaker)の配線自体は残してあるので、localStorage の chatban.currentUser を
   // 書き換えれば別人として発言できる (音声入力#20と同じく「入口だけ外す」扱い)
@@ -331,6 +332,7 @@ export default function App() {
                 { key: "context", label: "📋 前提" },
                 { key: "metrics", label: "📊 コスト" },
                 { key: "audit", label: "📜 監査" },
+                { key: "trash", label: "🗑 ゴミ箱" },
                 { key: "settings", label: "⚙ 設定" },
               ] as const
             ).map((v) => (
@@ -380,6 +382,7 @@ export default function App() {
         {view === "metrics" && <MetricsView />}
         {view === "audit" && <AuditView />}
         {view === "settings" && <SettingsView />}
+        {view === "trash" && <TrashView />}
         {view === "board" && loading && (
           <div data-testid="board-loading" className="flex h-40 items-center justify-center text-sm text-slate-400">
             読み込み中…

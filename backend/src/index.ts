@@ -29,7 +29,10 @@ import {
   auditLog,
   createTask,
   deleteSetting,
-  deleteTask,
+  listTrashedTasks,
+  purgeTask,
+  restoreTask,
+  trashTask,
   exportAll,
   getSetting,
   setSetting,
@@ -136,10 +139,30 @@ app.patch("/api/tasks/:id", (req, res) => {
   res.json(task);
 });
 
+// #102: 削除はゴミ箱行き (論理削除)。自然言語UIでは解釈ミスが必ず起きるので、
+// 「間違えないようにする」のではなく「間違えても取り返しがつく」形にする
 app.delete("/api/tasks/:id", (req, res) => {
-  const ok = deleteTask(Number(req.params.id));
+  const ok = trashTask(Number(req.params.id));
   if (!ok) return res.status(404).json({ error: "not found" });
   broadcastBoard();
+  res.json({ ok: true });
+});
+
+app.get("/api/trash", (_req, res) => {
+  res.json({ tasks: listTrashedTasks() });
+});
+
+app.post("/api/tasks/:id/restore", (req, res) => {
+  const task = restoreTask(Number(req.params.id));
+  if (!task) return res.status(404).json({ error: "not found" });
+  broadcastBoard();
+  res.json(task);
+});
+
+// 実体の削除。人間のUI操作からのみ通す (チャット・MCPにはこの口を出さない)
+app.delete("/api/trash/:id", (req, res) => {
+  const ok = purgeTask(Number(req.params.id));
+  if (!ok) return res.status(404).json({ error: "not found" });
   res.json({ ok: true });
 });
 

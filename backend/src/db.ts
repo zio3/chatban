@@ -8,8 +8,16 @@ import type { Member, Proposal, Task, TaskStatus } from "./types.js";
 
 export function listTasks(includeArchived = false): Task[] {
   // sort未設定の既存行はid順に混ざる (COALESCEでidを暫定sortとして扱う)
-  const where = includeArchived ? "" : "WHERE archived = 0";
+  // #102: ゴミ箱(trashed_at)は常に除外。復元できる形にしただけで、見え方は削除と同じ
+  const where = includeArchived ? "WHERE trashed_at IS NULL" : "WHERE archived = 0 AND trashed_at IS NULL";
   return (db().prepare(`SELECT * FROM tasks ${where} ORDER BY COALESCE(sort, id), id`).all() as any[]).map(rowToTask);
+}
+
+/** ゴミ箱の中身 (新しい順)。UIの復元導線とチャットの「戻して」で使う */
+export function listTrashedTasks(): Task[] {
+  return (
+    db().prepare("SELECT * FROM tasks WHERE trashed_at IS NOT NULL ORDER BY trashed_at DESC, id DESC").all() as any[]
+  ).map(rowToTask);
 }
 
 function rowToTask(r: any): Task {
@@ -94,7 +102,25 @@ export function updateTask(id: number, patch: TaskPatch): Task | undefined {
   return updateTasks([{ id, patch }])[0];
 }
 
-export function deleteTask(id: number): boolean {
+/** #102: 削除はゴミ箱行き (論理削除)。
+ * 自然言語UIでは解釈ミスが必ず起きる。「消せます?」が delete_tasks を呼んで実データが消えた事故を受け、
+ * 「間違えないようにする」のではなく「間違えても取り返しがつく」形に変えた。
+ * プロンプトの確認ルールは漏れるが、消えていないという事実は漏れない (#69 done封鎖と同じ考え方) */
+export function trashTask(id: number): boolean {
+  return (
+    db()
+      .prepare("UPDATE tasks SET trashed_at = datetime('now', 'localtime') WHERE id = ? AND trashed_at IS NULL")
+      .run(id).changes > 0
+  );
+}
+
+export function restoreTask(id: number): Task | undefined {
+  db().prepare("UPDATE tasks SET trashed_at = NULL WHERE id = ?").run(id);
+  return getTask(id);
+}
+
+/** 実体を消す。人間のUI操作からのみ通す (チャット・MCPからは呼ばない) */
+export function purgeTask(id: number): boolean {
   return db().prepare("DELETE FROM tasks WHERE id = ?").run(id).changes > 0;
 }
 

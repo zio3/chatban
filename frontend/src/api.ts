@@ -35,6 +35,10 @@ export const api = {
     }).then((r) => json<{ projects: Project[] }>(r)),
   deleteProject: (id: number) =>
     fetch(`/api/projects/${id}`, { method: "DELETE" }).then((r) => json<{ projects: Project[] }>(r)),
+  // #102: 削除はゴミ箱行き。実体を消せるのはゴミ箱からの purge だけ (人間のUI操作)
+  trash: () => fetch("/api/trash").then((r) => json<{ tasks: Task[] }>(r)),
+  restoreTask: (id: number) => fetch(`/api/tasks/${id}/restore`, { method: "POST" }).then((r) => json<Task>(r)),
+  purgeTask: (id: number) => fetch(`/api/trash/${id}`, { method: "DELETE" }).then((r) => json<{ ok: boolean }>(r)),
   board: () =>
     fetch("/api/board").then((r) =>
       json<{ tasks: Task[]; members: Member[]; proposals: Proposal[]; summaryCards: SummaryCard[] }>(r)

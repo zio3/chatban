@@ -225,3 +225,33 @@ test("プロジェクト: 切り替えるとボードが入れ替わり、#IDは
   await page.getByTestId("project-select").selectOption("1");
   await expect(page.getByTestId(`task-card-${inFirst}`)).toBeVisible();
 });
+
+test("削除はゴミ箱行きで復元できる。実体を消せるのはゴミ箱からだけ (#102)", async ({ page }) => {
+  const id = await createTask("E2E: ゴミ箱テスト");
+  await page.goto("/");
+  await expect(page.getByTestId(`task-card-${id}`)).toBeVisible();
+
+  // チャット/MCPと同じ経路 (DELETE /api/tasks/:id) はゴミ箱行き
+  await fetch(`${API}/api/tasks/${id}`, { method: "DELETE" });
+  await expect(page.getByTestId(`task-card-${id}`)).toBeHidden();
+
+  // 実体は残っている
+  const trashed = await (await fetch(`${API}/api/trash`)).json();
+  expect(trashed.tasks.some((t: any) => t.id === id)).toBe(true);
+
+  // ゴミ箱画面から戻せる
+  await page.getByRole("button", { name: "🗑 ゴミ箱" }).click();
+  await page.getByRole("button", { name: "戻す" }).first().click();
+  await page.getByRole("button", { name: "ボード" }).click();
+  await expect(page.getByTestId(`task-card-${id}`)).toBeVisible();
+
+  // 完全削除は二段階 (押し間違いで消えない)
+  await fetch(`${API}/api/tasks/${id}`, { method: "DELETE" });
+  await page.getByRole("button", { name: "🗑 ゴミ箱" }).click();
+  await page.getByRole("button", { name: "完全に削除" }).first().click();
+  await expect(page.getByRole("button", { name: "本当に消す" })).toBeVisible();
+  await page.getByRole("button", { name: "本当に消す" }).click();
+  await expect(page.getByText("ゴミ箱は空です")).toBeVisible(); // 反映を待ってから実体を確認する
+  const after = await (await fetch(`${API}/api/trash`)).json();
+  expect(after.tasks.some((t: any) => t.id === id)).toBe(false);
+});

@@ -136,6 +136,8 @@ CREATE TABLE IF NOT EXISTS summary_cards (
   addColumn("ALTER TABLE tasks ADD COLUMN due TEXT");
   addColumn("ALTER TABLE tasks ADD COLUMN blocked_by TEXT");
   addColumn("ALTER TABLE tasks ADD COLUMN rejected INTEGER NOT NULL DEFAULT 0");
+  // #102: 削除は論理削除 (ゴミ箱)。解釈ミスが取り返しのつかない結果に直結しないようにする
+  addColumn("ALTER TABLE tasks ADD COLUMN trashed_at TEXT");
   addColumn("ALTER TABLE summary_cards ADD COLUMN settled INTEGER NOT NULL DEFAULT 0");
   addColumn("ALTER TABLE chat_messages ADD COLUMN task_id INTEGER");
 }

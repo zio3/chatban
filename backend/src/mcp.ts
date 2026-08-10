@@ -3,7 +3,8 @@ import { z } from "zod";
 import {
   createProposal,
   createTask,
-  deleteTask,
+  restoreTask,
+  trashTask,
   getProjectContext,
   listMembers,
   listPendingProposals,
@@ -119,13 +120,26 @@ export function buildMcpServer(onEvent: (kind: "board" | "proposals") => void): 
   server.registerTool(
     "delete_tasks",
     {
-      description: "タスクを削除する(複数可)",
+      description: "タスクをゴミ箱に入れる(複数可)。実データは残り restore_tasks で戻せる",
       inputSchema: { ids: z.array(z.number().int()) },
     },
     async ({ ids }) => {
-      const results = ids.map((id) => ({ id, deleted: deleteTask(id) }));
+      const results = ids.map((id) => ({ id, trashed: trashTask(id) }));
       onEvent("board");
-      return text({ ok: true, results });
+      return text({ ok: true, results, note: "ゴミ箱に入れました (実データは残っています)。復元は restore_tasks" });
+    }
+  );
+
+  server.registerTool(
+    "restore_tasks",
+    {
+      description: "ゴミ箱に入れたタスクを元に戻す(複数可)",
+      inputSchema: { ids: z.array(z.number().int()) },
+    },
+    async ({ ids }) => {
+      const restored = ids.map((id) => restoreTask(id));
+      onEvent("board");
+      return text({ ok: true, restored });
     }
   );
 

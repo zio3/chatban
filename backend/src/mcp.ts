@@ -43,7 +43,8 @@ function brief(t: ReturnType<typeof getTask>, personal = false) {
     ...(t.lane ? { lane: t.lane } : {}),
     ...(t.blockedBy?.length ? { blockedBy: t.blockedBy } : {}),
     ...(t.rejected ? { rejected: true } : {}),
-    ...(t.context ? { contextChars: t.context.length } : {}),
+    ...(t.context ? { contextChars: t.context.length, contextVersion: t.contextVersion } : {}),
+    updatedAt: t.updatedAt,
   };
 }
 
@@ -145,7 +146,15 @@ export function buildMcpServer(onEvent: (kind: "board" | "proposals") => void): 
                 }),
             summary: z.string().optional().describe("現況の一言。カードに表示される。詳細な根拠は context へ"),
             lane: z.enum(["demo", "later"]).nullable().optional().describe("demo=90秒台本に必要 / later=機能凍結後"),
-            context: z.string().optional().describe("経緯メモ(詳細・決定事項)の全文上書き"),
+            context: z
+              .string()
+              .optional()
+              .describe("経緯メモの全文上書き。既存を読んでマージすること。渡すときは context_version も必須"),
+            context_version: z
+              .number()
+              .int()
+              .optional()
+              .describe("context を渡すときのみ必須。直前に list_tasks で読んだ contextVersion をそのまま添える"),
             due: z.string().nullable().optional().describe("期限 YYYY-MM-DD。解除はnull"),
             blocked_by: z.array(z.number().int()).nullable().optional().describe("依存先タスクID(全置換)。解除はnull"),
             rejected: z.boolean().optional().describe("却下(やらない決定)フラグ。reasonに根拠を書く"),
@@ -154,9 +163,15 @@ export function buildMcpServer(onEvent: (kind: "board" | "proposals") => void): 
       },
     },
     async ({ updates }) => {
-      const { updated, note } = updateTasksAsAgent(updates as any);
+      const { updated, note, conflicts } = updateTasksAsAgent(updates as any);
       onEvent("board");
-      return text({ ok: true, updated: (updated as any[]).map((t: any) => brief(t, isPersonal)), ...(note ? { note } : {}) });
+      return text({
+        ok: true,
+        updated: (updated as any[]).map((t: any) => brief(t, isPersonal)),
+        // #112: 経緯メモの版が合わなかったものは適用していない。現在の全文を返すのでマージして再実行する
+        ...(conflicts ? { conflicts } : {}),
+        ...(note ? { note } : {}),
+      });
     }
   );
 

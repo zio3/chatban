@@ -35,6 +35,16 @@ export interface AgentTaskInput {
 export interface AgentTaskUpdate extends Partial<AgentTaskInput> {
   id: number;
   rejected?: boolean;
+  /** #112: 読んだ時点の経緯メモの版。context を書き換えるときは必須 */
+  context_version?: number;
+}
+
+/** 経緯メモの更新が古い版に基づいていた場合。エージェントに再マージさせるため現在値を返す */
+export interface ContextConflict {
+  id: number;
+  contextVersion: number;
+  context: string | null;
+  note: string;
 }
 
 /** doneはエージェントから設定できない。唯一の扉は人間の検収UI (#69) */
@@ -73,9 +83,11 @@ export function createTasksAsAgent(tasks: AgentTaskInput[]): { created: unknown[
 export function updateTasksAsAgent(updates: AgentTaskUpdate[]): {
   updated: unknown[];
   coerced: number[];
+  conflicts?: ContextConflict[];
   note?: string;
 } {
   const coerced: number[] = [];
+  const conflicts: ContextConflict[] = [];
 
   const patches = updates.map((u) => {
     // #87: 「差分だけ送る」モデルを前提にしない。全フィールドをエコーバックするモデル
@@ -107,6 +119,24 @@ export function updateTasksAsAgent(updates: AgentTaskUpdate[]): {
       u.assign_reason !== cur?.assignReason &&
       (assigneeChanged || statusChanged || rejectedChanged);
 
+    // #112: 経緯メモは「読む→マージ→全文で書き戻す」契約なので、読んでから書くまでの間に
+    // 他人(人間のUI・別セッション)が追記していると、その追記が黙って消える。
+    // 版が合わないときは弾くのではなく、現在の全文と版を返して再マージさせる
+    // (#114のdone→reviewと同じ「拒否ではなく情報を返す」形。LLMは読み直して考え直せる)
+    const contextIncoming = changed(u.context, cur?.context ?? null);
+    const contextStale = contextIncoming && u.context_version !== cur?.contextVersion;
+    if (contextStale) {
+      conflicts.push({
+        id: u.id,
+        contextVersion: cur?.contextVersion ?? 1,
+        context: cur?.context ?? null,
+        note:
+          u.context_version === undefined
+            ? "経緯メモの更新には context_version が必要です。返した context に自分の追記をマージし、この contextVersion を添えて再実行してください"
+            : "経緯メモが他から更新されています。返した context に自分の追記をマージし、この contextVersion を添えて再実行してください",
+      });
+    }
+
     return {
       id: u.id,
       patch: {
@@ -117,7 +147,7 @@ export function updateTasksAsAgent(updates: AgentTaskUpdate[]): {
         ...(changed(lane, cur?.lane ?? null) ? { lane } : {}),
         ...(changed(due, cur?.due ?? null) ? { due } : {}),
         ...(blockedBy !== undefined && !sameDeps ? { blockedBy } : {}),
-        ...(changed(u.context, cur?.context ?? null) ? { context: stripSpeakerLabel(u.context) } : {}),
+        ...(contextIncoming && !contextStale ? { context: stripSpeakerLabel(u.context) } : {}),
         ...(changed(u.summary, cur?.summary ?? null) ? { summary: u.summary } : {}),
         ...(rejectedChanged ? { rejected: !!u.rejected } : {}),
       } as TaskPatch,
@@ -129,6 +159,7 @@ export function updateTasksAsAgent(updates: AgentTaskUpdate[]): {
   return {
     updated,
     coerced,
+    ...(conflicts.length > 0 ? { conflicts } : {}),
     ...(coerced.length > 0 ? { note: `#${coerced.join(", #")} は${DONE_NOTE}` } : {}),
   };
 }

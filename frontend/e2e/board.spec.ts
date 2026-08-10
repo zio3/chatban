@@ -341,3 +341,45 @@ test("Done列のカードはドラッグで持ち出せない (#105)", async ({ 
   await expect(page.getByTestId("column-done").getByTestId(`task-card-${id}`)).toBeVisible();
   expect(await getTaskStatus(id)).toBe("done");
 });
+
+// MCP (Streamable HTTP) をエージェントと同じ経路で叩く。SSEで返るので最後のJSONを拾う
+async function mcp(tool: string, args: unknown): Promise<any> {
+  const res = await fetch(`${API}/mcp/1`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream" },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: tool, arguments: args } }),
+  });
+  const body = await res.text();
+  const line = body
+    .split("\n")
+    .map((l) => l.replace(/^data: /, "").trim())
+    .filter((l) => l.startsWith("{"))
+    .pop()!;
+  return JSON.parse(JSON.parse(line).result.content[0].text);
+}
+
+test("経緯メモの上書きは版が合うときだけ通る。状態変更は版に縛られない (#112)", async () => {
+  const id = await createTask("楽観ロックの検証");
+
+  // 版を添えないと適用されない (「必須」がプロンプトではなく契約で効いている)
+  const noVersion = await mcp("update_tasks", { updates: [{ id, context: "版なしで書く" }] });
+  expect(noVersion.conflicts?.[0]?.id).toBe(id);
+  expect(noVersion.conflicts[0].contextVersion).toBe(1);
+
+  // 正しい版なら通り、版が上がる
+  const ok = await mcp("update_tasks", { updates: [{ id, context: "Aの追記", context_version: 1 }] });
+  expect(ok.conflicts).toBeUndefined();
+  expect(ok.updated[0].contextVersion).toBe(2);
+
+  // 古い版のままだと衝突し、Aの追記は消えない。現在の全文が返るのでマージできる
+  const stale = await mcp("update_tasks", { updates: [{ id, context: "Bの追記", context_version: 1 }] });
+  expect(stale.conflicts[0].context).toBe("Aの追記");
+  expect(stale.conflicts[0].contextVersion).toBe(2);
+
+  // 状態変更は版を要求されず、経緯メモの版も上げない
+  // (1本の版で守ると、長い書き戻しが無関係な状態変更で弾かれてしまう)
+  const statusOnly = await mcp("update_tasks", { updates: [{ id, status: "inprogress" }] });
+  expect(statusOnly.conflicts).toBeUndefined();
+  expect(statusOnly.updated[0].status).toBe("inprogress");
+  expect(statusOnly.updated[0].contextVersion).toBe(2);
+});

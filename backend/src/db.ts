@@ -34,6 +34,7 @@ function rowToTask(r: any): Task {
     blockedBy: r.blocked_by ? JSON.parse(r.blocked_by) : null,
     rejected: !!r.rejected,
     trashedAt: r.trashed_at ?? null,
+    contextVersion: r.context_version ?? 1,
     sort: r.sort ?? r.id,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
@@ -68,8 +69,11 @@ export function updateTasks(patches: { id: number; patch: TaskPatch }[]): (Task 
     // 誰にも割り当たっていないのにフィルタにも負荷計算にも乗らない幽霊状態になる
     if (patch.assignee === "") patch = { ...patch, assignee: null };
     const next = { ...cur, ...patch };
+    // #112: 経緯メモが実際に変わったときだけ版を上げる。
+    // 他の列の更新で上げてしまうと、context を書いている側が無関係な変更で弾かれる
+    const contextChanged = patch.context !== undefined && patch.context !== cur.context;
     db().prepare(
-      "UPDATE tasks SET title = ?, status = ?, assignee = ?, assign_reason = ?, sort = ?, lane = ?, context = ?, summary = ?, due = ?, blocked_by = ?, rejected = ?, updated_at = datetime('now', 'localtime') WHERE id = ?"
+      "UPDATE tasks SET title = ?, status = ?, assignee = ?, assign_reason = ?, sort = ?, lane = ?, context = ?, summary = ?, due = ?, blocked_by = ?, rejected = ?, context_version = context_version + ?, updated_at = datetime('now', 'localtime') WHERE id = ?"
     ).run(
       next.title,
       next.status,
@@ -82,6 +86,7 @@ export function updateTasks(patches: { id: number; patch: TaskPatch }[]): (Task 
       next.due,
       next.blockedBy?.length ? JSON.stringify(next.blockedBy) : null,
       next.rejected ? 1 : 0,
+      contextChanged ? 1 : 0,
       id
     );
     if (patch.assignee && patch.assignee !== cur.assignee) {

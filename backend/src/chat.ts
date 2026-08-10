@@ -105,6 +105,8 @@ const tools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
                 due: { type: ["string", "null"], description: "期限 YYYY-MM-DD。解除はnull" },
                 blocked_by: { type: ["array", "null"], items: { type: "integer" }, description: "依存先タスクID(全置換)。解除はnull" },
                 rejected: { type: "boolean", description: "却下(やらない決定)フラグ。却下時はtrue+reasonに根拠。取り消しはfalse" },
+                context: { type: "string", description: "経緯メモの全文。上書きなので既存を読んでマージすること。渡すときは context_version も必須" },
+                context_version: { type: "integer", description: "context を渡すときのみ必須。直前に読んだ contextVersion をそのまま添える" },
               },
               required: ["id"],
             },
@@ -201,8 +203,12 @@ const tools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
         properties: {
           id: { type: "integer" },
           text: { type: "string", description: "新しいcontext全文" },
+          context_version: {
+            type: "integer",
+            description: "get_task_details で読んだ contextVersion をそのまま渡す。読んでから書くまでの間に他から追記されていないかの確認に使う",
+          },
         },
-        required: ["id", "text"],
+        required: ["id", "text", "context_version"],
       },
     },
   },
@@ -353,9 +359,10 @@ async function execTool(name: string, args: any, uiActions: UiAction[], events: 
       return { ok: true, ...r };
     }
     case "update_tasks": {
-      const { updated, note } = updateTasksAsAgent(args.updates ?? []);
+      const { updated, note, conflicts } = updateTasksAsAgent(args.updates ?? []);
       events.add("board");
-      return { ok: true, updated, ...(note ? { note } : {}) };
+      // #112: 版が合わなかった経緯メモは適用していない。現在の全文を返すのでマージして再実行する
+      return { ok: true, updated, ...(conflicts ? { conflicts } : {}), ...(note ? { note } : {}) };
     }
     case "delete_tasks": {
       // #102: 実データは消さずゴミ箱へ。誤解釈で消えても取り返しがつくようにする
@@ -392,7 +399,12 @@ async function execTool(name: string, args: any, uiActions: UiAction[], events: 
       return { tasks: details };
     }
     case "update_task_context": {
-      const updated = updateTask(args.id, { context: stripSpeakerLabel(args.text) ?? "" });
+      // #112/#114: 経緯メモの上書きも agentWrite を通す (版の確認を1箇所に集約)
+      const r = updateTasksAsAgent([
+        { id: args.id, context: stripSpeakerLabel(args.text) ?? "", context_version: args.context_version },
+      ]);
+      if (r.conflicts?.length) return r.conflicts[0];
+      const updated = r.updated[0] as ReturnType<typeof getTask>;
       if (!updated) return { error: `task #${args.id} not found` };
       events.add("board");
       return { ok: true, id: updated.id };

@@ -178,6 +178,12 @@ CREATE TABLE IF NOT EXISTS summary_cards (
   // MCP経由のエージェントが進捗を書き込む欄になっていた。名前で用途が分かるようにする
   // (既存DBのみRENAMEが成功し、新規DBはCREATE時点でassign_reasonなので失敗して無視される)
   addColumn("ALTER TABLE tasks RENAME COLUMN reason TO assign_reason");
+  // #112: 楽観ロックは経緯メモ(context)にだけ効かせる。
+  // エージェントは「読む→考える(数十秒)→書く」なので、その間の変更を踏み潰しうる。
+  // ただし失うものが大きいのは context だけ — 全文上書きの契約なので、衝突すると
+  // 他人の追記が消える。status や due のような単一値は後勝ちでも実害が小さく、
+  // むしろ長いサイクル(context)と同じ番号で守ると、実害のない衝突でリトライが多発する
+  addColumn("ALTER TABLE tasks ADD COLUMN context_version INTEGER NOT NULL DEFAULT 1");
   addColumn("ALTER TABLE summary_cards ADD COLUMN settled INTEGER NOT NULL DEFAULT 0");
   addColumn("ALTER TABLE chat_messages ADD COLUMN task_id INTEGER");
 }

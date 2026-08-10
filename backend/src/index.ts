@@ -442,19 +442,22 @@ app.post("/mcp/:projectId", async (req, res) => {
     log("mcp", `存在しないプロジェクト #${req.params.projectId} への接続を拒否`);
     return res.status(400).json({ error: `project #${req.params.projectId} not found`, available: projectList() });
   }
-  // 書き込みはこの接続のプロジェクトに対して行う。UIへの通知は表示中のときだけ
-  // #99: 接続先プロジェクトのroomへ送るだけでよい (購読していないクライアントには届かない)
-  const mcpServer = buildMcpServer((kind) => {
-    if (kind === "board") broadcastBoard(projectId);
-    else broadcastProposals(projectId);
-  });
-  const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
-  res.on("close", () => {
-    transport.close();
-    mcpServer.close();
-  });
   try {
+    // #110: サーバーの組み立て自体をプロジェクトスコープ内で行う。
+    // ツール定義がプロジェクトの状態(メンバーの有無)で変わるようになったため、
+    // 構築時点でも対象プロジェクトのDBを見ている必要がある
     await withProject(projectId, async () => {
+      // 書き込みはこの接続のプロジェクトに対して行う。UIへの通知は表示中のときだけ
+      // #99: 接続先プロジェクトのroomへ送るだけでよい (購読していないクライアントには届かない)
+      const mcpServer = buildMcpServer((kind) => {
+        if (kind === "board") broadcastBoard(projectId);
+        else broadcastProposals(projectId);
+      });
+      const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
+      res.on("close", () => {
+        transport.close();
+        mcpServer.close();
+      });
       await mcpServer.connect(transport);
       await transport.handleRequest(req, res, req.body);
     });

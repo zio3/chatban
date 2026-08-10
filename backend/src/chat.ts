@@ -312,6 +312,31 @@ const tools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
   },
 ];
 
+/** #109/#110: メンバーが1人も居ないプロジェクトは「個人用」。担当者という概念自体を消す。
+ * MCP側(mcp.ts)と同じ扱いにする — 片方だけ直すと「MCPでは消えたのにチャットでは担当者を聞かれる」
+ * という、入口ごとの契約のズレ(#92 #108 #114と同型)がまた生まれる。
+ *
+ * 共有プロジェクトでは元の配列をそのまま返す。ツール定義はプロンプトの一部なので、
+ * 組み立て直してバイト列が揺れるとキャッシュが外れる */
+const ASSIGNEE_TOOLS = ["propose_assignments", "resolve_proposals", "set_view"];
+let personalTools: OpenAI.Chat.Completions.ChatCompletionTool[] | null = null;
+
+function toolsFor(personal: boolean): OpenAI.Chat.Completions.ChatCompletionTool[] {
+  if (!personal) return tools;
+  if (personalTools) return personalTools;
+  personalTools = JSON.parse(JSON.stringify(tools))
+    .filter((t: any) => !ASSIGNEE_TOOLS.includes(t.function.name))
+    .map((t: any) => {
+      const items = t.function.parameters?.properties?.tasks?.items ?? t.function.parameters?.properties?.updates?.items;
+      if (items?.properties) {
+        delete items.properties.assignee;
+        delete items.properties.assign_reason;
+      }
+      return t;
+    });
+  return personalTools!;
+}
+
 /** 発言者ラベルが本文として書き写されたときの保険。プロンプトは漏れるがツール契約は漏れない (#87と同じ考え方)。
  * 先頭だけでなく行頭のどこに出ても落とす (経緯メモに段落として混ざる例があった) */
 function stripSpeakerLabel<T extends string | undefined | null>(v: T): T {
@@ -619,7 +644,7 @@ async function generateSuggestionsUncached(systemPrompt: string): Promise<{ labe
           'ボードの現状を読んで、いまユーザーにとって価値のある操作を最大3つ提案して。ツールは呼ばない。出力はJSON配列のみ: [{"label":"絵文字+15字以内の短文","message":"チャットにそのまま投げる依頼文"}]。期限接近・依存解除・検収たまり・未割り当てなど文脈が根拠のものを優先。',
       },
     ],
-    tools,
+    tools: toolsFor(memberLoads().length === 0),
   });
   const text = res.choices[0].message.content ?? "";
   const m = text.match(/\[[\s\S]*\]/);
@@ -665,6 +690,7 @@ export async function runChatTurn(
     ...history.slice(-20),
     { role: "user", content: userContent },
   ];
+  const isPersonal = memberLoads().length === 0; // #109/#110
   const trace: ToolTrace[] = [];
   const uiActions: UiAction[] = [];
   const usage: ChatResult["usage"] = { promptTokens: 0, completionTokens: 0, rounds: 0, elapsedMs: 0, calls: [] };
@@ -672,7 +698,7 @@ export async function runChatTurn(
 
   for (let round = 0; round < 8; round++) {
     const c0 = Date.now();
-    const res = await chatCompletion("chat", getModel("main"), { messages, tools });
+    const res = await chatCompletion("chat", getModel("main"), { messages, tools: toolsFor(isPersonal) });
     usage.rounds++;
     usage.promptTokens += res.usage?.prompt_tokens ?? 0;
     usage.completionTokens += res.usage?.completion_tokens ?? 0;

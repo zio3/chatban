@@ -31,13 +31,13 @@ function text(data: unknown) {
 
 /** #108: 更新結果は要点だけ返す。以前は context を含む全フィールドが返っており、
  * 経緯メモを更新するたびに自分が書いた1,800字がそっくり戻ってきていた (トークンの無駄) */
-function brief(t: ReturnType<typeof getTask>) {
+function brief(t: ReturnType<typeof getTask>, personal = false) {
   if (!t) return null;
   return {
     id: t.id,
     title: t.title,
     status: t.status,
-    assignee: t.assignee,
+    ...(personal ? {} : { assignee: t.assignee }),
     ...(t.summary ? { summary: t.summary } : {}),
     ...(t.due ? { due: t.due } : {}),
     ...(t.lane ? { lane: t.lane } : {}),
@@ -57,6 +57,12 @@ function currentProject() {
 export function buildMcpServer(onEvent: (kind: "board" | "proposals") => void): McpServer {
   const server = new McpServer({ name: "chatban", version: "0.1.0" });
 
+  // #109/#110: メンバーが1人も居ないプロジェクトは「個人用」。担当者という概念自体を消す。
+  // ツールを隠すだけでは足りず、create_tasks/update_tasks のスキーマから assignee を外さないと
+  // 「無い」にならない (エージェントから見えるのはスキーマなので、隠しても項目が残っていれば使う)。
+  // 接続ごとにサーバーを組み立てているので、プロジェクトを見て定義を変えられる
+  const isPersonal = listMembers().length === 0;
+
   server.registerTool(
     "list_tasks",
     { description: "かんばんボードの全タスクとメンバー(負荷つき)を取得する" },
@@ -65,9 +71,13 @@ export function buildMcpServer(onEvent: (kind: "board" | "proposals") => void): 
         // #96: この接続が固定されているプロジェクト。エージェントが自分の作業対象を確認できるように
         // 応答に含める (接続URLで決まるので途中で変わらない)
         project: currentProject(),
-        tasks: listTasks(),
-        members: memberLoads(),
-        pendingProposals: listPendingProposals(),
+        // 個人用プロジェクトでは担当者という概念自体が無い (#109/#110)。
+        // ツールとスキーマから消しても、一覧に assignee: null が並んでいれば
+        // 「使える項目がある」と読まれるので、応答からも落とす
+        tasks: isPersonal
+          ? listTasks().map(({ assignee: _a, assignReason: _r, ...t }) => t)
+          : listTasks(),
+        ...(isPersonal ? {} : { members: memberLoads(), pendingProposals: listPendingProposals() }),
         // #108: 要約カードの状態が取れず、毎回RESTを叩いていた。要素は件数だけ返す(全文は重い)
         summaryCards: listSummaryCards().map((c) => ({
           id: c.id,
@@ -93,8 +103,12 @@ export function buildMcpServer(onEvent: (kind: "board" | "proposals") => void): 
           z.object({
             title: z.string(),
             status: STATUS.optional().describe("省略時はtodo"),
-            assignee: z.string().optional().describe("担当者名。未定なら省略"),
-            assign_reason: z.string().optional().describe("なぜこの担当かを一言で。進捗は書かない"),
+            ...(isPersonal
+              ? {}
+              : {
+                  assignee: z.string().optional().describe("担当者名。未定なら省略"),
+                  assign_reason: z.string().optional().describe("なぜこの担当かを一言で。進捗は書かない"),
+                }),
             context: z.string().optional().describe("登録に至った経緯・論点・決定事項 (経緯メモの初期値)"),
             summary: z.string().optional().describe("現況の一言。カードに表示される"),
             due: z.string().optional().describe("期限 YYYY-MM-DD"),
@@ -109,7 +123,7 @@ export function buildMcpServer(onEvent: (kind: "board" | "proposals") => void): 
       // done指定がそのまま通って「AIが自主的にDoneへ移動」する事故が起きた
       const r = createTasksAsAgent(tasks as any);
       onEvent("board");
-      return text({ ok: true, created: (r.created as any[]).map(brief), ...(r.note ? { note: r.note } : {}) });
+      return text({ ok: true, created: (r.created as any[]).map((t: any) => brief(t, isPersonal)), ...(r.note ? { note: r.note } : {}) });
     }
   );
 
@@ -123,8 +137,12 @@ export function buildMcpServer(onEvent: (kind: "board" | "proposals") => void): 
             id: z.number().int(),
             title: z.string().optional(),
             status: STATUS.optional(),
-            assignee: z.string().nullable().optional(),
-            assign_reason: z.string().optional().describe("なぜこの担当かを一言で。進捗は書かない"),
+            ...(isPersonal
+              ? {}
+              : {
+                  assignee: z.string().nullable().optional(),
+                  assign_reason: z.string().optional().describe("なぜこの担当かを一言で。進捗は書かない"),
+                }),
             summary: z.string().optional().describe("現況の一言。カードに表示される。詳細な根拠は context へ"),
             lane: z.enum(["demo", "later"]).nullable().optional().describe("demo=90秒台本に必要 / later=機能凍結後"),
             context: z.string().optional().describe("経緯メモ(詳細・決定事項)の全文上書き"),
@@ -138,7 +156,7 @@ export function buildMcpServer(onEvent: (kind: "board" | "proposals") => void): 
     async ({ updates }) => {
       const { updated, note } = updateTasksAsAgent(updates as any);
       onEvent("board");
-      return text({ ok: true, updated: (updated as any[]).map(brief), ...(note ? { note } : {}) });
+      return text({ ok: true, updated: (updated as any[]).map((t: any) => brief(t, isPersonal)), ...(note ? { note } : {}) });
     }
   );
 
@@ -164,11 +182,13 @@ export function buildMcpServer(onEvent: (kind: "board" | "proposals") => void): 
     async ({ ids }) => {
       const restored = ids.map((id) => restoreTask(id));
       onEvent("board");
-      return text({ ok: true, restored: restored.map(brief) });
+      return text({ ok: true, restored: restored.map((t: any) => brief(t, isPersonal)) });
     }
   );
 
-  server.registerTool(
+  // 個人用プロジェクトでは担当者関連のツールごと出さない (#109/#110)
+  if (!isPersonal)
+    server.registerTool(
     "propose_assignments",
     {
       description:
@@ -199,10 +219,11 @@ export function buildMcpServer(onEvent: (kind: "board" | "proposals") => void): 
   server.registerTool(
     "list_trash",
     { description: "ゴミ箱に入っているタスクを取得する (restore_tasks で戻せる)" },
-    async () => text({ tasks: listTrashedTasks().map(brief) })
+    async () => text({ tasks: listTrashedTasks().map((t: any) => brief(t, isPersonal)) })
   );
 
-  server.registerTool(
+  if (!isPersonal)
+    server.registerTool(
     "list_members",
     { description: "メンバー一覧(スキル情報つき)を取得する" },
     async () => text({ members: listMembers() })

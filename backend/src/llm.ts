@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import OpenAI from "openai";
-import { getSetting, recordLlmCall } from "./db.js";
+import { getSetting, loadModelPrices, recordLlmCall, saveModelPrices } from "./db.js";
 import { log } from "./log.js";
 
 function loadApiKey(): string {
@@ -58,19 +58,39 @@ export interface ModelCatalogEntry {
   inputModalities: string[];
 }
 let catalogCache: { entries: ModelCatalogEntry[]; fetchedAt: number } | null = null;
+
+/** #106: 料金表はDBに保存したものを正とする。外部APIは補充役。
+ * 呼び出しごとの単価打刻に使うので、APIが落ちている・起動直後という理由で
+ * 単価NULLの行ができるのを避けたい。取得できたらDBを更新して次回以降に備える */
 export async function fetchModelCatalog(): Promise<ModelCatalogEntry[]> {
   if (catalogCache && Date.now() - catalogCache.fetchedAt < 600_000) return catalogCache.entries;
-  const res = await client.models.list();
-  const entries = (res.data as any[]).map((m) => ({
-    id: m.id as string,
-    name: (m.name as string) ?? null,
-    inputPerM: m.pricing?.prompt_per_million != null ? Number(m.pricing.prompt_per_million) : null,
-    outputPerM: m.pricing?.completion_per_million != null ? Number(m.pricing.completion_per_million) : null,
-    contextLength: (m.context_length as number) ?? null,
-    inputModalities: (m.architecture?.input_modalities as string[]) ?? [],
-  }));
-  catalogCache = { entries, fetchedAt: Date.now() };
-  return entries;
+  try {
+    const res = await client.models.list();
+    const entries = (res.data as any[]).map((m) => ({
+      id: m.id as string,
+      name: (m.name as string) ?? null,
+      inputPerM: m.pricing?.prompt_per_million != null ? Number(m.pricing.prompt_per_million) : null,
+      outputPerM: m.pricing?.completion_per_million != null ? Number(m.pricing.completion_per_million) : null,
+      contextLength: (m.context_length as number) ?? null,
+      inputModalities: (m.architecture?.input_modalities as string[]) ?? [],
+    }));
+    saveModelPrices(entries);
+    catalogCache = { entries, fetchedAt: Date.now() };
+    return entries;
+  } catch (e: any) {
+    // 外部が落ちていてもDBの料金表で動き続ける (単価が古いだけで機能は止まらない)
+    const stored = loadModelPrices();
+    log("llm", `model catalog fetch failed, DBの料金表 ${stored.length}件で継続: ${e?.message ?? e}`);
+    if (stored.length === 0) throw e;
+    catalogCache = { entries: stored, fetchedAt: Date.now() };
+    return stored;
+  }
+}
+
+/** モデルIDから単価を引く。routed_model は provider 接頭辞なしで返ることがある */
+export function priceOf(catalog: ModelCatalogEntry[], id: string | null): ModelCatalogEntry | undefined {
+  if (!id) return undefined;
+  return catalog.find((m) => m.id === id || m.id.split("/").pop() === id);
 }
 
 /** キャッシュ入力の割引率。カタログに欄がないので仮定値 (OpenAI系は概ね定価の10%) */
@@ -143,14 +163,36 @@ export async function chatCompletion(
     "llm",
     `<- ${purpose} routed=${res.model} finish=${res.choices[0]?.finish_reason} tokens=${res.usage?.prompt_tokens}/${res.usage?.completion_tokens} cached=${cachedTokens} ${elapsedMs}ms`
   );
+  // #106: 呼び出し時点の単価と概算額を打刻する。DBの料金表を使うので外部APIが落ちていても欠けない
+  const promptTokens = res.usage?.prompt_tokens ?? 0;
+  const completionTokens = res.usage?.completion_tokens ?? 0;
+  let priceInPerM: number | null = null;
+  let priceOutPerM: number | null = null;
+  let estimatedUsd: number | null = null;
+  try {
+    const e = priceOf(await fetchModelCatalog(), res.model ?? null) ?? priceOf(await fetchModelCatalog(), model);
+    if (e?.inputPerM != null && e.outputPerM != null) {
+      priceInPerM = e.inputPerM;
+      priceOutPerM = e.outputPerM;
+      const fresh = Math.max(0, promptTokens - cachedTokens);
+      estimatedUsd = (fresh * e.inputPerM + cachedTokens * e.inputPerM * CACHE_DISCOUNT + completionTokens * e.outputPerM) / 1e6;
+    } else {
+      log("llm", `単価が引けなかったので概算を記録できない: ${res.model ?? model}`);
+    }
+  } catch {
+    /* 単価が引けなくても記録自体は残す */
+  }
   recordLlmCall({
     purpose,
     model,
     routedModel: res.model ?? null,
-    promptTokens: res.usage?.prompt_tokens ?? 0,
-    completionTokens: res.usage?.completion_tokens ?? 0,
+    promptTokens,
+    completionTokens,
     cachedTokens,
     elapsedMs,
+    priceInPerM,
+    priceOutPerM,
+    estimatedUsd,
   });
   return res;
 }

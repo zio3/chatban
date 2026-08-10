@@ -44,6 +44,14 @@ CREATE TABLE IF NOT EXISTS settings (
   value TEXT NOT NULL,
   updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
 );
+CREATE TABLE IF NOT EXISTS model_prices (
+  id TEXT PRIMARY KEY,
+  input_per_m REAL,
+  output_per_m REAL,
+  context_length INTEGER,
+  input_modalities TEXT,
+  fetched_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
+);
 CREATE TABLE IF NOT EXISTS llm_calls (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   purpose TEXT NOT NULL,
@@ -58,11 +66,27 @@ CREATE TABLE IF NOT EXISTS llm_calls (
 );
 `);
   // 旧DBから移設した llm_calls には project_id が無いので後付けする
-  try {
-    db.exec("ALTER TABLE llm_calls ADD COLUMN project_id INTEGER");
-  } catch {
-    /* already exists */
-  }
+  const add = (sql: string) => {
+    try {
+      db.exec(sql);
+    } catch {
+      /* already exists */
+    }
+  };
+  add("ALTER TABLE llm_calls ADD COLUMN project_id INTEGER");
+  // #106: 呼び出し時点の単価と概算額を打刻する。あとで単価が改定されても過去の記録が変わらない。
+  // 単価も残すのは、キャッシュ割引率(0.1)が仮定値で、後から見直したときに再計算できるようにするため
+  add("ALTER TABLE llm_calls ADD COLUMN price_in_per_m REAL");
+  add("ALTER TABLE llm_calls ADD COLUMN price_out_per_m REAL");
+  add("ALTER TABLE llm_calls ADD COLUMN estimated_usd REAL");
+}
+
+/** #106: コスト分析はLLMにSQLを書かせる。書き込めない接続を別に持つのが安全境界
+ * (プロンプトで「SELECTだけ」と言っても漏れるが、readonly接続は漏れない) */
+let adminRo: Database.Database | null = null;
+export function adminReadonly(): Database.Database {
+  if (!adminRo) adminRo = new Database(ADMIN_PATH, { readonly: true });
+  return adminRo;
 }
 
 /** プロジェクトDBのスキーマ。DBを開くたびに流すので、新規作成と既存の移行が同じ経路になる

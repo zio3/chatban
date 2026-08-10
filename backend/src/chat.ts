@@ -12,6 +12,7 @@ import {
   listSummaryCards,
   listTasks,
   memberLoads,
+  queryLlmCalls,
   recentActivity,
   reorderTasks,
   resolveProposal,
@@ -248,6 +249,24 @@ const tools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
   {
     type: "function",
     function: {
+      name: "query_costs",
+      description: [
+        "AI利用コストの記録(llm_calls)にSQLで問い合わせる。読み取り専用。集計軸は自由に決めてよい。",
+        "列: id, purpose(chat/suggest/archive-decompose/archive-title), model(指定したID), routed_model(実際に使われたモデル), prompt_tokens, completion_tokens, cached_tokens, elapsed_ms, project_id, price_in_per_m, price_out_per_m, estimated_usd, created_at(YYYY-MM-DD HH:MM:SS)",
+        "例: SELECT routed_model, COUNT(*) n, ROUND(SUM(estimated_usd),4) usd FROM llm_calls GROUP BY 1 ORDER BY usd DESC LIMIT 10",
+        "例: SELECT ROUND(SUM(estimated_usd),4) usd FROM llm_calls WHERE date(created_at) = date('now','localtime')",
+        "estimated_usd は呼び出し時点の単価で打刻した概算。全体の実額は請求APIの値(画面上部)が正",
+      ].join("\n"),
+      parameters: {
+        type: "object",
+        properties: { sql: { type: "string", description: "SELECT または WITH で始まる1文" } },
+        required: ["sql"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
       name: "compact_archive",
       description: "要約カードを1枚の過去ログに統合する",
       parameters: { type: "object", properties: {} },
@@ -439,6 +458,13 @@ async function execTool(name: string, args: any, uiActions: UiAction[], events: 
           : {}),
       };
     }
+    case "query_costs": {
+      try {
+        return queryLlmCalls(args.sql ?? "");
+      } catch (e: any) {
+        return { ok: false, error: e?.message ?? String(e) };
+      }
+    }
     case "compact_archive": {
       try {
         const result = await compactArchive();
@@ -561,7 +587,7 @@ const VIEW_HINTS: Record<string, string> = {
   metrics: [
     "",
     "## いま見ている画面: 📊コスト",
-    "AI利用のコストを見ている。「これ高い?」等はこの画面の話。個々の金額はシステムプロンプトに無いので、憶測で数字を言わず画面の値を読むよう促す。",
+    "AI利用のコストを見ている。「これ高い?」「何にかかってる?」等は query_costs でSQLを書いて実データを集計してから答える。回数が多いモデルと金額が大きいモデルは一致しないので、金額で見ること。全体の実額は請求APIの値(画面上部)が正で、estimated_usd は概算。",
   ].join("\n"),
   audit: [
     "",
@@ -592,6 +618,7 @@ const TOOL_LABELS: Record<string, string> = {
   get_activity: "最近の動きを確認",
   reorder_tasks: "並び順を変更",
   search_tasks: "経緯を検索",
+  query_costs: "コストを集計",
   get_task_details: "タスク詳細を取得",
   update_task_context: "経緯メモを更新",
   resolve_proposals: "提案を承認/却下",

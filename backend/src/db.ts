@@ -1,5 +1,5 @@
 import { hooks } from "./hooks.js";
-import { admin, currentProjectId, db } from "./store.js";
+import { admin, adminReadonly, currentProjectId, db } from "./store.js";
 import type { Member, Proposal, Task, TaskStatus } from "./types.js";
 
 // #86: スキーマ定義とファイルの置き場は store.ts が持つ。
@@ -377,9 +377,13 @@ export function recordLlmCall(row: {
   completionTokens: number;
   cachedTokens?: number;
   elapsedMs: number;
+  /** #106: 呼び出し時点の単価と概算額。あとで単価が改定されても過去の記録が変わらない */
+  priceInPerM?: number | null;
+  priceOutPerM?: number | null;
+  estimatedUsd?: number | null;
 }) {
   admin.prepare(
-    "INSERT INTO llm_calls (purpose, model, routed_model, prompt_tokens, completion_tokens, cached_tokens, elapsed_ms, project_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+    "INSERT INTO llm_calls (purpose, model, routed_model, prompt_tokens, completion_tokens, cached_tokens, elapsed_ms, project_id, price_in_per_m, price_out_per_m, estimated_usd) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
   ).run(
     row.purpose,
     row.model,
@@ -388,7 +392,10 @@ export function recordLlmCall(row: {
     row.completionTokens,
     row.cachedTokens ?? 0,
     row.elapsedMs,
-    currentProjectId()
+    currentProjectId(),
+    row.priceInPerM ?? null,
+    row.priceOutPerM ?? null,
+    row.estimatedUsd ?? null
   );
 }
 
@@ -569,4 +576,45 @@ export function searchTasks(terms: string[], limit = 10) {
   // 多くの語に当たったものほど関連が強い、という素朴な順位付けで十分
   scored.sort((a, b) => b.matched.length - a.matched.length || b.id - a.id);
   return { hits: scored.slice(0, limit), searched: words };
+}
+
+// #106: 料金表をDBに保存する。呼び出しごとに単価を打刻するので、外部APIが落ちていても
+// 「単価が引けず概算から漏れる」行が出ないようにしたい (以前は5件が黙って除外されていた)
+export function saveModelPrices(
+  entries: { id: string; inputPerM: number | null; outputPerM: number | null; contextLength: number | null; inputModalities: string[] }[]
+): void {
+  const stmt = admin.prepare(
+    `INSERT INTO model_prices (id, input_per_m, output_per_m, context_length, input_modalities, fetched_at)
+     VALUES (?, ?, ?, ?, ?, datetime('now','localtime'))
+     ON CONFLICT(id) DO UPDATE SET input_per_m = excluded.input_per_m, output_per_m = excluded.output_per_m,
+       context_length = excluded.context_length, input_modalities = excluded.input_modalities, fetched_at = excluded.fetched_at`
+  );
+  admin.transaction(() => {
+    for (const e of entries) {
+      stmt.run(e.id, e.inputPerM, e.outputPerM, e.contextLength, JSON.stringify(e.inputModalities));
+    }
+  })();
+}
+
+export function loadModelPrices() {
+  return (admin.prepare("SELECT * FROM model_prices").all() as any[]).map((r) => ({
+    id: r.id as string,
+    name: null,
+    inputPerM: r.input_per_m as number | null,
+    outputPerM: r.output_per_m as number | null,
+    contextLength: r.context_length as number | null,
+    inputModalities: r.input_modalities ? JSON.parse(r.input_modalities) : [],
+  }));
+}
+
+/** #106: コスト分析はLLMにSQLを書かせ、コードは安全性だけ守る (#91の並べ替え・#103の検索と同じ形)。
+ * 集計軸を先に決め打ちすると、そこから外れた問い(「今日の午後だけ」「1回あたりが高い順」)に答えられない。
+ * 守り: 書き込めない接続 / SELECT・WITH のみ / 文は1つ / 行数上限。
+ * プロンプトで「SELECTだけ」と言っても漏れるが、readonly接続は漏れない */
+export function queryLlmCalls(sql: string, limit = 200): { rows: unknown[]; sql: string; truncated: boolean } {
+  const trimmed = sql.trim().replace(/;\s*$/, "");
+  if (!/^(select|with)\b/i.test(trimmed)) throw new Error("SELECT か WITH で始まる読み取りクエリだけ実行できます");
+  if (trimmed.includes(";")) throw new Error("複数の文は実行できません");
+  const rows = adminReadonly().prepare(trimmed).all() as unknown[];
+  return { rows: rows.slice(0, limit), sql: trimmed, truncated: rows.length > limit };
 }

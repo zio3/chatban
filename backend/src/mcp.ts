@@ -234,8 +234,8 @@ export function buildMcpServer(onEvent: (kind: "board" | "proposals") => void): 
     {
       description: REORDER_DESCRIPTION,
       inputSchema: {
-        status: STATUS.optional().describe("対象の列。省略で全列"),
-        ids: z.array(z.number().int()).describe("並べたい順のタスクID"),
+        status: z.enum(["todo", "inprogress", "review"]).describe("対象の列"),
+        ids: z.array(z.number().int()).describe("その列のタスクを並べたい順に"),
       },
     },
     async ({ status, ids }) => {

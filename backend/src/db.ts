@@ -539,13 +539,13 @@ export function recentActivity(limit = 15) {
 // 表示設定ではなく操作なので「いまソート中」という画面の隠れ状態は生まれず、あとから手で直せる。
 export function reorderTasks(
   ids: number[],
-  status?: TaskStatus
+  status: TaskStatus
 ): { ordered: number; appended: number; ignored?: number[] } {
   // 母集団はサーバー側で決める。listTasks() が archived=0 AND trashed_at IS NULL なので、
   // アーカイブ済み・ゴミ箱は最初から対象外 — query_log の説明で読み手に教えている
   // 「生きているタスクはこの条件」と同じ母集団を、書き込み側は実装で強制する。
   // 読みは教育で守り、書きは実装で守る (zio)
-  const targets = listTasks().filter((t) => !status || t.status === status);
+  const targets = listTasks().filter((t) => t.status === status);
   const byId = new Map(targets.map((t) => [t.id, t]));
   const seen = new Set<number>();
   const ignored: number[] = [];

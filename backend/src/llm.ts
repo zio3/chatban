@@ -119,7 +119,9 @@ const NEEDS_REASONING_NONE = /gpt-5\.6-luna/;
 export async function chatCompletion(
   purpose: string,
   model: string,
-  params: Omit<OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming, "model">
+  params: Omit<OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming, "model">,
+  /** 応答が返らないまま詰まるのを防ぐ。省略時はSDK既定 (実際にタイトル生成が数分返らない事例があった) */
+  opts?: { timeoutMs?: number }
 ) {
   const t0 = Date.now();
   log("llm", `-> ${purpose} model=${model} messages=${params.messages.length}`);
@@ -127,7 +129,10 @@ export async function chatCompletion(
   const extra = params.tools?.length && NEEDS_REASONING_NONE.test(model) ? ({ reasoning_effort: "none" } as any) : {};
   let res;
   try {
-    res = await client.chat.completions.create({ ...params, ...extra, model });
+    res = await client.chat.completions.create(
+      { ...params, ...extra, model },
+      opts?.timeoutMs ? { timeout: opts.timeoutMs } : undefined
+    );
   } catch (e: any) {
     log("llm", `!! ${purpose} model=${model} FAILED after ${Date.now() - t0}ms: ${e?.status ?? ""} ${e?.message ?? e}`);
     throw e;

@@ -39,7 +39,10 @@ const todayLabel = () => `${new Date().toLocaleDateString("ja-JP", { month: "num
 /** 中身が何だったかを表す短い見出し。失敗時はnullを返して呼び出し側でフォールバックさせる */
 async function generateContentLabel(titles: string[]): Promise<string | null> {
   try {
-    const res = await chatCompletion("archive-title", getModel("cheap"), {
+    const res = await chatCompletion(
+      "archive-title",
+      getModel("cheap"),
+      {
       messages: [
         {
           role: "system",
@@ -115,13 +118,19 @@ export async function regenerateCard(cardId: number, dateLabel?: string): Promis
   ];
   const elements: SummaryElement[] = [...checkedElements, ...newTexts.map((text) => ({ text, checked: false }))];
 
+  // 要素を先に保存する。以前はタイトル生成の後にまとめて保存していたため、
+  // 安いタイトル生成が詰まると、高い要素分解(57秒かけて成功)の結果まで失われていた。
+  // 高い処理の成果を、安い処理の成否に人質に取らせない
+  updateCardContent(cardId, dateLabel ?? null, elements);
+  log("archive", `card#${cardId} regenerated: ${tasks.length} tasks -> ${elements.length} elements`);
+
   // タイトル: 見出しラベルはコスト優先ルーティング(定型)、件数は機械で付与(LLMに数えさせない)。
   // #105: カードが検収バッチごとに複数並ぶようになったので、日付ラベルでは区別できない。
   // 中身のタスクを渡して内容ラベルを作らせる (日次まとめ済みのカードだけは日付ラベルのまま)
-  const title = dateLabel ?? (await generateContentLabel(taskData.map((t) => t.title))) ?? todayLabel();
-
-  updateCardContent(cardId, title, elements);
-  log("archive", `card#${cardId} regenerated: ${tasks.length} tasks -> ${elements.length} elements`);
+  if (!dateLabel) {
+    const label = (await generateContentLabel(taskData.map((t) => t.title))) ?? todayLabel();
+    updateCardContent(cardId, label, elements);
+  }
   return getSummaryCard(cardId);
 }
 

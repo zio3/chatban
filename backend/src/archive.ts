@@ -45,7 +45,7 @@ export async function regenerateCard(cardId: number): Promise<SummaryCard | unde
     id: t.id,
     title: t.title,
     assignee: t.assignee,
-    reason: t.reason,
+    reason: t.assignReason,
     ...(t.rejected ? { rejected: true } : {}),
   }));
   const checkedElements = card.elements.filter((e) => e.checked);

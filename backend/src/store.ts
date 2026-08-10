@@ -74,7 +74,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   title TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'todo',
   assignee TEXT,
-  reason TEXT,
+  assign_reason TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
   updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
 );
@@ -138,6 +138,12 @@ CREATE TABLE IF NOT EXISTS summary_cards (
   addColumn("ALTER TABLE tasks ADD COLUMN rejected INTEGER NOT NULL DEFAULT 0");
   // #102: 削除は論理削除 (ゴミ箱)。解釈ミスが取り返しのつかない結果に直結しないようにする
   addColumn("ALTER TABLE tasks ADD COLUMN trashed_at TEXT");
+  // #92: 現況の一言 (カードに出る)。「なぜこの人か」(reason)と「いまどうなっているか」は別の情報
+  addColumn("ALTER TABLE tasks ADD COLUMN summary TEXT");
+  // #92: reason → assign_reason へ改名。「reason」だけでは何の理由か分からず、
+  // MCP経由のエージェントが進捗を書き込む欄になっていた。名前で用途が分かるようにする
+  // (既存DBのみRENAMEが成功し、新規DBはCREATE時点でassign_reasonなので失敗して無視される)
+  addColumn("ALTER TABLE tasks RENAME COLUMN reason TO assign_reason");
   addColumn("ALTER TABLE summary_cards ADD COLUMN settled INTEGER NOT NULL DEFAULT 0");
   addColumn("ALTER TABLE chat_messages ADD COLUMN task_id INTEGER");
 }

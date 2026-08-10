@@ -50,7 +50,7 @@ export const api = {
     apiFetch("/api/board").then((r) =>
       json<{ tasks: Task[]; members: Member[]; proposals: Proposal[]; summaryCards: SummaryCard[] }>(r)
     ),
-  updateTask: (id: number, patch: Partial<Pick<Task, "title" | "assignee" | "reason" | "sort">> & { status?: TaskStatus }) =>
+  updateTask: (id: number, patch: Partial<Pick<Task, "title" | "assignee" | "assignReason" | "summary" | "sort">> & { status?: TaskStatus }) =>
     apiFetch(`/api/tasks/${id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },

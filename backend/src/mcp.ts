@@ -57,7 +57,7 @@ export function buildMcpServer(onEvent: (kind: "board" | "proposals") => void): 
             title: z.string(),
             status: STATUS.optional().describe("省略時はtodo"),
             assignee: z.string().optional().describe("担当者名。未定なら省略"),
-            reason: z.string().optional().describe("担当理由"),
+            assign_reason: z.string().optional().describe("なぜこの担当かを一言で。進捗は書かない"),
             context: z.string().optional().describe("登録に至った経緯・論点・決定事項 (経緯メモの初期値)"),
           })
         ),
@@ -65,7 +65,7 @@ export function buildMcpServer(onEvent: (kind: "board" | "proposals") => void): 
     },
     async ({ tasks }) => {
       const created = tasks.map((t) => {
-        const task = createTask(t.title, (t.status ?? "todo") as TaskStatus, t.assignee ?? null, t.reason ?? null);
+        const task = createTask(t.title, (t.status ?? "todo") as TaskStatus, t.assignee ?? null, t.assign_reason ?? null);
         return t.context ? updateTasks([{ id: task.id, patch: { context: t.context } }])[0] : task;
       });
       onEvent("board");
@@ -84,7 +84,8 @@ export function buildMcpServer(onEvent: (kind: "board" | "proposals") => void): 
             title: z.string().optional(),
             status: STATUS.optional(),
             assignee: z.string().nullable().optional(),
-            reason: z.string().optional(),
+            assign_reason: z.string().optional().describe("なぜこの担当かを一言で。進捗は書かない"),
+            summary: z.string().optional().describe("現況の一言。カードに表示される。詳細な根拠は context へ"),
             lane: z.enum(["demo", "later"]).nullable().optional().describe("demo=90秒台本に必要 / later=機能凍結後"),
             context: z.string().optional().describe("経緯メモ(詳細・決定事項)の全文上書き"),
             due: z.string().nullable().optional().describe("期限 YYYY-MM-DD。解除はnull"),
@@ -103,7 +104,8 @@ export function buildMcpServer(onEvent: (kind: "board" | "proposals") => void): 
             ...(u.title !== undefined ? { title: u.title } : {}),
             ...(u.status !== undefined ? { status: u.status as TaskStatus } : {}),
             ...(u.assignee !== undefined ? { assignee: u.assignee } : {}),
-            ...(u.reason !== undefined ? { reason: u.reason } : {}),
+            ...(u.assign_reason !== undefined ? { assignReason: u.assign_reason } : {}),
+            ...(u.summary !== undefined ? { summary: u.summary } : {}),
             ...(u.lane !== undefined ? { lane: u.lane } : {}),
             ...(u.context !== undefined ? { context: u.context } : {}),
             ...(u.due !== undefined ? { due: u.due } : {}),

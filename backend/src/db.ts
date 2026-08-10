@@ -26,8 +26,9 @@ function rowToTask(r: any): Task {
     title: r.title,
     status: r.status,
     assignee: r.assignee,
-    reason: r.reason,
+    assignReason: r.assign_reason ?? null,
     context: r.context ?? null,
+    summary: r.summary ?? null,
     lane: r.lane ?? null,
     due: r.due ?? null,
     blockedBy: r.blocked_by ? JSON.parse(r.blocked_by) : null,
@@ -39,10 +40,10 @@ function rowToTask(r: any): Task {
   };
 }
 
-export function createTask(title: string, status: TaskStatus = "todo", assignee: string | null = null, reason: string | null = null): Task {
+export function createTask(title: string, status: TaskStatus = "todo", assignee: string | null = null, assignReason: string | null = null): Task {
   const info = db()
-    .prepare("INSERT INTO tasks (title, status, assignee, reason) VALUES (?, ?, ?, ?)")
-    .run(title, status, assignee, reason);
+    .prepare("INSERT INTO tasks (title, status, assignee, assign_reason) VALUES (?, ?, ?, ?)")
+    .run(title, status, assignee, assignReason);
   return getTask(Number(info.lastInsertRowid))!;
 }
 
@@ -52,7 +53,7 @@ export function getTask(id: number): Task | undefined {
 }
 
 export type TaskPatch = Partial<
-  Pick<Task, "title" | "status" | "assignee" | "reason" | "sort" | "lane" | "context" | "due" | "blockedBy" | "rejected">
+  Pick<Task, "title" | "status" | "assignee" | "assignReason" | "sort" | "lane" | "context" | "summary" | "due" | "blockedBy" | "rejected">
 >;
 
 /** 複数タスクの一括更新 (#60)。完了遷移はまとめて1回だけ通知する (要約再生成のバッチ化)。
@@ -68,15 +69,16 @@ export function updateTasks(patches: { id: number; patch: TaskPatch }[]): (Task 
     if (patch.assignee === "") patch = { ...patch, assignee: null };
     const next = { ...cur, ...patch };
     db().prepare(
-      "UPDATE tasks SET title = ?, status = ?, assignee = ?, reason = ?, sort = ?, lane = ?, context = ?, due = ?, blocked_by = ?, rejected = ?, updated_at = datetime('now', 'localtime') WHERE id = ?"
+      "UPDATE tasks SET title = ?, status = ?, assignee = ?, assign_reason = ?, sort = ?, lane = ?, context = ?, summary = ?, due = ?, blocked_by = ?, rejected = ?, updated_at = datetime('now', 'localtime') WHERE id = ?"
     ).run(
       next.title,
       next.status,
       next.assignee,
-      next.reason,
+      next.assignReason,
       next.sort,
       next.lane,
       next.context,
+      next.summary,
       next.due,
       next.blockedBy?.length ? JSON.stringify(next.blockedBy) : null,
       next.rejected ? 1 : 0,
@@ -86,7 +88,7 @@ export function updateTasks(patches: { id: number; patch: TaskPatch }[]): (Task 
       db().prepare("INSERT INTO assignment_history (task_title, assignee, note) VALUES (?, ?, ?)").run(
         next.title,
         patch.assignee,
-        patch.reason ?? null
+        patch.assignReason ?? null
       );
     }
     if (cur.status !== "done" && next.status === "done") completed.push(id);
@@ -192,7 +194,7 @@ export function resolveProposal(id: number, status: "approved" | "rejected"): Pr
   db().prepare("UPDATE proposals SET status = ? WHERE id = ?").run(status, id);
   const p = getProposal(id);
   if (p && status === "approved") {
-    updateTask(p.taskId, { assignee: p.assignee, reason: p.reason });
+    updateTask(p.taskId, { assignee: p.assignee, assignReason: p.reason });
   }
   return p;
 }

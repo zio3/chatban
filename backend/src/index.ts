@@ -147,9 +147,9 @@ app.get("/api/board", (_req, res) => {
 });
 
 app.post("/api/tasks", (req, res) => {
-  const { title, status, assignee, reason } = req.body ?? {};
+  const { title, status, assignee, assignReason } = req.body ?? {};
   if (!title) return res.status(400).json({ error: "title required" });
-  const task = createTask(title, status ?? "todo", assignee ?? null, reason ?? null);
+  const task = createTask(title, status ?? "todo", assignee ?? null, assignReason ?? null);
   broadcastBoard();
   res.json(task);
 });

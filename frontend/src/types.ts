@@ -5,7 +5,8 @@ export interface Task {
   title: string;
   status: TaskStatus;
   assignee: string | null;
-  reason: string | null;
+  /** #92: なぜこの担当か。進捗は summary へ (名前で用途が分かるよう reason から改名) */
+  assignReason: string | null;
   context: string | null;
   lane: "demo" | "later" | null;
   /** 期限 YYYY-MM-DD (#44) */
@@ -13,6 +14,8 @@ export interface Task {
   /** 依存先タスクID (#41)。全完了まで着手不可の想定 */
   blockedBy: number[] | null;
   /** 却下=やらない決定 (#65) */
+  /** #92: 現況の一言。カードに出る。Reviewでは検収の要点を書く (詳細はcontextへ) */
+  summary?: string | null;
   rejected: boolean;
   /** #102: ゴミ箱に入れた日時。nullなら通常のタスク */
   trashedAt?: string | null;

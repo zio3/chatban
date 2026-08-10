@@ -90,7 +90,11 @@ function TaskCard({
           </span>
         )}
       </div>
-      {task.reason && <p className="mt-1.5 text-xs text-slate-500">💡 {task.reason}</p>}
+      {/* #92: カードに出すのは「いまどうなっているか」(summary)。
+          「なぜこの人か」(reason)は普段は要らないので詳細パネルで読む。
+          以前はreasonに進捗が書き込まれていたが、原因はMCP側のツール契約にreasonの説明が
+          無く、エージェントから見て用途不明の文字列欄になっていたこと */}
+      {task.summary && <p className="mt-1.5 text-xs text-slate-600">📝 {task.summary}</p>}
       {onToggleApproved && (
         <label
           onClick={(e) => e.stopPropagation()}

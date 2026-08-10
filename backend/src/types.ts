@@ -5,7 +5,8 @@ export interface Task {
   title: string;
   status: TaskStatus;
   assignee: string | null;
-  reason: string | null;
+  /** #92: なぜこの担当か。進捗は summary へ (名前で用途が分かるよう reason から改名) */
+  assignReason: string | null;
   /** 詳細・決定事項・ブリーフィングの置き場 (フリーテキスト、遅延読み込み) */
   context: string | null;
   /** demo=90秒台本に必要 / later=機能凍結後 / null=未分類 */
@@ -15,6 +16,8 @@ export interface Task {
   /** 依存先タスクID (#41)。このタスクは blocked_by の全タスクが完了するまで着手できない想定 */
   blockedBy: number[] | null;
   /** 却下=やらない決定 (#65)。reason に却下理由を持ち、要約でも【却下】として蒸留される */
+  /** #92: 現況の一言。カードに出る。Reviewでは検収の要点を書く (詳細はcontextへ) */
+  summary?: string | null;
   rejected: boolean;
   /** #102: ゴミ箱に入れた日時。nullなら通常のタスク */
   trashedAt?: string | null;

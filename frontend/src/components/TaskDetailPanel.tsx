@@ -147,7 +147,7 @@ export default function TaskDetailPanel({
         {archived && !task.trashedAt && (
           <div className="rounded-lg bg-emerald-50 px-3 py-2 text-xs text-emerald-700">
             {task.rejected
-              ? "🚫 このタスクは却下として確定し、アーカイブ済みです (経緯は下のreason参照)"
+              ? "🚫 このタスクは却下として確定し、アーカイブ済みです (理由は下の割り振り理由・経緯メモ参照)"
               : "✅ このタスクは完了し、Doneの要約カードにアーカイブされました"}
           </div>
         )}
@@ -183,10 +183,17 @@ export default function TaskDetailPanel({
           </button>
         </div>
 
-        {task.reason && (
+        {task.summary && (
+          <section>
+            <h3 className="mb-1 text-xs font-bold uppercase tracking-wide text-slate-400">現況</h3>
+            <p className="text-sm text-slate-700">📝 {task.summary}</p>
+          </section>
+        )}
+
+        {task.assignReason && (
           <section>
             <h3 className="mb-1 text-xs font-bold uppercase tracking-wide text-slate-400">割り振り理由</h3>
-            <p className="text-sm text-slate-600">💡 {task.reason}</p>
+            <p className="text-sm text-slate-600">💡 {task.assignReason}</p>
           </section>
         )}
 

@@ -61,7 +61,7 @@ const tools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
               properties: {
                 title: { type: "string" },
                 assignee: { type: "string", description: "担当者名。未定なら省略" },
-                reason: { type: "string", description: "その担当にした理由。指名時は「指名」など" },
+                assign_reason: { type: "string", description: "その担当にした理由を一言で (「指名」「API検証の実績」など)。進捗や作業結果は書かない" },
                 context: { type: "string", description: "登録に至った経緯・会話で出た論点・決まったこと。相談や議論の流れから登録するときは必ず書く (タイトルだけでは背景が失われる)" },
                 due: { type: "string", description: "期限 YYYY-MM-DD。相対表現は今日の日付から解決" },
                 blocked_by: { type: "array", items: { type: "integer" }, description: "依存先タスクID(これらが終わるまで着手不可)" },
@@ -91,7 +91,8 @@ const tools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
                 title: { type: "string" },
                 status: { type: "string", enum: STATUS_VALUES },
                 assignee: { type: "string" },
-                reason: { type: "string", description: "担当変更・却下の判断理由。期限やlaneだけの変更では渡さない(既存の理由を上書きしてしまう)" },
+                assign_reason: { type: "string", description: "担当変更・却下の判断理由を一言で。期限やlaneだけの変更では渡さない(既存の理由を上書きしてしまう)。進捗や作業結果は書かない — それは summary" },
+                summary: { type: "string", description: "現況の一言。カードに表示される(「実装完了 (commit xxx)」「原因調査中」など)。検収の要点はここ、詳細な根拠は経緯メモ(context)へ" },
                 lane: {
                   type: ["string", "null"],
                   enum: ["demo", "later", null],
@@ -278,7 +279,7 @@ async function execTool(name: string, args: any, uiActions: UiAction[], events: 
   switch (name) {
     case "create_tasks": {
       const created = (args.tasks as any[]).map((t) => {
-        const task = createTask(stripSpeakerLabel(t.title), "todo", t.assignee ?? null, stripSpeakerLabel(t.reason) ?? null);
+        const task = createTask(stripSpeakerLabel(t.title), "todo", t.assignee ?? null, stripSpeakerLabel(t.assign_reason) ?? null);
         const extra = {
           ...(t.context ? { context: stripSpeakerLabel(t.context) } : {}),
           ...(t.due ? { due: t.due } : {}),
@@ -323,9 +324,9 @@ async function execTool(name: string, args: any, uiActions: UiAction[], events: 
           // LLMがreasonを添えると既存の割り振り理由が破壊されるため無視する (実事故2件の再発防止)。
           // 空文字のreasonは常に拒否する — 理由を「消す」操作に意味はない
           const keepReason =
-            typeof u.reason === "string" &&
-            u.reason.trim() !== "" &&
-            u.reason !== cur?.reason &&
+            typeof u.assign_reason === "string" &&
+            u.assign_reason.trim() !== "" &&
+            u.assign_reason !== cur?.assignReason &&
             (assigneeChanged || statusChanged || rejectedChanged);
 
           return {
@@ -334,10 +335,11 @@ async function execTool(name: string, args: any, uiActions: UiAction[], events: 
               ...(changed(stripSpeakerLabel(u.title), cur?.title) ? { title: stripSpeakerLabel(u.title) } : {}),
               ...(statusChanged ? { status: u.status as TaskStatus } : {}),
               ...(assigneeChanged ? { assignee } : {}),
-              ...(keepReason ? { reason: stripSpeakerLabel(u.reason) } : {}),
+              ...(keepReason ? { assignReason: stripSpeakerLabel(u.assign_reason) } : {}),
               ...(changed(lane, cur?.lane ?? null) ? { lane } : {}),
               ...(changed(due, cur?.due ?? null) ? { due } : {}),
               ...(blockedBy !== undefined && !sameDeps ? { blockedBy } : {}),
+              ...(changed(u.summary, cur?.summary ?? null) ? { summary: u.summary } : {}),
               ...(rejectedChanged ? { rejected: !!u.rejected } : {}),
             },
           };
@@ -448,6 +450,7 @@ function buildSystemPrompt(taskFocus?: ReturnType<typeof getTask>, speaker?: str
     "- 「◯◯さんの分だけ見せて」は set_view を使う。",
     "- チーム共通の前提・決まりごと(締切、方針、用語など)を伝えられたら update_project_context で前提情報に反映する。",
     "- 特定タスクの経緯・決定事項・補足(「#22は◯◯方式でいくことにした」等)は update_task_context でそのタスクの経緯メモに記録する。",
+    "- assign_reason は「なぜこの担当か」、summary は「いまどうなっているか」。別の情報なので混ぜない。進捗・完了報告は summary に一言で書き、詳細な根拠は経緯メモ(context)に書く。",
     "- 「ログ整頓して」は compact_archive を使う。完了タスクのアーカイブは自動なので手動操作は不要。",
     "- 削除と却下は文脈で使い分ける: 誤登録・重複・ダミー(「消して」「間違えた」)は delete_tasks (ゴミ箱行きで復元可。返答で復元方法を説明する必要はない)。やらない決定(「見送り」「却下」「やらないことにした」)は削除せず update_tasks で status=review + rejected=true にし、reason に却下の根拠を書いて「却下としてReviewに置きました。検収で確定します」と返す (検収後、決定として要約アーカイブに残る)。",
     "- 「消して」がタスクそのものを指すのか、タイトルや文言の一部の修正を指すのか曖昧なときは、操作せず確認する (実例:「#95だけ発言者の話が入っていて不自然なので消せますか?」はタイトルの修正依頼だったが、タスクごと削除してしまった)。",

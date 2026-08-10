@@ -31,6 +31,8 @@ export interface Project {
   archived: boolean;
   openTasks: number;
   members: string[];
+  /** #117: このプロジェクト用のMCP接続先 */
+  mcpUrl: string;
 }
 
 export const api = {

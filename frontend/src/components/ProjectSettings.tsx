@@ -12,6 +12,32 @@ export default function ProjectSettings() {
   const [busy, setBusy] = useState(false);
   const [newName, setNewName] = useState("");
   const [newMembers, setNewMembers] = useState("");
+  // #117: コピーできたことを一瞬見せる。押したのに何も起きないと分からない
+  const [copied, setCopied] = useState<number | null>(null);
+  const copyMcp = async (id: number, url: string) => {
+    // navigator.clipboard は権限や非セキュアコンテキストで落ちることがあるので、
+    // 落ちたら選択+execCommandへ倒す。「押したのに何も起きない」を作らない
+    const ok = await navigator.clipboard
+      ?.writeText(url)
+      .then(() => true)
+      .catch(() => false);
+    if (!ok) {
+      const el = document.createElement("textarea");
+      el.value = url;
+      el.style.position = "fixed";
+      el.style.opacity = "0";
+      document.body.appendChild(el);
+      el.select();
+      try {
+        document.execCommand("copy");
+      } finally {
+        document.body.removeChild(el);
+      }
+    }
+    setCopied(id);
+    setTimeout(() => setCopied((c) => (c === id ? null : c)), 1500);
+  };
+
   const [editing, setEditing] = useState<number | null>(null);
   const [draftName, setDraftName] = useState("");
   const [draftMembers, setDraftMembers] = useState("");
@@ -112,6 +138,16 @@ export default function ProjectSettings() {
                 <span className="text-xs text-slate-400">
                   未完了{p.openTasks}件 / {p.members.length > 0 ? p.members.join("・") : "メンバーなし"}
                 </span>
+                {/* #117: MCPの接続先はプロジェクトごとに違う (URLで固定する設計 #96)。
+                    .mcp.json に貼る値をここから直接コピーできるようにする */}
+                <button
+                  data-testid={`copy-mcp-${p.id}`}
+                  onClick={() => copyMcp(p.id, p.mcpUrl)}
+                  title={`MCP接続先をコピー: ${p.mcpUrl}`}
+                  className="rounded-md border border-slate-200 bg-slate-50 px-2 py-0.5 font-mono text-[10px] text-slate-500 hover:border-indigo-300 hover:text-indigo-600"
+                >
+                  {copied === p.id ? "✓ コピーしました" : `🔌 ${p.mcpUrl}`}
+                </button>
                 <span className="ml-auto flex gap-1.5">
                   {p.id !== projectIdFromUrl() && (
                     <button

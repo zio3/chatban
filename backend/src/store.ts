@@ -357,6 +357,8 @@ export interface ProjectSummary {
   archived: boolean;
   openTasks: number;
   members: string[];
+  /** #117: このプロジェクト用のMCP接続先 (.mcp.json に貼る) */
+  mcpUrl: string;
 }
 
 export function projectSummaries(): ProjectSummary[] {
@@ -370,6 +372,9 @@ export function projectSummaries(): ProjectSummary[] {
       createdAt: p.created_at,
       active: p.id === activeId,
       archived: !!p.archived,
+      // #117: MCPの接続先。プロジェクトはURLで固定する設計(#96)なので、
+      // .mcp.json に貼る値をプロジェクトごとに出す。ポートを知っているのはサーバー側
+      mcpUrl: `http://localhost:${process.env.PORT ?? 8787}/mcp/${p.id}`,
       openTasks: (
         pdb.prepare("SELECT COUNT(*) AS c FROM tasks WHERE archived = 0 AND status != 'done'").get() as { c: number }
       ).c,

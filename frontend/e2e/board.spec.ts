@@ -565,3 +565,17 @@ test("並べ替えの母集団はサーバー側で絞る。対象外のIDは無
   const idx = (id: number) => todo.findIndex((t: any) => t.id === id);
   expect(idx(b)).toBeLessThan(idx(a));
 });
+
+test("設定のプロジェクト一覧からMCP接続先をコピーできる (#117)", async ({ page, context }) => {
+  await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+  await page.goto("/");
+  await page.getByRole("button", { name: "⚙ 設定" }).click();
+
+  // プロジェクトごとに接続先が違う (URLで固定する設計 #96) ので、一覧に出す
+  const btn = page.getByTestId("copy-mcp-1");
+  await expect(btn).toContainText("/mcp/1");
+
+  await btn.click();
+  await expect(btn).toContainText("コピーしました");
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toMatch(/\/mcp\/1$/);
+});

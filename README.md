@@ -47,6 +47,7 @@
 | テスト | Playwright E2E (13件) |
 
 アーキテクチャの全体像は [docs/architecture.md](docs/architecture.md)、コンセプトと現在地は [docs/product-overview.md](docs/product-overview.md)。
+AIに何をさせないか (権限境界) と、割り切った部分は [docs/security.md](docs/security.md)。
 
 ## 起動方法
 

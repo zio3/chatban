@@ -73,15 +73,21 @@ function allowedEmails(): string[] {
     .filter(Boolean);
 }
 
+/** リストに載っているか。空 = まだ誰も登録されていない初期状態なので通す
+ * (ここで閉じると、設定タブ自体が認証の内側にあるので詰む)。
+ * ログイン時とリクエストごとの再確認で同じ判定を使う */
+export function isAllowed(email: string, list: string[]): boolean {
+  return list.length === 0 || list.includes(email.toLowerCase());
+}
+
 /** 通してよい相手か。リストが空なら最初の1人を登録する (詰み回避) */
 function admit(email: string): boolean {
   const list = allowedEmails();
   if (list.length === 0) {
     setSetting("auth.allowedEmails", email.toLowerCase());
     log("auth", `許可リストが空だったので ${email} をオーナーとして登録しました`);
-    return true;
   }
-  return list.includes(email.toLowerCase());
+  return isAllowed(email, list);
 }
 
 /** Googleが発行したIDトークンを検証してセッションを張る */
@@ -108,8 +114,33 @@ export async function loginWithGoogle(idToken: string): Promise<{ user: SessionU
 export const cookieName = COOKIE;
 export const cookieMaxAge = MAX_AGE_MS;
 
+/** #113: セッションが生きていることと、いま通してよい相手であることは別。
+ * Cookieは最大30日有効なので、許可リストから外した相手が最長1か月そのまま入れてしまう
+ * (自動レビュー指摘)。署名の検証だけで済ませず、毎回いまのリストと突き合わせる。
+ *
+ * 判定を requireAuth ではなく currentUser 側に置くのは、requireAuth を通らない口
+ * (/api/auth/me、Socket.IOのハンドシェイク) が取り残されるため。
+ * 入口ごとに書き分けると必ずズレる (#92 #108 #114 #125 #126 と同じ形) */
+function stillAllowed(user: SessionUser | null): SessionUser | null {
+  if (!user) return null;
+  if (isAllowed(user.email, allowedEmails())) return user;
+  log("auth", `許可リストから外れたセッションを無効化: ${user.email}`);
+  return null;
+}
+
 export function currentUser(req: Request): SessionUser | null {
-  return verify((req as any).cookies?.[COOKIE]);
+  return stillAllowed(verify((req as any).cookies?.[COOKIE]));
+}
+
+/** Socket.IOのハンドシェイク用。cookie-parser を通らないので生のCookieヘッダから取る */
+export function userFromCookieHeader(header: string | undefined): SessionUser | null {
+  if (!header) return null;
+  for (const part of header.split(";")) {
+    const i = part.indexOf("=");
+    if (i < 0 || part.slice(0, i).trim() !== COOKIE) continue;
+    return stillAllowed(verify(decodeURIComponent(part.slice(i + 1).trim())));
+  }
+  return null;
 }
 
 /** #126: 誰の発言かはシステムが決める。ログイン済みならセッションの本人、

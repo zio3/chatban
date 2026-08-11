@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { extractChoices } from "./chat.js";
 import { differs } from "./archive.js";
-import { pickSpeaker } from "./auth.js";
+import { isAllowed, pickSpeaker } from "./auth.js";
 
 // 返信ボタンの記法 [[選択肢]] の取り出し。
 // ここはLLMを介さずに固定できる唯一の部分なので (発火するかどうかはモデル次第でも、
@@ -85,4 +85,19 @@ test("名乗りが無ければ発言者なし", () => {
   assert.deepEqual(pickSpeaker(null, undefined), { name: null, email: null });
   assert.deepEqual(pickSpeaker(null, ""), { name: null, email: null });
   assert.deepEqual(pickSpeaker(null, { name: "偽" }), { name: null, email: null });
+});
+
+// #113: セッションCookieは最大30日有効なので、許可リストから外した相手が
+// 最長1か月そのまま入れてしまう (自動レビュー指摘)。リクエストごとに突き合わせる。
+
+test("リストに載っていれば通す (大文字小文字は区別しない)", () => {
+  assert.equal(isAllowed("Sato@Example.com", ["sato@example.com"]), true);
+});
+
+test("外された相手は通さない (セッションが生きていても)", () => {
+  assert.equal(isAllowed("sato@example.com", ["tanaka@example.com"]), false);
+});
+
+test("リストが空なら通す — ここで閉じると設定タブごと詰む", () => {
+  assert.equal(isAllowed("sato@example.com", []), true);
 });

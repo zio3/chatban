@@ -112,6 +112,26 @@ export function currentUser(req: Request): SessionUser | null {
   return verify((req as any).cookies?.[COOKIE]);
 }
 
+/** #126: 誰の発言かはシステムが決める。ログイン済みならセッションの本人、
+ * していなければクライアントの自己申告 (email は付かない = 検証されていない印)。
+ * 本文中の「佐藤です」は発言者にしない。
+ *
+ * メインチャットとタスクチャットで同じものを使う。以前はメインだけに実装があり、
+ * タスクチャットはリクエストの speaker を素通しして保存もしていなかったので、
+ * ログイン中でも任意の名前を名乗れて、監査ログから実際の指示者を追えなかった。
+ * 入口ごとに書き分けると必ずズレる (#92 #108 #114 #125 と同じ形) なので、
+ * 判断の本体は pickSpeaker に置いて req から切り離す */
+export function pickSpeaker(me: SessionUser | null, selfReported: unknown) {
+  return {
+    name: me?.name ?? (typeof selfReported === "string" && selfReported.trim() !== "" ? selfReported : null),
+    email: me?.email ?? null,
+  };
+}
+
+export function resolveSpeaker(req: Request, selfReported: unknown) {
+  return pickSpeaker(currentUser(req), selfReported);
+}
+
 /** ループバックからの呼び出しか (初期設定の足場)。プロキシ越しは信用しない */
 function isLocal(req: Request): boolean {
   const ip = req.socket.remoteAddress ?? "";

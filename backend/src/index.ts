@@ -17,6 +17,7 @@ import {
   currentUser,
   loginWithGoogle,
   requireAuth,
+  resolveSpeaker,
 } from "./auth.js";
 import { buildMcpServer } from "./mcp.js";
 import { resetPromptState } from "./promptState.js";
@@ -280,15 +281,14 @@ app.delete("/api/trash/:id", (req, res) => {
 });
 
 let chatSeq = 0;
+
+
 app.post("/api/chat", async (req, res) => {
   const { message, history, speaker, attachments, view } = req.body ?? {};
   if (!message) return res.status(400).json({ error: "message required" });
   const id = ++chatSeq;
   const t0 = Date.now();
-  // #126: 誰の発言かはシステムが決める。ログイン済みならセッションの本人、
-  // していなければクライアントの自己申告。本文中の「佐藤です」は発言者にしない
-  const me = currentUser(req);
-  const who = { name: me?.name ?? speaker ?? null, email: me?.email ?? null };
+  const who = resolveSpeaker(req, speaker);
   log(
     "chat",
     `#${id} REQ${who.name ? ` [${who.name}${who.email ? `/${who.email}` : "(自己申告)"}]` : ""} "${String(message).slice(0, 120)}" (history=${history?.length ?? 0}${attachments?.length ? ` attachments=${attachments.length}` : ""})`
@@ -344,7 +344,12 @@ app.post("/api/tasks/:id/chat", async (req, res) => {
   if (!message) return res.status(400).json({ error: "message required" });
   const id = ++chatSeq;
   const t0 = Date.now();
-  log("chat", `#${id} TASK-CHAT(task=${taskId})${speaker ? ` [${speaker}]` : ""} REQ "${String(message).slice(0, 120)}"`);
+  // メインチャットと同じ経路で発言者を決める。リクエストの speaker をそのまま信じない
+  const who = resolveSpeaker(req, speaker);
+  log(
+    "chat",
+    `#${id} TASK-CHAT(task=${taskId})${who.name ? ` [${who.name}${who.email ? `/${who.email}` : "(自己申告)"}]` : ""} REQ "${String(message).slice(0, 120)}"`
+  );
   try {
     const result = await runChatTurn(
       message,
@@ -354,18 +359,22 @@ app.post("/api/tasks/:id/chat", async (req, res) => {
           },
       (label) => io.to(room(currentProjectId())).emit("chat:progress", { label, taskId }),
       taskId,
-      speaker,
+      who.name ?? undefined,
       attachments,
-      view
+      view,
+      !!who.email
     );
+    // タスクチャットの会話ログにも発言者を残す。ここが空だと、タスクの経緯に効いた
+    // 指示が誰のものか後から辿れない (監査ログが売りなのに穴が開く)
     saveChatMessage(
       "user",
       message + (attachments?.length ? ` [添付: ${attachments.map((a: any) => a.name).join(", ")}]` : ""),
       undefined,
       undefined,
-      taskId
+      taskId,
+      who
     );
-    saveChatMessage("assistant", result.reply, result.trace, result.usage, taskId);
+    saveChatMessage("assistant", result.reply, result.trace, result.usage, taskId, who);
     log("chat", `#${id} OK ${Date.now() - t0}ms rounds=${result.usage.rounds} tools=[${result.trace.map((t) => t.tool).join(",")}]`);
     res.json(result);
   } catch (e: any) {

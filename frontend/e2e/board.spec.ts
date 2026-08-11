@@ -717,6 +717,8 @@ test("前提情報のリファレンスは、足りないときだけ知らせ�
   // summary の書き分けと、追記が効く経緯メモの書き始め方
   expect(withRef.reference).toContain("summary の書き方");
   expect(withRef.reference).toContain("## 経過");
+  // 参考と前提情報が食い違ったときの優先順位を名指しする (判断させない)
+  expect(withRef.reference).toContain("前提情報が優先");
 
   // boolean を文字列で送るMCPクライアントがある (実測: Claude Code)。受け側で吸収する
   const asString = await mcp("get_project_context", { reference: "true" });

@@ -76,8 +76,16 @@ export function updateTasks(patches: { id: number; patch: TaskPatch }[]): (Task 
     const contextChanged = patch.context !== undefined && patch.context !== cur.context;
     // #108: 作業中の列へ戻したら検収の印は無効になる。「確かめた」のは前の状態に対してなので、
     // 作り直しているものに印が残っていると、次の検収で「もう確認済み」と誤読される。
-    // done と review では消さない (done=検収の結果、review=検収待ちで印は進捗そのもの)
+    // review では消さない (検収待ちの列で印を付けてから一括確定するので、印は進捗そのもの)
     const backToWork = next.status === "todo" || next.status === "inprogress";
+    // Doneから出るときも消す。差し戻しは「確定を取り消した」ということなので、
+    // 前の検収の印をそのまま次の確定の根拠にはできない。
+    //
+    // approveChecked が checked_at を「人が確かめた唯一の証拠」として使い始めたことで、
+    // ここが実際に踏める穴になった: Done→Review に戻すと印が残り、確認し直さずに
+    // もう一度Doneへ通せてしまう (以前の approve は checked_at を見ていなかったので無害だった)。
+    // 印を消せば、差し戻したものは必ずもう一度チェックを付け直すことになる
+    const leavingDone = cur.status === "done" && next.status !== "done";
     db().prepare(
       "UPDATE tasks SET title = ?, status = ?, assignee = ?, assign_reason = ?, sort = ?, context = ?, summary = ?, due = ?, blocked_by = ?, rejected = ?, context_version = context_version + ?, checked_at = ?, done_at = ?, updated_at = datetime('now', 'localtime') WHERE id = ?"
     ).run(
@@ -92,7 +100,7 @@ export function updateTasks(patches: { id: number; patch: TaskPatch }[]): (Task 
       next.blockedBy?.length ? JSON.stringify(next.blockedBy) : null,
       next.rejected ? 1 : 0,
       contextChanged ? 1 : 0,
-      backToWork ? null : (cur.checkedAt ?? null),
+      backToWork || leavingDone ? null : (cur.checkedAt ?? null),
       // 完了に入った瞬間だけ打刻する。以降の編集では動かさない (updated_at と違い「終わった日」)
       next.status === "done" ? (cur.doneAt ?? new Date().toLocaleString("sv-SE")) : null,
       id
@@ -114,6 +122,43 @@ export function updateTasks(patches: { id: number; patch: TaskPatch }[]): (Task 
   if (completed.length > 0) hooks.tasksCompleted?.(completed);
   for (const id of reopened) hooks.taskReopened?.(id);
   return results;
+}
+
+/** 検収の確定 (Review + 検収済み → Done)。Doneへ至る唯一の扉なので、条件はサーバーが持つ。
+ *
+ * 以前は POST /api/tasks/approve が ids をそのまま done にしていて、条件の判定は
+ * フロント(App.tsx の commitApproved が status==="review" && checkedAt で絞る)にしか無かった。
+ * 実測で、Todo のタスクも・Review未検収も・**ゴミ箱の中のタスクまで** done になった。
+ *
+ * docs/security.md には「Doneへ至る経路は人間のUI操作ただ1本」と書いてあるが、
+ * その1本が無条件だった。エージェントはこのAPIを持たないので「AIは通れない」は
+ * 守られていたものの、「人間が実物で確かめたものだけがDoneにある」は守られていない。
+ * UIが正しく振る舞うことに依存した不変条件は、画面の競合(古い一覧のまま確定を送る)でも破れる。
+ *
+ * better-sqlite3 は同期APIで、Nodeのイベントループ上では判定と更新の間に他のリクエストが
+ * 割り込まない。そのうえで、通らなかったものは理由つきで返す (黙って落とすと
+ * 「押したのに動かない」になる) */
+export function approveChecked(ids: number[]): {
+  updated: (Task | undefined)[];
+  skipped: { id: number; reason: string }[];
+} {
+  const skipped: { id: number; reason: string }[] = [];
+  const eligible: number[] = [];
+  // archived は Task 型に出していない (getTask はアーカイブ済みも返すが、UIは要約カード経由で読む)。
+  // ここは「確定してよいか」の判定なので、隠れている列も見る
+  const isArchived = (id: number) =>
+    !!(db().prepare("SELECT archived FROM tasks WHERE id = ?").get(id) as { archived: number } | undefined)?.archived;
+  for (const id of ids) {
+    const t = getTask(id);
+    if (!t) skipped.push({ id, reason: "存在しません" });
+    else if (t.trashedAt) skipped.push({ id, reason: "ゴミ箱にあります" });
+    else if (isArchived(id)) skipped.push({ id, reason: "すでにDoneへ確定してアーカイブ済みです" });
+    else if (t.status !== "review") skipped.push({ id, reason: `Review列にありません (いまは ${t.status})` });
+    else if (!t.checkedAt) skipped.push({ id, reason: "検収チェックが付いていません" });
+    else eligible.push(id);
+  }
+  const updated = eligible.length > 0 ? updateTasks(eligible.map((id) => ({ id, patch: { status: "done" as const } }))) : [];
+  return { updated, skipped };
 }
 
 export function updateTask(id: number, patch: TaskPatch): Task | undefined {

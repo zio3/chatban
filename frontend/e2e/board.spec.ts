@@ -464,6 +464,13 @@ test("done_at は完了に入った瞬間だけ打刻され、その後の編集
 
   expect((await get()).doneAt).toBeFalsy();
 
+  // 検収チェックを先に付ける。approve はサーバー側で「Review列 + 検収済み」を確かめるので、
+  // チェック無しでは通らない (以前は無条件に done にできたため、このテストも省略していた)
+  await fetch(`${API}/api/tasks/${id}/checked`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ checked: true }),
+  });
   await fetch(`${API}/api/tasks/approve`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -833,6 +840,96 @@ test("エラーにならない間違いには、結果と一緒に一言添え�
   // 正しく引いたときは余計なことを言わない
   const ok = await mcp("query_log", { scope: "audit", sql: "SELECT id, title FROM live_tasks LIMIT 3" });
   expect(ok.note).toBeUndefined();
+});
+
+test("検収の確定はサーバー側で条件を確かめる (UIのフィルタに依存しない)", async () => {
+  // Doneへ至る唯一の扉。以前は ids をそのまま done にしていて、直接叩けば
+  // Todoのタスクもゴミ箱の中のタスクもDoneにできた (実測で3ケースとも通った)
+  const todo = await createTask("検収ガード: Todoのまま");
+  const unchecked = await createTask("検収ガード: Review未検収", "review");
+  const trashed = await createTask("検収ガード: ゴミ箱");
+  await fetch(`${API}/api/tasks/${trashed}`, { method: "DELETE" });
+
+  const ng = await (
+    await fetch(`${API}/api/tasks/approve`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ids: [todo, unchecked, trashed] }),
+    })
+  ).json();
+  expect(ng.ok).toBe(false);
+  expect(ng.updated).toHaveLength(0);
+  expect(ng.skipped).toHaveLength(3);
+  // 通らなかった理由が分かる (黙って落とすと「押したのに動かない」になる)
+  expect(JSON.stringify(ng.skipped)).toContain("Review列にありません");
+  expect(JSON.stringify(ng.skipped)).toContain("検収チェックが付いていません");
+  expect(JSON.stringify(ng.skipped)).toContain("ゴミ箱");
+
+  expect(await getTaskStatus(todo)).toBe("todo");
+  expect(await getTaskStatus(unchecked)).toBe("review");
+
+  // 正常系: Review + 検収済み は通る
+  const ok = await createTask("検収ガード: 正しく検収済み", "review");
+  await fetch(`${API}/api/tasks/${ok}/checked`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ checked: true }),
+  });
+  const r = await (
+    await fetch(`${API}/api/tasks/approve`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ids: [ok] }),
+    })
+  ).json();
+  expect(r.ok).toBe(true);
+  expect(r.skipped).toBeUndefined();
+  await expect.poll(() => getTaskStatus(ok)).toBe("done");
+});
+
+test("Doneから差し戻すと検収の印は消える (確認し直さずに戻せない)", async () => {
+  // approveChecked が checked_at を「人が確かめた唯一の証拠」にしたので、
+  // 差し戻しで印が残ると、確認し直さずにもう一度Doneへ通せてしまう
+  const id = await createTask("差し戻しで印が消える検証", "review");
+  const check = (checked: boolean) =>
+    fetch(`${API}/api/tasks/${id}/checked`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ checked }),
+    });
+  const get = async () => (await (await fetch(`${API}/api/tasks/${id}`)).json()) as any;
+  const approve = async () =>
+    (await (
+      await fetch(`${API}/api/tasks/approve`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids: [id] }),
+      })
+    ).json()) as any;
+
+  await check(true);
+  expect((await approve()).ok).toBe(true);
+  await expect.poll(() => getTaskStatus(id)).toBe("done");
+  expect((await get()).checkedAt).toBeTruthy(); // Doneでは検収の結果として残る
+
+  // Doneから差し戻す (チャットの「戻して」やD&Dで起きる)
+  await fetch(`${API}/api/tasks/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ status: "review" }),
+  });
+  expect((await get()).checkedAt).toBeFalsy(); // 印は消える
+
+  // 印が無いので、そのままではもう一度Doneへ通せない
+  const again = await approve();
+  expect(again.ok).toBe(false);
+  expect(JSON.stringify(again.skipped)).toContain("検収チェックが付いていません");
+  expect(await getTaskStatus(id)).toBe("review");
+
+  // 付け直せば通る
+  await check(true);
+  expect((await approve()).ok).toBe(true);
+  await expect.poll(() => getTaskStatus(id)).toBe("done");
 });
 
 test("存在しないプロジェクトを指定した操作は既定へ落とさず拒否する (#125)", async () => {

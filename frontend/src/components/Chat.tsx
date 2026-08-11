@@ -137,24 +137,30 @@ export default function Chat({
       )}
       <div>
         <div className="min-h-0">
+          {/* #131: スプリッター行を「本文の外の帯」として使い、🆕 をここに置く。
+              以前はログ領域に absolute で浮かせていたため、右寄せのユーザー吹き出しと
+              重なって読めなくなっていた (スクロールするたびに別の行が当たるので、
+              余白を足すだけでは解決しない) */}
           <div
             onPointerDown={startResize}
             title="ドラッグでチャット欄の高さを調整"
-            className="group flex h-3 cursor-row-resize items-center justify-center bg-slate-50 hover:bg-indigo-50"
+            className="group relative flex h-6 cursor-row-resize items-center justify-center bg-slate-50 hover:bg-indigo-50"
           >
             <div className="h-1 w-10 rounded-full bg-slate-300 group-hover:bg-indigo-400" />
-          </div>
-          <div className="relative" style={{ height: logHeight }}>
-            {/* 🆕 F5せずに初期状態(チップ+AI提案)へ戻す。表示とLLM文脈のリセットでDBの記録は残る */}
+            {/* 🆕 F5せずに初期状態(チップ+AI提案)へ戻す。表示とLLM文脈のリセットでDBの記録は残る。
+                この行はドラッグ領域なので、ボタンの上ではリサイズを始めない */}
             {log.length > 0 && (
               <button
+                onPointerDown={(e) => e.stopPropagation()}
                 onClick={onReset}
                 title="会話をリセットして最初の提案に戻る (記録は監査ログに残ります)"
-                className="absolute right-3 top-2 z-10 rounded-full bg-slate-100 px-2.5 py-0.5 text-xs text-slate-500 hover:bg-slate-200"
+                className="absolute right-3 cursor-pointer rounded-full bg-white px-2 py-0.5 text-[11px] text-slate-500 shadow-sm hover:bg-slate-100 hover:text-slate-700"
               >
                 🆕 新しい会話
               </button>
             )}
+          </div>
+          <div className="relative" style={{ height: logHeight }}>
             <div ref={scrollRef} className="h-full space-y-2 overflow-y-auto px-4 py-3">
               {log.map((e, i) => (
                 <div key={i} className={`flex ${e.role === "user" ? "justify-end" : "justify-start"}`}>

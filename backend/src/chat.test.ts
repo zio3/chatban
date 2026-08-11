@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { extractChoices } from "./chat.js";
 import { differs } from "./archive.js";
+import { pickSpeaker } from "./auth.js";
 
 // 返信ボタンの記法 [[選択肢]] の取り出し。
 // ここはLLMを介さずに固定できる唯一の部分なので (発火するかどうかはモデル次第でも、
@@ -64,4 +65,24 @@ test("タスクが増えても捨てる (次の検収バッチが合流した)",
 
 test("同じ件数でも中身が違えば捨てる", () => {
   assert.equal(differs([1, 3], [1, 2]), true);
+});
+
+// #126: 発言者はシステムが決める。以前はメインチャットだけがセッションを見ていて、
+// タスクチャットはリクエストの speaker を素通ししていたため、ログイン中でも
+// 任意の名前を名乗れた。判断を1か所 (pickSpeaker) に寄せたので、ここで押さえる。
+
+const me = { email: "sato@example.com", name: "佐藤", picture: null } as any;
+
+test("ログイン済みなら自己申告より本人を優先する", () => {
+  assert.deepEqual(pickSpeaker(me, "田中"), { name: "佐藤", email: "sato@example.com" });
+});
+
+test("ログインしていなければ自己申告を使うが、emailは付けない (未検証の印)", () => {
+  assert.deepEqual(pickSpeaker(null, "田中"), { name: "田中", email: null });
+});
+
+test("名乗りが無ければ発言者なし", () => {
+  assert.deepEqual(pickSpeaker(null, undefined), { name: null, email: null });
+  assert.deepEqual(pickSpeaker(null, ""), { name: null, email: null });
+  assert.deepEqual(pickSpeaker(null, { name: "偽" }), { name: null, email: null });
 });

@@ -66,26 +66,38 @@ function verify(token: string | undefined): SessionUser | null {
   }
 }
 
-function allowedEmails(): string[] {
-  return (getSetting("auth.allowedEmails") ?? "")
+/** 許可リスト。**未設定 (null) と「空にした」([]) を区別する** —
+ * 前者はまだ誰も登録していない初期状態、後者は管理者が明示的に全員を外した状態 */
+function allowedEmails(): string[] | null {
+  const raw = getSetting("auth.allowedEmails");
+  if (raw === null) return null; // キーが無い = 一度も設定していない
+  return raw
     .split(",")
     .map((s) => s.trim().toLowerCase())
     .filter(Boolean);
 }
 
-/** リストに載っているか。空 = まだ誰も登録されていない初期状態なので通す
- * (ここで閉じると、設定タブ自体が認証の内側にあるので詰む)。
+/** リストに載っているか。
+ *
+ * null = まだ一度も設定していない初期状態なので通す (ここで閉じると、設定タブ自体が
+ * 認証の内側にあるので詰む)。ただし **空リスト ([]) は通さない** —
+ * 「まだ設定していない」と「管理者が全員を外した」を同じ扱いにしていたため、
+ * 権限を全部消す操作が、逆に認証を開けっぱなしにしていた (自動レビュー指摘)。
+ * 一番強い禁止操作が一番緩い結果を生むのは、どう考えても逆。
+ *
  * ログイン時とリクエストごとの再確認で同じ判定を使う */
-export function isAllowed(email: string, list: string[]): boolean {
-  return list.length === 0 || list.includes(email.toLowerCase());
+export function isAllowed(email: string, list: string[] | null): boolean {
+  if (list === null) return true;
+  return list.includes(email.toLowerCase());
 }
 
-/** 通してよい相手か。リストが空なら最初の1人を登録する (詰み回避) */
+/** 通してよい相手か。一度も設定されていなければ最初の1人を登録する (詰み回避)。
+ * 明示的に空にされている場合は登録しない — そこは「誰も通すな」という意思表示 */
 function admit(email: string): boolean {
   const list = allowedEmails();
-  if (list.length === 0) {
+  if (list === null) {
     setSetting("auth.allowedEmails", email.toLowerCase());
-    log("auth", `許可リストが空だったので ${email} をオーナーとして登録しました`);
+    log("auth", `許可リストが未設定だったので ${email} をオーナーとして登録しました`);
   }
   return isAllowed(email, list);
 }
@@ -126,6 +138,12 @@ function stillAllowed(user: SessionUser | null): SessionUser | null {
   if (isAllowed(user.email, allowedEmails())) return user;
   log("auth", `許可リストから外れたセッションを無効化: ${user.email}`);
   return null;
+}
+
+/** すでに繋がっている接続を見直すとき用 (Socket.IO)。Cookieの署名は接続時に確認済みなので、
+ * ここでは「いまも許可リストに載っているか」だけを見る */
+export function stillAllowedUser(user: SessionUser): boolean {
+  return stillAllowed(user) !== null;
 }
 
 export function currentUser(req: Request): SessionUser | null {
@@ -195,7 +213,9 @@ function isLocal(req: Request): boolean {
  * 認証のon/offに関わらず同じ判定にする (offだから緩い、にしない) */
 export function canEditAuthSettings(req: Request): boolean {
   const list = allowedEmails();
-  if (list.length === 0) return isLocal(req);
+  // 未設定・空 (全員外した) のどちらも「オーナーが居ない」状態。
+  // 空にして自分も締め出したときに設定へ戻れる道が要るので、ここはローカルからだけ通す
+  if (list === null || list.length === 0) return isLocal(req);
   const me = currentUser(req);
   return !!me && list.includes(me.email.toLowerCase());
 }

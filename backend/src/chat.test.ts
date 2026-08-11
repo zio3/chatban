@@ -100,8 +100,15 @@ test("外された相手は通さない (セッションが生きていても)",
   assert.equal(isAllowed("sato@example.com", ["tanaka@example.com"]), false);
 });
 
-test("リストが空なら通す — ここで閉じると設定タブごと詰む", () => {
-  assert.equal(isAllowed("sato@example.com", []), true);
+test("一度も設定していなければ通す (null) — ここで閉じると設定タブごと詰む", () => {
+  assert.equal(isAllowed("sato@example.com", null), true);
+});
+
+// 「まだ設定していない」と「管理者が全員を外した」を同じ空リスト扱いにしていたため、
+// 権限を全部消す操作が逆に認証を開けっぱなしにしていた (自動レビュー指摘)。
+// 一番強い禁止操作が一番緩い結果を生むのは、どう考えても逆
+test("明示的に空にしたら誰も通さない (全員外す = 誰も通すなという意思表示)", () => {
+  assert.equal(isAllowed("sato@example.com", []), false);
 });
 
 // 認証onのSocket.IOハンドシェイクは、認証を通らない相手の生Cookieを最初に触る場所。

@@ -107,20 +107,37 @@ function TaskCard({
       onClick={() => onOpen?.(task.id)}
       className={`rounded-lg border bg-white p-2.5 shadow-sm ${approved ? "border-emerald-400 ring-1 ring-emerald-300" : "border-slate-200"} ${overlay ? "rotate-2 shadow-lg" : ""} ${onOpen ? "cursor-pointer hover:border-indigo-300" : ""}`}
     >
+      {/* 1行目: ID + タイトル + 担当。以前はここに却下/期限/依存のバッジも混ざっていて、
+          付いているカードほどタイトルが右下へ押し出され、列を縦に流し読みできなかった。
+          IDを固定幅にして、#7 と #112 で桁が違ってもタイトルの左端が1本の縦線に乗るようにする
+          (3人のデザイナーが独立に同じ箇所を問題視した。左端揃えはA案の判断) */}
       <div className="flex items-start justify-between gap-2">
-        <span className="text-sm font-medium leading-snug">
-          <span className="mr-1 text-xs text-slate-400">#{task.id}</span>
+        <span className="flex min-w-0 items-baseline gap-1.5 text-sm font-medium leading-snug">
+          <span className="w-8 shrink-0 text-right text-xs tabular-nums text-slate-400">#{task.id}</span>
+          <span className="min-w-0">{task.title}</span>
+        </span>
+        {task.assignee && (
+          // 全カードに必ず出る情報なので、毎枚主張させない (C案の判断)。
+          // 担当で絞りたいときはヘッダーの人フィルタが本来の導線
+          <span className="shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600">
+            {task.assignee}
+          </span>
+        )}
+      </div>
+      {/* 2行目: 状態のチップ。検収OKもここに畳む (以前はカード幅いっぱいの独立行で、
+          Review列のカードだけ背が高かった)。何も無ければ行ごと出ない */}
+      {(task.rejected || task.due || (task.blockedBy?.length ?? 0) > 0 || onToggleApproved) && (
+        // pl はIDレールの幅(w-8=2rem)+gap(0.375rem)。タイトル・summaryと左端を揃える
+        <div className="mt-1 flex flex-wrap items-center gap-1 pl-[2.375rem]">
           {task.rejected && (
-            <span className="mr-1 rounded bg-rose-600 px-1.5 py-0.5 text-[10px] font-bold text-white">🚫 却下</span>
+            <span className="rounded bg-rose-600 px-1.5 py-0.5 text-[10px] font-bold text-white">🚫 却下</span>
           )}
           {task.due && (
-            <span className={`mr-1 rounded px-1 py-0.5 text-[10px] ${dueBadge(task.due).cls}`}>
-              {dueBadge(task.due).text}
-            </span>
+            <span className={`rounded px-1 py-0.5 text-[10px] ${dueBadge(task.due).cls}`}>{dueBadge(task.due).text}</span>
           )}
           {task.blockedBy && task.blockedBy.length > 0 && (
             <span
-              className="mr-1 text-[10px] text-slate-400"
+              className="text-[10px] text-slate-400"
               title={depsUnresolved ? "依存先が未完了のため着手できません" : "依存先はすべて完了済み"}
             >
               ⛓{" "}
@@ -129,38 +146,33 @@ function TaskCard({
               ))}
             </span>
           )}
-          {task.title}
-        </span>
-        {task.assignee && (
-          <span className="shrink-0 rounded-full bg-indigo-100 px-2 py-0.5 text-xs font-medium text-indigo-700">
-            {task.assignee}
-          </span>
-        )}
-      </div>
+          {onToggleApproved && (
+            <label
+              onClick={(e) => e.stopPropagation()}
+              className={`ml-auto flex cursor-pointer items-center gap-1 rounded-md border px-1.5 py-0.5 text-[11px] font-medium ${
+                approved
+                  ? "border-emerald-400 bg-emerald-100 text-emerald-800"
+                  : "border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
+              }`}
+            >
+              <input
+                type="checkbox"
+                data-testid={`approve-${task.id}`}
+                checked={!!approved}
+                onChange={() => onToggleApproved(task.id)}
+                className="h-3.5 w-3.5 accent-emerald-600"
+              />
+              検収OK
+            </label>
+          )}
+        </div>
+      )}
       {/* #92: カードに出すのは「いまどうなっているか」(summary)。
           「なぜこの人か」(reason)は普段は要らないので詳細パネルで読む。
           以前はreasonに進捗が書き込まれていたが、原因はMCP側のツール契約にreasonの説明が
           無く、エージェントから見て用途不明の文字列欄になっていたこと */}
-      {task.summary && <p className="mt-1.5 text-xs text-slate-600">📝 {task.summary}</p>}
-      {onToggleApproved && (
-        <label
-          onClick={(e) => e.stopPropagation()}
-          className={`mt-2 flex cursor-pointer items-center gap-2 rounded-md border px-2.5 py-1.5 text-xs font-medium ${
-            approved
-              ? "border-emerald-400 bg-emerald-100 text-emerald-800"
-              : "border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
-          }`}
-        >
-          <input
-            type="checkbox"
-            data-testid={`approve-${task.id}`}
-            checked={!!approved}
-            onChange={() => onToggleApproved(task.id)}
-            className="h-5 w-5 accent-emerald-600"
-          />
-          検収OK
-        </label>
-      )}
+      {/* 3行目: いまどうなっているか。タイトルの左端に揃える */}
+      {task.summary && <p className="mt-1 pl-[2.375rem] text-xs text-slate-600">📝 {task.summary}</p>}
     </div>
   );
 }

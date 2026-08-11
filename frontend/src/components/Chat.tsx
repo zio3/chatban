@@ -290,7 +290,9 @@ export default function Chat({
                       key={i}
                       disabled={sending}
                       onClick={() => onSend(s.message)}
-                      className="rounded-2xl border border-indigo-200 bg-indigo-50 px-4 py-2.5 text-sm font-medium text-indigo-700 shadow-sm hover:bg-indigo-100 disabled:opacity-40"
+                      // 会話前の画面に4〜6個並ぶので、青一色にしない (B/C案の判断)。
+                      // 押せることはホバーで示す
+                      className="rounded-2xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-medium text-slate-600 shadow-sm hover:border-indigo-300 hover:bg-indigo-50 hover:text-indigo-700 disabled:opacity-40"
                     >
                       {s.label}
                     </button>

@@ -698,6 +698,30 @@ test("新しいプロジェクトの前提情報は空欄でなく既定値が�
   expect(ctx.text).toContain("このプロジェクトで使わないもの");
 });
 
+test("前提情報のリファレンスは、足りないときだけ知らせ、求められたら渡す", async () => {
+  // 既定では足場だけ。リファレンス全文は乗らない (毎回の取得を重くしない)
+  const plain = await mcp("get_project_context", {});
+  expect(plain.reference).toBeUndefined();
+
+  // 節が揃っていないプロジェクトには、足りないものだけ知らせる
+  // (E2E用DBの前提情報はテンプレート導入前のものなので、必ず何か欠けている)
+  expect(plain.templateHint?.missing?.length).toBeGreaterThan(0);
+  expect(plain.templateHint.note).toContain("reference=true");
+
+  // 求められたら渡す。雛形ではなく選択肢のカタログなので、択一であることが分かる形
+  const withRef = await mcp("get_project_context", { reference: true });
+  expect(withRef.reference).toContain("どれか選ぶ");
+  expect(withRef.reference).toContain("review = 検収待ち");
+  expect(withRef.reference).toContain("review = 相手待ち");
+  expect(withRef.referenceNote).toContain("そのまま書き戻さないこと");
+
+  // boolean を文字列で送るMCPクライアントがある (実測: Claude Code)。受け側で吸収する
+  const asString = await mcp("get_project_context", { reference: "true" });
+  expect(asString.reference).toBeDefined();
+  const asFalse = await mcp("get_project_context", { reference: "false" });
+  expect(asFalse.reference).toBeUndefined();
+});
+
 test("summary の契約はチャットとMCPで同じ文言になっている (入口ごとにズレない)", async () => {
   const res = await fetch(`${API}/mcp/1`, {
     method: "POST",

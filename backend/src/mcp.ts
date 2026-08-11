@@ -31,10 +31,19 @@ import {
   updateTasks,
 } from "./db.js";
 import { archiveState } from "./hooks.js";
-import { currentProjectId, getProject } from "./store.js";
+import { contextReference, contextTemplateHint, currentProjectId, getProject } from "./store.js";
 import type { TaskStatus } from "./types.js";
 
 const STATUS = z.enum(["todo", "inprogress", "review", "done"]);
+
+/** boolean を文字列で送ってくるMCPクライアントがある (実測: Claude Code から
+ * reference=true を渡すと "true" が届き、z.boolean() が弾いた)。
+ * 呼ぶ側の実装差でツールが使えなくなるので、受け側で吸収する。
+ * "false"/"0"/"" は偽として扱う — 文字列を素直に真偽変換すると "false" が true になる */
+const flexBool = z.preprocess(
+  (v) => (typeof v === "string" ? !["false", "0", ""].includes(v.toLowerCase()) : v),
+  z.boolean().optional()
+);
 
 function text(data: unknown) {
   return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] };
@@ -135,7 +144,7 @@ export function buildMcpServer(onEvent: (kind: "board" | "proposals") => void): 
             context_append: z.string().optional().describe(CONTEXT_APPEND_DESCRIPTION),
             due: z.string().nullable().optional().describe("期限 YYYY-MM-DD。解除はnull"),
             blocked_by: z.array(z.number().int()).nullable().optional().describe(`${BLOCKED_BY_DESCRIPTION}。全置換で、解除はnull`),
-            rejected: z.boolean().optional().describe("却下(やらない決定)フラグ。reasonに根拠を書く"),
+            rejected: flexBool.describe("却下(やらない決定)フラグ。reasonに根拠を書く"),
           })
         ),
       },
@@ -235,19 +244,42 @@ export function buildMcpServer(onEvent: (kind: "board" | "proposals") => void): 
     "get_project_context",
     {
       description:
-        "この接続の足場を取得する。対象プロジェクト(接続URLで固定)と、その前提情報(全員共有)。作業を始める前に一度読む。ボードの中身は query_log で引く",
+        "この接続の足場を取得する。対象プロジェクト(接続URLで固定)と、その前提情報(全員共有)。作業を始める前に一度読む。ボードの中身は query_log で引く。" +
+        "前提情報に足りない節があると templateHint が付く。reference=true で呼ぶと書き方の参考が取れる",
+      inputSchema: {
+        reference: flexBool
+          .describe(
+            "trueなら前提情報の書き方のリファレンスも返す。雛形ではなく「こういう使い方がある」の一覧で、このプロジェクトに合うものを選んで採る"
+          ),
+      },
     },
-    async () =>
-      text({
+    async ({ reference }) => {
+      const row = getProjectContextRow();
+      // テンプレートは新規プロジェクトにしか入らないので、直しても既存は取り残される。
+      // 足りない節があることだけ知らせ、雛形は求められたときに渡す (常に返すと600字が毎回乗る)
+      const hint = contextTemplateHint(row.text);
+      return text({
         // #96: 接続がどのプロジェクトに向いているか。SQL窓口は
         // プロジェクトDBしか見えないので、これはここでしか確認できない
         project: currentProject(),
-        ...getProjectContextRow(), // text と version (上書きするとき版が要る #115)
+        ...row, // text と version (上書きするとき版が要る #115)
+        ...(hint ? { templateHint: hint } : {}),
+        ...(reference
+          ? {
+              reference: contextReference(),
+              referenceNote:
+                "これをそのまま書き戻さないこと。並んでいるのは選択肢で、このプロジェクトに当てはまるものだけを選ぶ。" +
+                "書き戻すときは、いまの text を1文字も削らずに、選んだものを足した全文を update_project_context に渡す" +
+                "(既存の記述はそのプロジェクトの決めごとなので、参考の文言で置き換えない)。" +
+                "どれを選ぶか判断がつかないときは、人間に聞いてから書く",
+            }
+          : {}),
         // #108: 要約の再生成は15〜80秒かかる。生成中に「完了した」と誤認しないように知らせる
         ...(archiveState.running.get(currentProjectId())
           ? { archiveRunning: "要約カードを再生成中。結果を見るなら少し待って引き直すこと" }
           : {}),
-      })
+      });
+    }
   );
 
   server.registerTool(

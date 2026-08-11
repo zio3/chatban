@@ -138,15 +138,24 @@ const server = http.createServer(app);
 // CORSは express と同じ許可リストを使い、認証onなら接続時に本人確認する
 const io = new Server(server, { cors: { origin: ALLOWED_ORIGINS, credentials: true } });
 
+// socket.io はここで投げた同期例外を捕まえない (uncaughtException になりプロセスが落ちる)。
+// 認証前の外部入力を触る場所なので、握りつぶさず「拒否」に倒す。
+// 本体は readCookie 側で防いでいるが、ここが最後の砦 (認証を通らない相手に
+// サーバーを止められるのは、認証そのものより悪い)
 io.use((socket, next) => {
-  if (!authEnabled()) return next(); // 開発・E2Eは素通し (RESTと同じ判断)
-  const me = userFromCookieHeader(socket.handshake.headers.cookie);
-  if (!me) {
-    log("auth", "未認証のSocket.IO接続を拒否しました");
-    return next(new Error("unauthorized"));
+  try {
+    if (!authEnabled()) return next(); // 開発・E2Eは素通し (RESTと同じ判断)
+    const me = userFromCookieHeader(socket.handshake.headers.cookie);
+    if (!me) {
+      log("auth", "未認証のSocket.IO接続を拒否しました");
+      return next(new Error("unauthorized"));
+    }
+    socket.data.user = me;
+    next();
+  } catch (e: any) {
+    log("auth", `Socket.IOの認証で例外: ${e?.message ?? e}`);
+    next(new Error("unauthorized"));
   }
-  socket.data.user = me;
-  next();
 });
 
 // #99: 配信はプロジェクト単位のroomへ。全クライアントへの一斉送信だと、

@@ -132,15 +132,31 @@ export function currentUser(req: Request): SessionUser | null {
   return stillAllowed(verify((req as any).cookies?.[COOKIE]));
 }
 
-/** Socket.IOのハンドシェイク用。cookie-parser を通らないので生のCookieヘッダから取る */
-export function userFromCookieHeader(header: string | undefined): SessionUser | null {
+/** 生のCookieヘッダから1つ取り出す。壊れた値は「無い」として扱う。
+ *
+ * decodeURIComponent は不正なパーセントエンコード (`%E0%A4%A` 等) で URIError を投げる。
+ * ここは認証前の外部入力を最初に触る場所なので、投げさせてはいけない —
+ * 呼び出し元が Socket.IO の io.use で、socket.io は登録関数の同期例外を捕まえないため、
+ * Cookieを1回送られるだけで uncaughtException でプロセスが落ちる (実測・自動レビュー指摘)。
+ * 「認証を通らない相手がサーバーを止められる」のは認証そのものより悪い */
+export function readCookie(header: string | undefined, name: string): string | null {
   if (!header) return null;
   for (const part of header.split(";")) {
     const i = part.indexOf("=");
-    if (i < 0 || part.slice(0, i).trim() !== COOKIE) continue;
-    return stillAllowed(verify(decodeURIComponent(part.slice(i + 1).trim())));
+    if (i < 0 || part.slice(0, i).trim() !== name) continue;
+    const raw = part.slice(i + 1).trim();
+    try {
+      return decodeURIComponent(raw);
+    } catch {
+      return null; // 壊れた値 = 名乗っていないのと同じ
+    }
   }
   return null;
+}
+
+/** Socket.IOのハンドシェイク用。cookie-parser を通らないので生のCookieヘッダから取る */
+export function userFromCookieHeader(header: string | undefined): SessionUser | null {
+  return stillAllowed(verify(readCookie(header, COOKIE) ?? undefined));
 }
 
 /** #126: 誰の発言かはシステムが決める。ログイン済みならセッションの本人、

@@ -1,10 +1,13 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { CONTEXT_APPEND_DESCRIPTION, createTasksAsAgent, updateTasksAsAgent } from "./agentWrite.js";
 import {
+  BLOCKED_BY_DESCRIPTION,
+  CONTEXT_WRITE_DESCRIPTION,
   PROJECT_CONTEXT_WRITE_DESCRIPTION,
   QUERY_LOG_DESCRIPTION,
   REORDER_DESCRIPTION,
   STATUS_DESCRIPTION,
+  SUMMARY_DESCRIPTION,
 } from "./chat.js";
 import { z } from "zod";
 import {
@@ -87,9 +90,9 @@ export function buildMcpServer(onEvent: (kind: "board" | "proposals") => void): 
                   assign_reason: z.string().optional().describe("なぜこの担当かを一言で。進捗は書かない"),
                 }),
             context: z.string().optional().describe("登録に至った経緯・論点・決定事項 (経緯メモの初期値)"),
-            summary: z.string().optional().describe("現況の一言。カードに表示される"),
+            summary: z.string().optional().describe(SUMMARY_DESCRIPTION),
             due: z.string().optional().describe("期限 YYYY-MM-DD"),
-            blocked_by: z.array(z.number().int()).optional().describe("依存先タスクID(これらが終わるまで着手不可)"),
+            blocked_by: z.array(z.number().int()).optional().describe(BLOCKED_BY_DESCRIPTION),
           })
         ),
       },
@@ -119,11 +122,11 @@ export function buildMcpServer(onEvent: (kind: "board" | "proposals") => void): 
                   assignee: z.string().nullable().optional(),
                   assign_reason: z.string().optional().describe("なぜこの担当かを一言で。進捗は書かない"),
                 }),
-            summary: z.string().optional().describe("現況の一言。カードに表示される。詳細な根拠は context へ"),
+            summary: z.string().optional().describe(SUMMARY_DESCRIPTION),
             context: z
               .string()
               .optional()
-              .describe("経緯メモの全文上書き。既存を読んでマージすること。渡すときは context_version も必須"),
+              .describe(CONTEXT_WRITE_DESCRIPTION),
             context_version: z
               .number()
               .int()
@@ -131,7 +134,7 @@ export function buildMcpServer(onEvent: (kind: "board" | "proposals") => void): 
               .describe("context を渡すときのみ必須。直前に query_log で読んだ context_version をそのまま添える"),
             context_append: z.string().optional().describe(CONTEXT_APPEND_DESCRIPTION),
             due: z.string().nullable().optional().describe("期限 YYYY-MM-DD。解除はnull"),
-            blocked_by: z.array(z.number().int()).nullable().optional().describe("依存先タスクID(全置換)。解除はnull"),
+            blocked_by: z.array(z.number().int()).nullable().optional().describe(`${BLOCKED_BY_DESCRIPTION}。全置換で、解除はnull`),
             rejected: z.boolean().optional().describe("却下(やらない決定)フラグ。reasonに根拠を書く"),
           })
         ),

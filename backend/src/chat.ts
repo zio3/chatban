@@ -107,6 +107,27 @@ export const REORDER_DESCRIPTION = [
   "対象は生きているタスクだけ。指定しなかったタスクは元の順のまま末尾に残るので消えない。他の列・アーカイブ済み・存在しないIDは無視して ignored で返す(全体は失敗しない)。",
 ].join("\n");
 
+/** summary の契約。チャットとMCPで文言がズレていた(MCP側は「現況の一言。カードに表示される」だけ)。
+ * 外部エージェントはMCP側から使っていて、状態(「実装完了」「本番反映済み」)を書いていた。
+ *
+ * summary は表示のためではなく、ボードのチャットが常時読んで受け答えするためのもの。
+ * それを知らないと状態が書かれ、チャットは何も答えられなくなる。#92(reasonの用途が
+ * 分からず進捗で汚された)と同型で、今回は「読み手が誰か」が抜けていた */
+export const SUMMARY_DESCRIPTION =
+  "現況の一言。カードに出るだけでなく、ボードのチャットが常時これを読んで受け答えするので、状態ではなく「注意点と次にやること」を書く — 「実装完了」ではなく「先に出す。成功を確認してから #4 へ」。しばらく続くものだけを書き、UIに出ていてすぐ解決する短命な状態(承認待ち・提案中)は書かない。詳細な根拠は経緯メモ(context)へ";
+
+/** context(経緯メモ)の書き込み契約。全文上書きであることは書いてあったが、
+ * 「累積なので上書きすると前の情報が消える」が書いていなかった。
+ * 実例: 外部エージェントが書き直すたびに無意識に要約し、経緯メモの情報が減った */
+export const CONTEXT_WRITE_DESCRIPTION =
+  "経緯メモの全文上書き。累積の記録なので、既存を読んでマージした全文を渡す(書き直すときに要約すると前の情報が消える)。渡すときは context_version も必須。1件足すだけなら context_append を使う — そちらは読む必要も版も要らない";
+
+/** 依存の契約。「順番に着手したい」を依存にしてしまう失敗が実際に起きた
+ * (「DateTimeOffset化はデモの後」を blocked_by で表現していた)。
+ * 依存は着手可能性の話で、優先順位は sort(並び順)で表す */
+export const BLOCKED_BY_DESCRIPTION =
+  "依存先タスクID。「それが終わらないと着手できない」ときだけ張る。あとでやりたいだけ・順番を表したいだけなら張らず、reorder_tasks で列の下へ落とす(依存は着手可能性、優先順位は並び順)";
+
 /** #126: 割り振り提案の契約。履歴ゼロの状態で「実績がある」「経験を活かせる」という
  * 存在しない根拠が返っていた。「AIが根拠を示す」が売りなので、根拠が捏造だと可視化の意味が消える。
  * 理由を必須にすると辻褄合わせを促すので、任意にして「無いなら書かない」を許す */
@@ -132,7 +153,7 @@ const tools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
                 assign_reason: { type: "string", description: "その担当にした理由を一言で (「指名」「API検証の実績」など)。進捗や作業結果は書かない" },
                 context: { type: "string", description: "登録に至った経緯・会話で出た論点・決まったこと。相談や議論の流れから登録するときは必ず書く (タイトルだけでは背景が失われる)" },
                 due: { type: "string", description: "期限 YYYY-MM-DD。相対表現は今日の日付から解決" },
-                blocked_by: { type: "array", items: { type: "integer" }, description: "依存先タスクID(これらが終わるまで着手不可)" },
+                blocked_by: { type: "array", items: { type: "integer" }, description: BLOCKED_BY_DESCRIPTION },
               },
               required: ["title"],
             },
@@ -160,11 +181,11 @@ const tools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
                 status: { type: "string", enum: STATUS_VALUES, description: STATUS_DESCRIPTION },
                 assignee: { type: "string" },
                 assign_reason: { type: "string", description: "担当変更・却下の判断理由を一言で。期限だけの変更では渡さない(既存の理由を上書きしてしまう)。進捗や作業結果は書かない — それは summary" },
-                summary: { type: "string", description: "現況の一言。カードに表示される(「実装完了 (commit xxx)」「原因調査中」など)。しばらく続く状態だけを書く — 「承認待ち」「提案中」のような、UIに出ていてすぐ解決する短命な状態は書かない。検収の要点はここ、詳細な根拠は経緯メモ(context)へ" },
+                summary: { type: "string", description: SUMMARY_DESCRIPTION },
                 due: { type: ["string", "null"], description: "期限 YYYY-MM-DD。解除はnull" },
-                blocked_by: { type: ["array", "null"], items: { type: "integer" }, description: "依存先タスクID(全置換)。解除はnull" },
+                blocked_by: { type: ["array", "null"], items: { type: "integer" }, description: `${BLOCKED_BY_DESCRIPTION}。全置換で、解除はnull` },
                 rejected: { type: "boolean", description: "却下(やらない決定)フラグ。却下時はtrue+reasonに根拠。取り消しはfalse" },
-                context: { type: "string", description: "経緯メモの全文。上書きなので既存を読んでマージすること。渡すときは context_version も必須" },
+                context: { type: "string", description: CONTEXT_WRITE_DESCRIPTION },
                 context_version: { type: "integer", description: "context を渡すときのみ必須。直前に読んだ contextVersion をそのまま添える" },
                 context_append: { type: "string", description: CONTEXT_APPEND_DESCRIPTION },
               },

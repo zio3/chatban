@@ -692,6 +692,30 @@ test("新しいプロジェクトの前提情報は空欄でなく既定値が�
   expect(ctx.text).toContain("rejected");
   // ただし調整できることは明示されている (プロジェクトごとに違うのは review の意味)
   expect(ctx.text).toContain("違うなら書き換える");
+  // 書き換えたら例文を消すところまで指示する。例が残っていると「どちらなのか」を考えさせる
+  expect(ctx.text).toContain("但し書きごと消すこと");
+  // 「使わないもの」を書く欄。空欄は「まだ入っていない」と読まれて埋められる
+  expect(ctx.text).toContain("このプロジェクトで使わないもの");
+});
+
+test("summary の契約はチャットとMCPで同じ文言になっている (入口ごとにズレない)", async () => {
+  const res = await fetch(`${API}/mcp/1`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream" },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+  });
+  const body = await res.text();
+  const line = body.split("\n").find((l) => l.startsWith("data: ")) ?? body;
+  const tools = JSON.parse(line.replace(/^data: /, "")).result.tools as any[];
+
+  const update = tools.find((t) => t.name === "update_tasks");
+  const summaryDesc = update.inputSchema.properties.updates.items.properties.summary.description;
+  // MCP側は以前「現況の一言。カードに表示される」だけで、読み手が誰かが抜けていた
+  expect(summaryDesc).toContain("チャットが常時これを読んで");
+  expect(summaryDesc).toContain("注意点と次にやること");
+
+  const dep = update.inputSchema.properties.updates.items.properties.blocked_by.description;
+  expect(dep).toContain("それが終わらないと着手できない");
 });
 
 test("要約カードの列は frozen (旧 settled)。SQL窓口から新しい名前で引ける", async () => {

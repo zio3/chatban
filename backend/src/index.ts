@@ -65,6 +65,8 @@ import {
   updateTasks,
   approveChecked,
   DONE_GATE_RULE,
+  isTaskStatus,
+  TASK_STATUSES,
 } from "./db.js";
 
 const PORT = Number(process.env.PORT ?? 8787);
@@ -248,6 +250,8 @@ app.get("/api/board", (_req, res) => {
 app.post("/api/tasks", (req, res) => {
   const { title, status, assignee, assignReason } = req.body ?? {};
   if (!title) return res.status(400).json({ error: "title required" });
+  const ng = badStatus(status);
+  if (ng) return res.status(400).json({ error: ng });
   const task = createTask(title, status ?? "todo", assignee ?? null, assignReason ?? null);
   broadcastBoard();
   // 黙って別の列に入れない。指定と結果が違うことは必ず言う (#123と同じ形)
@@ -266,6 +270,14 @@ app.post("/api/tasks/:id/checked", (req, res) => {
   broadcastBoard();
   res.json(task);
 });
+
+/** 外から来た列名を確かめる。TypeScriptの型は実行時には消えるので、RESTの入口で必ず通す。
+ * 通してしまうと「保存はされたのにボードのどの列にも出ないタスク」ができ、
+ * 詳細を開くと画面が落ちる (自動レビュー指摘) */
+function badStatus(status: unknown): string | null {
+  if (status === undefined || isTaskStatus(status)) return null;
+  return `status は ${TASK_STATUSES.join(" / ")} のいずれかです (受け取った値: ${JSON.stringify(status)})`;
+}
 
 // status:"done" を投げられたが動かさなかったときに添える。黙って無視すると
 // 「APIは200を返したのに列が動かない」になり、UIのバグに見える
@@ -298,6 +310,8 @@ app.get("/api/tasks/:id", (req, res) => {
 });
 
 app.patch("/api/tasks/:id", (req, res) => {
+  const ng = badStatus(req.body?.status);
+  if (ng) return res.status(400).json({ error: ng });
   const task = updateTask(Number(req.params.id), req.body ?? {});
   if (!task) return res.status(404).json({ error: "not found" });
   broadcastBoard();
@@ -396,6 +410,11 @@ app.post("/api/tasks/:id/chat", async (req, res) => {
   const taskId = Number(req.params.id);
   const { message, history, speaker, attachments, view } = req.body ?? {};
   if (!message) return res.status(400).json({ error: "message required" });
+  // 対象が居ないなら、LLMを呼ぶ前に断る。以前は存在確認が無く、taskFocus が undefined のまま
+  // 通常チャットに近い状態で有料の呼び出しが走り、存在しないIDの会話ログまで残っていた
+  // (chat_messages.task_id に外部キーは無い。自動レビュー指摘)。
+  // 削除・プロジェクト切替・古い画面から送ると踏むので、普通に起きる
+  if (!getTask(taskId)) return res.status(404).json({ error: `task #${req.params.id} not found` });
   const id = ++chatSeq;
   const t0 = Date.now();
   // メインチャットと同じ経路で発言者を決める。リクエストの speaker をそのまま信じない
@@ -503,6 +522,9 @@ app.post("/api/projects/:id/activate", (req, res) => {
 
 app.patch("/api/projects/:id", (req, res) => {
   const id = Number(req.params.id);
+  // 存在確認をしないと、更新自体は0件で静かに通ったあと broadcastBoard(id) が投げて500になる。
+  // 設定を古いタブで開いたまま別タブで削除する、という普通の競合で踏む (自動レビュー指摘)
+  if (!getProject(id)) return res.status(404).json({ error: `project #${req.params.id} not found` });
   const { name, members } = req.body ?? {};
   if (typeof name === "string" && name.trim()) renameProject(id, name.trim());
   if (Array.isArray(members)) setProjectMembers(id, members);

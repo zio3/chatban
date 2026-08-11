@@ -66,6 +66,72 @@ async function generateContentLabel(titles: string[]): Promise<string | null> {
   }
 }
 
+/** 要素分解に投げる中身を組み立てる。regenerateCard と比較スクリプトで同じものを使う
+ * (プロンプトを二重管理しないため。scripts/compare-archive-models.ts) */
+export function buildDecomposeMessages(tasks: ReturnType<typeof tasksOfCard>, checkedTexts: string[]) {
+  // #92: 経緯メモ(context)を渡す。タイトルだけでは「何をしたか」しか残らず、
+  // 「なぜそうしたか」が蒸留に入らない — 経緯を貯めても要約に活きないなら貯める意味が薄い。
+  // contextは長くなりがちなので頭を切る (要約の材料には結論と理由があれば足りる)
+  //
+  // summary は渡さない。「いま何が起きているか」を書く欄なので、Doneに入った時点で
+  // 中身が過去のものになり、「現在は検収待ちの状態である」が要約に載る事故が起きた。
+  // 渡さなければそもそも起きない (「プロンプトは漏れるが、経路が無いことは漏れない」)。
+  // 内容としても context に同じことがより詳しく書いてある。
+  const base = (t: ReturnType<typeof tasksOfCard>[number]) => ({
+    id: t.id,
+    title: t.title,
+    assignee: t.assignee,
+    ...(t.context ? { context: t.context.slice(0, 800) } : {}),
+  });
+
+  // 完了と却下を配列ごと分ける (zio案)。以前は rejected: true を混ぜて渡し、
+  // 「rejected=true のものには【却下】を付けろ」とプロンプトで指示していたが、
+  // 却下が1件も無い材料に対して【却下】を付けるモデルが複数あった (opus-4.8 / gpt-5.4-mini)。
+  // 保留のタスクを「却下した」と書かれるのは、後から読む人間にとって一番害が大きい。
+  //
+  // 分けてしまえば、却下が無いときは却下タスクのキーごと出ないので、
+  // 【却下】を付ける材料が存在しない。判断させずに構造で決める。
+  const doneTasks = tasks.filter((t) => !t.rejected).map(base);
+  const rejectedTasks = tasks
+    .filter((t) => t.rejected)
+    .map((t) => ({ ...base(t), 却下理由: t.assignReason }));
+
+  const messages = [
+    {
+      role: "system" as const,
+      content: [
+        "ボードから退場したタスク群を、人間が後で確認する価値のある単位に分解して要約する。",
+        "渡されるタスクは、すべて人間の検収を通って確定したもの。終わった仕事の記録を書く。",
+        "",
+        "材料は2つに分かれている:",
+        "- 完了タスク … やり切ったもの。関連するものはまとめて凝縮する",
+        "- 却下タスク … やらないと決めたもの。**このキーが無いときは、却下されたタスクは1件も無い**",
+        "",
+        "ルール:",
+        "- 単なる件数ではなく、決定事項・担当の偏り・成果の内容が残る形に凝縮する",
+        "- context(経緯メモ)には「なぜそうしたか」「何を検討して何を捨てたか」が書かれている。タイトルの言い換えで終わらせず、そこにしかない判断を要素文に残す (例: 「並べ替えを実装」ではなく「並べ替えはソートキー方式を捨て、LLMが決めた順番を受け取る方式にした」)",
+        "- まだ決まっていないこと(検討中・保留・候補を挙げた段階)は、決まったように書かない。材料にそう書いてあるとおりに「保留」「未定」と書く",
+        "- 完了タスクは、関連するものをまとめて1要素にする。タスクIDを #n 形式で含める",
+        "- 完了タスクのうち些末なもの(動作検証・軽微な修正等)は独立要素にせず省いてよい。省いた分だけを末尾に「ほか軽微N件 (#x, #y)」としてまとめる。本文の要素で既に触れたIDをここに再掲しない",
+        "- 却下タスクは1件ずつ独立した要素にし、先頭に【却下】と付けて却下理由を残す (なぜやらないかが後から分かるように)",
+        "- 「確認済み要素」に既に含まれている内容は出力しない (その要素は変更せず保持される)",
+        "- 完了タスクからは2〜5要素程度。各1文",
+        '- 出力はJSON文字列配列のみ: ["要素1", "要素2"]',
+      ].join("\n"),
+    },
+    {
+      role: "user" as const,
+      content: JSON.stringify({
+        確認済み要素: checkedTexts,
+        完了タスク: doneTasks,
+        // 却下が無ければキーごと出さない。「無い」ことを書かずに済ませるのが肝
+        ...(rejectedTasks.length > 0 ? { 却下タスク: rejectedTasks } : {}),
+      }),
+    },
+  ];
+  return { messages, taskData: [...doneTasks, ...rejectedTasks] };
+}
+
 /** カードの要約を作り直す。dateLabelを渡すとタイトル生成をせずそのラベルを使う (日次まとめ用) */
 export async function regenerateCard(cardId: number, dateLabel?: string): Promise<SummaryCard | undefined> {
   const card = getSummaryCard(cardId);
@@ -75,52 +141,11 @@ export async function regenerateCard(cardId: number, dateLabel?: string): Promis
     updateCardContent(cardId, null, card.elements.filter((e) => e.checked));
     return getSummaryCard(cardId);
   }
-  // #92: 経緯メモ(context)と現況(summary)も渡す。タイトルだけでは「何をしたか」しか残らず、
-  // 「なぜそうしたか」が蒸留に入らない — 経緯を貯めても要約に活きないなら貯める意味が薄い。
-  // contextは長くなりがちなので頭を切る (要約の材料には結論と理由があれば足りる)
-  // summary は「いま何が起きているか」を書く欄なので、Doneに入った時点で中身が過去のものになる。
-  // キー名を summary のままにすると「現況」として読まれ、「現在は検収待ちの状態である」が
-  // そのまま要約に載った (実例)。キー名がそのままラベルになるのは #92 と同じ。
-  // 「完了直前のメモ」と名乗らせて、状態の記述は解消済みだと分かるようにする
-  const taskData = tasks.map((t) => ({
-    id: t.id,
-    title: t.title,
-    assignee: t.assignee,
-    reason: t.assignReason,
-    ...(t.summary ? { 完了直前のメモ: t.summary } : {}),
-    ...(t.context ? { context: t.context.slice(0, 800) } : {}),
-    ...(t.rejected ? { rejected: true } : {}),
-  }));
   const checkedElements = card.elements.filter((e) => e.checked);
+  const { messages, taskData } = buildDecomposeMessages(tasks, checkedElements.map((e) => e.text));
 
   // 要素分解 (品質が肝・非同期なのでレイテンシ許容): ルーティング委任
-  const res = await chatCompletion("archive-decompose", getModel("archive"), {
-    messages: [
-      {
-        role: "system",
-        content: [
-          "完了タスク群を、人間が後で確認する価値のある単位に分解して要約する。",
-          "渡されるタスクは、すべて人間の検収を通ってDoneに確定したもの。終わった仕事の記録を書く。",
-          "ルール:",
-          // 実例: 「完了し、現在は検収待ちの状態である」と書かれた。材料の「完了直前のメモ」に
-          // Review時点の状況(検収待ち)が残っていたため。Doneに入った時点でそれは解消している
-          "- 「検収待ち」「レビュー中」「承認待ち」のような途中の状態は書かない。渡された材料にそう書かれていても、それは完了直前の状況で、もう解消している",
-          "- 単なる件数ではなく、決定事項・担当の偏り・成果の内容が残る形に凝縮する",
-          "- context(経緯メモ)には「なぜそうしたか」「何を検討して何を捨てたか」が書かれている。タイトルの言い換えで終わらせず、そこにしかない判断を要素文に残す (例: 「並べ替えを実装」ではなく「並べ替えはソートキー方式を捨て、LLMが決めた順番を受け取る方式にした」)",
-          "- 関連するタスクはまとめて1要素にする。タスクIDを #n 形式で含める",
-          "- 些末なタスク(動作検証・軽微な修正等)は独立要素にせず省いてよい。省いた分は末尾に「ほか軽微N件 (#x, #y)」として1行でまとめる",
-          "- rejected=true のタスクは「やらないと決めた」決定。省かず、要素の先頭に【却下】と付け、reason の却下理由を要素文に残す (なぜやらないかが後から分かるように)",
-          "- 「確認済み要素」に既に含まれている内容は出力しない (その要素は変更せず保持される)",
-          "- 2〜5要素程度、各1文",
-          '- 出力はJSON文字列配列のみ: ["要素1", "要素2"]',
-        ].join("\n"),
-      },
-      {
-        role: "user",
-        content: JSON.stringify({ 確認済み要素: checkedElements.map((e) => e.text), 完了タスク: taskData }),
-      },
-    ],
-  });
+  const res = await chatCompletion("archive-decompose", getModel("archive"), { messages });
   const newTexts = extractJsonArray(res.choices[0].message.content ?? "") ?? [
     `${tasks.length}件の完了: ${tasks.map((t) => `#${t.id}`).join(", ")}`,
   ];

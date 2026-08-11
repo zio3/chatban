@@ -3,6 +3,7 @@ import path, { join } from "node:path";
 import { homedir } from "node:os";
 import OpenAI from "openai";
 import { getSetting, loadModelPrices, recordLlmCall, saveModelPrices } from "./db.js";
+import { currentProjectId } from "./store.js";
 import { log } from "./log.js";
 
 function loadApiKey(): string {
@@ -121,8 +122,19 @@ export type ModelSlot = "main" | "archive" | "cheap";
 /** 出荷時の既定値。管理画面(#88)で上書きされていない場合はこれが使われる */
 export const MODEL_DEFAULTS: Record<ModelSlot, string> = {
   main: process.env.ORCA_MODEL_MAIN ?? "openai/gpt-5.4-mini-2026-03-17",
-  archive: process.env.ORCA_MODEL_ARCHIVE ?? "orcarouter/auto",
-  cheap: process.env.ORCA_MODEL_CHEAP ?? "orcarouter/fusion-mini",
+  // 2026-08-11: orcarouter/auto から gpt-5.6-luna へ。実測40〜80秒(最大110秒)が4〜12秒になった。
+  // auto を外した理由は「品質が要らない」ではなく、行き先が毎回変わって体験が安定しないこと。
+  // 遅さの正体は思考トークンで、要素5個を書くのに qwen3.7-plus が3,000〜4,600tk、
+  // deepseek-v4-flash は14,153tk 使っていた (luna は831〜981tk)。
+  // 質は3パターン(2/9/15件)で比較して luna がいちばん安定していた —
+  // 要素数の上限を守り、却下の扱いを間違えず、経緯メモの未検証項目まで拾う。
+  // 詳細は scripts/compare-archive-models.ts で再現できる
+  archive: process.env.ORCA_MODEL_ARCHIVE ?? "openai/gpt-5.6-luna",
+  // 2026-08-11: archive を直したら、今度はタイトル生成が本体より遅くなった。
+  // fusion-mini(コスト優先ルーティング)が qwen3.7-flash を引き、入力215字で
+  // 「20字のラベルを1つ」返すのに 29.7秒・出力3,446tk 使っていた。
+  // ラベル生成に思考は要らないので、ここも行き先の決まったモデルにする
+  cheap: process.env.ORCA_MODEL_CHEAP ?? "openai/gpt-5.6-luna",
 };
 
 /** 実効モデルID。優先順位: 管理画面の設定 > env > 既定値。
@@ -154,7 +166,16 @@ function dumpRequest(
   try {
     const dir = path.join(process.cwd(), "logs");
     fs.mkdirSync(dir, { recursive: true });
-    const file = path.join(dir, `last-request-${purpose}.json`);
+    // プロジェクトごとに分ける。以前は purpose だけで1ファイルだったので、
+    // 別プロジェクトの操作に上書きされ、どのボードの話か分からなくなった (実際に混乱した)
+    const pid = (() => {
+      try {
+        return currentProjectId();
+      } catch {
+        return 0; // プロジェクト文脈の外から呼ばれることもある
+      }
+    })();
+    const file = path.join(dir, `last-request-p${pid}-${purpose}.json`);
 
     // 同じターンの2round目以降は、前のroundを消さずに足す。
     // 1ターンの中で何がどれだけ積まれたかを、あとから1ファイルで追える
@@ -185,6 +206,7 @@ function dumpRequest(
     const out = isNewTurn
       ? {
           purpose,
+          projectId: pid,
           model,
           startedAt: round.at,
           // ツール定義は毎round同じものが送られる。1回だけ載せて、内訳を先に出す

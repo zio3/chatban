@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { extractChoices } from "./chat.js";
 import { differs } from "./archive.js";
-import { isAllowed, pickSpeaker } from "./auth.js";
+import { isAllowed, pickSpeaker, readCookie } from "./auth.js";
 
 // 返信ボタンの記法 [[選択肢]] の取り出し。
 // ここはLLMを介さずに固定できる唯一の部分なので (発火するかどうかはモデル次第でも、
@@ -100,4 +100,22 @@ test("外された相手は通さない (セッションが生きていても)",
 
 test("リストが空なら通す — ここで閉じると設定タブごと詰む", () => {
   assert.equal(isAllowed("sato@example.com", []), true);
+});
+
+// 認証onのSocket.IOハンドシェイクは、認証を通らない相手の生Cookieを最初に触る場所。
+// decodeURIComponent が URIError を投げると socket.io は捕まえず uncaughtException になり、
+// Cookieを1回送られるだけでプロセスが落ちた (実測。自動レビュー指摘)。
+
+test("壊れたパーセントエンコードは投げずに「無い」を返す", () => {
+  assert.equal(readCookie("chatban_session=%E0%A4%A", "chatban_session"), null);
+});
+
+test("正常な値はデコードして返す", () => {
+  assert.equal(readCookie("chatban_session=a%2Eb", "chatban_session"), "a.b");
+});
+
+test("他のCookieに混ざっていても取れる。無ければnull", () => {
+  assert.equal(readCookie("x=1; chatban_session=tok; y=2", "chatban_session"), "tok");
+  assert.equal(readCookie("x=1; y=2", "chatban_session"), null);
+  assert.equal(readCookie(undefined, "chatban_session"), null);
 });

@@ -1,5 +1,5 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { createTasksAsAgent, updateTasksAsAgent } from "./agentWrite.js";
+import { CONTEXT_APPEND_DESCRIPTION, createTasksAsAgent, updateTasksAsAgent } from "./agentWrite.js";
 import {
   PROJECT_CONTEXT_WRITE_DESCRIPTION,
   QUERY_LOG_DESCRIPTION,
@@ -129,6 +129,7 @@ export function buildMcpServer(onEvent: (kind: "board" | "proposals") => void): 
               .int()
               .optional()
               .describe("context を渡すときのみ必須。直前に query_log で読んだ context_version をそのまま添える"),
+            context_append: z.string().optional().describe(CONTEXT_APPEND_DESCRIPTION),
             due: z.string().nullable().optional().describe("期限 YYYY-MM-DD。解除はnull"),
             blocked_by: z.array(z.number().int()).nullable().optional().describe("依存先タスクID(全置換)。解除はnull"),
             rejected: z.boolean().optional().describe("却下(やらない決定)フラグ。reasonに根拠を書く"),

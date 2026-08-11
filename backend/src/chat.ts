@@ -1,5 +1,5 @@
 import type OpenAI from "openai";
-import { createTasksAsAgent, updateTasksAsAgent } from "./agentWrite.js";
+import { CONTEXT_APPEND_DESCRIPTION, createTasksAsAgent, updateTasksAsAgent } from "./agentWrite.js";
 import { compactArchive } from "./archive.js";
 import { getBoardPromptSection } from "./promptState.js";
 import {
@@ -65,14 +65,15 @@ export const QUERY_LOG_DESCRIPTION = [
   "done_at のうち 2026-08-10 以前のものは、列を作る前に終わったぶんを updated_at から埋めた近似値(完了後に触っていなければ最終更新=完了日時)。日単位の集計には使えるが、分単位の議論には使わない",
   "例(いつ何件終わったか): SELECT date(done_at) d, COUNT(*) n FROM tasks WHERE done_at IS NOT NULL GROUP BY 1 ORDER BY 1 DESC",
   "SELECT * は使わない。必要な列だけ挙げる。context(経緯メモ)は1件1,000字を超えるので、一覧では length(context) か substr(context,1,120) にし、全文が要るタスクだけ id で絞って引き直す",
-  "例(ボードの一覧。生きているタスクはこの条件): SELECT id, status, title, assignee, due, checked_at, length(context) ctx FROM tasks WHERE archived=0 AND trashed_at IS NULL ORDER BY COALESCE(sort,id), id",
+  "live_tasks ビューを使う。tasks から「生きているもの」(ゴミ箱でもアーカイブ済みでもないもの)だけを、ボードと同じ並びで抜いたもの。条件と並びを毎回書かなくてよく、書き忘れてゴミ箱のタスクが混ざることもない。列は tasks と同じ + sort_key(=COALESCE(sort,id))。ゴミ箱やアーカイブを見たいときだけ tasks を直に引く",
+  "例(ボードの一覧): SELECT id, status, title, assignee, due, checked_at, length(context) ctx FROM live_tasks",
   "例(1件の詳細。経緯メモの全文と版): SELECT title, status, summary, context, context_version, blocked_by FROM tasks WHERE id=112",
-  "例(直近の動き。「なにやってたっけ」): SELECT id, status, title, summary, updated_at FROM tasks WHERE archived=0 AND trashed_at IS NULL ORDER BY updated_at DESC LIMIT 15",
-  "例(担当ごとの負荷): SELECT m.name, COUNT(t.id) open FROM members m LEFT JOIN tasks t ON t.assignee=m.name AND t.status!='done' AND t.archived=0 AND t.trashed_at IS NULL GROUP BY m.name",
+  "例(直近の動き。「なにやってたっけ」): SELECT id, status, title, summary, updated_at FROM live_tasks ORDER BY updated_at DESC LIMIT 15",
+  "例(担当ごとの負荷): SELECT m.name, COUNT(t.id) open FROM members m LEFT JOIN live_tasks t ON t.assignee=m.name AND t.status!='done' GROUP BY m.name",
   "例(ゴミ箱の中身): SELECT id, title, trashed_at FROM tasks WHERE trashed_at IS NOT NULL ORDER BY trashed_at DESC",
   "例(承認待ちの割り振り案): SELECT task_id, assignee, reason FROM proposals WHERE status='pending'",
   "例(Doneの要約カード): SELECT id, title, task_ids, settled FROM summary_cards ORDER BY id DESC",
-  "例(検収待ちで、まだ人が確かめていないもの): SELECT id, title, summary FROM tasks WHERE status='review' AND checked_at IS NULL ORDER BY sort",
+  "例(検収待ちで、まだ人が確かめていないもの): SELECT id, title, summary FROM live_tasks WHERE status='review' AND checked_at IS NULL",
   "例(1件の経緯メモ全文): SELECT context, context_version FROM tasks WHERE id=112",
   "例: SELECT routed_model, COUNT(*) n, ROUND(SUM(estimated_usd),4) usd FROM llm_calls GROUP BY 1 ORDER BY usd DESC LIMIT 10",
   "例: SELECT ROUND(SUM(estimated_usd),4) usd FROM llm_calls WHERE date(created_at)=date('now','localtime')",
@@ -164,6 +165,7 @@ const tools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
                 rejected: { type: "boolean", description: "却下(やらない決定)フラグ。却下時はtrue+reasonに根拠。取り消しはfalse" },
                 context: { type: "string", description: "経緯メモの全文。上書きなので既存を読んでマージすること。渡すときは context_version も必須" },
                 context_version: { type: "integer", description: "context を渡すときのみ必須。直前に読んだ contextVersion をそのまま添える" },
+                context_append: { type: "string", description: CONTEXT_APPEND_DESCRIPTION },
               },
               required: ["id"],
             },
@@ -201,18 +203,19 @@ const tools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
     type: "function",
     function: {
       name: "update_task_context",
-      description: "タスクの経緯メモを上書き更新する(既存を query_log で読みマージした全文を渡す)",
+      description: "タスクの経緯メモを更新する。既定は全文上書き(既存を query_log で読みマージした全文を渡す)。append=true なら末尾に追記する",
       parameters: {
         type: "object",
         properties: {
           id: { type: "integer", description: "タスクID。会話で「#112」と呼ばれるものと同じで、tasks テーブルの主キー(id)。プロジェクトごとに1から振られるので、別プロジェクトの#112とは別物" },
-          text: { type: "string", description: "新しいcontext全文" },
+          text: { type: "string", description: "新しいcontext全文 (append=true のときは追記する文だけ)" },
+          append: { type: "boolean", description: `trueなら追記。${CONTEXT_APPEND_DESCRIPTION}` },
           context_version: {
             type: "integer",
-            description: "query_log で読んだ context_version をそのまま渡す。読んでから書くまでの間に他から追記されていないかの確認に使う",
+            description: "全文上書き(append=false)のときのみ必須。query_log で読んだ context_version をそのまま渡す。読んでから書くまでの間に他から追記されていないかの確認に使う",
           },
         },
-        required: ["id", "text", "context_version"],
+        required: ["id", "text"],
       },
     },
   },
@@ -356,7 +359,9 @@ async function execTool(name: string, args: any, uiActions: UiAction[], events: 
     case "update_task_context": {
       // #112/#114: 経緯メモの上書きも agentWrite を通す (版の確認を1箇所に集約)
       const r = updateTasksAsAgent([
-        { id: args.id, context: stripSpeakerLabel(args.text) ?? "", context_version: args.context_version },
+        args.append
+          ? { id: args.id, context_append: stripSpeakerLabel(args.text) ?? "" }
+          : { id: args.id, context: stripSpeakerLabel(args.text) ?? "", context_version: args.context_version },
       ]);
       if (r.conflicts?.length) return { ok: false, conflict: r.conflicts[0], note: r.note };
       const updated = r.updated[0] as ReturnType<typeof getTask>;

@@ -241,6 +241,27 @@ ALTER TABLE proposals_new RENAME TO proposals;`);
   }
   addColumn("ALTER TABLE chat_messages ADD COLUMN speaker TEXT");
   addColumn("ALTER TABLE chat_messages ADD COLUMN speaker_email TEXT");
+
+  // 「生きているタスク」をVIEWにする。外部エージェントからの指摘 —
+  // 「archived=0 AND trashed_at IS NULL ORDER BY COALESCE(sort,id), id を毎回コピーしている。
+  //  忘れるとゴミ箱のタスクが混ざる。ビューが1つあるだけで済む話」。
+  //
+  // list_tasks を消してSQL窓口に寄せたとき(#108)、母集団の条件は説明文で教えれば足りると
+  // 判断したが、毎回書かせるのは手抜きだった。「読みは教育で守る」の教育コストを、
+  // 教える側ではなくスキーマ側で払う。書き込みは相変わらずサーバー実装が強制する(非対称のまま)。
+  //
+  // 列を足したときに古い定義が残らないよう、毎回作り直す(VIEWは実体を持たないので安全)。
+  // sort_key は COALESCE(sort,id) をそのまま出したもの。ORDER BY を書き忘れても
+  // VIEW 側の並びで返るが、明示したいときはこの列を使える
+  db.exec(`
+DROP VIEW IF EXISTS live_tasks;
+CREATE VIEW live_tasks AS
+  SELECT id, status, title, assignee, assign_reason, summary, context, context_version,
+         due, blocked_by, rejected, checked_at, done_at, sort, COALESCE(sort, id) AS sort_key,
+         created_at, updated_at
+    FROM tasks
+   WHERE archived = 0 AND trashed_at IS NULL
+   ORDER BY COALESCE(sort, id), id;`);
 }
 
 export const admin = open(ADMIN_PATH);

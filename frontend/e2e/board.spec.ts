@@ -629,6 +629,49 @@ test("存在しないIDは notFound で名指しし、成功と混ぜない (#12
   expect(all.status).toBe("ok");
 });
 
+test("経緯メモは版なしで追記でき、追記どうしは互いを消さない", async () => {
+  const id = await createTask("追記の検証");
+
+  // 全文上書きは版が要る (既存の守り)。追記は要らない — 足すだけなので他人の追記を消さない
+  const a = await mcp("update_tasks", { updates: [{ id, context_append: "1件目の追記" }] });
+  expect(a.ok).toBe(true);
+
+  // 読み直さずにもう1件足せる。版を持っていなくても通る
+  const b = await mcp("update_tasks", { updates: [{ id, context_append: "2件目の追記" }] });
+  expect(b.ok).toBe(true);
+
+  const after = (await (await fetch(`${API}/api/tasks/${id}`)).json()) as any;
+  expect(after.context).toBe(["1件目の追記", "2件目の追記"].join("\n\n")); // 1件目が残っている
+  expect(after.contextVersion).toBeGreaterThan(1); // 版は進む (全文置換しようとしている人を弾くため)
+
+  // 全文上書きは従来どおり版が要る
+  const stale = await mcp("update_tasks", { updates: [{ id, context: "全部消す", context_version: 1 }] });
+  expect(stale.ok).toBe(false);
+  const still = (await (await fetch(`${API}/api/tasks/${id}`)).json()) as any;
+  expect(still.context).toContain("1件目の追記");
+});
+
+test("生きているタスクは live_tasks ビューで引ける (母集団の条件を毎回書かせない)", async () => {
+  const alive = await createTask("生きているタスク");
+  const trashed = await createTask("ゴミ箱行きのタスク");
+  await mcp("delete_tasks", { ids: [trashed] });
+
+  const r = await mcp("query_log", {
+    scope: "audit",
+    sql: "SELECT id, title FROM live_tasks",
+  });
+  const ids = (r.rows as any[]).map((x) => x.id);
+  expect(ids).toContain(alive);
+  expect(ids).not.toContain(trashed); // 条件を書かなくてもゴミ箱は混ざらない
+
+  // tasks を直に引けばゴミ箱も見える (見たいときは見られる)
+  const raw = await mcp("query_log", {
+    scope: "audit",
+    sql: `SELECT id FROM tasks WHERE id=${trashed} AND trashed_at IS NOT NULL`,
+  });
+  expect(raw.rows).toHaveLength(1);
+});
+
 test("存在しないプロジェクトを指定した操作は既定へ落とさず拒否する (#125)", async () => {
   const bad = { "X-ChatBan-Project": "9999" };
 

@@ -36,6 +36,8 @@ export interface AgentTaskUpdate extends Partial<AgentTaskInput> {
   rejected?: boolean;
   /** #112: 読んだ時点の経緯メモの版。context を書き換えるときは必須 */
   context_version?: number;
+  /** 経緯メモへの追記。版が要らない唯一の書き込み経路 (下の CONTEXT_APPEND_DESCRIPTION を参照) */
+  context_append?: string;
 }
 
 /** 経緯メモの更新が古い版に基づいていた場合。エージェントに再マージさせるため現在値を返す */
@@ -52,6 +54,16 @@ function coerceStatus(status: string | undefined): { status?: TaskStatus; coerce
   if (status === "done") return { status: "review", coerced: true };
   return { status: status as TaskStatus, coerced: false };
 }
+
+/** 経緯メモへの追記。外部エージェントからの指摘 —
+ * 「1行足すだけでも全文置換。トークンも時間も食いますし、送り直す過程で私が要約してしまう危険が
+ *  あります(長いので無意識に削る)。実際 CB8 は一度書き直したときに短くなりました」。
+ *
+ * #112 で版を入れたとき「読む→マージ→全文で書き戻す」しか想定していなかったが、
+ * 追記は他人の追記を消さないので、そもそも版で守る必要がない操作だった。
+ * 版が要る理由は「読まずに書くと消える」ことで、消さない書き方には理由が無い。 */
+export const CONTEXT_APPEND_DESCRIPTION =
+  "経緯メモの末尾に追記する。既存を読む必要も context_version も要らない(足すだけなので他の人の追記を消さない)。進捗・決定事項・検収エビデンスを1件足すときはこちらを使う。全文を整理したい・過去の記述を書き換えたいときだけ context + context_version の上書きを使う";
 
 const NOT_FOUND_NOTE =
   "は存在しません。IDを確認してください (古い一覧を見ている可能性があります)。この指定は何も適用していません。その旨をユーザーにも伝えてください";
@@ -140,8 +152,17 @@ export function updateTasksAsAgent(updates: AgentTaskUpdate[]): {
     // 他人(人間のUI・別セッション)が追記していると、その追記が黙って消える。
     // 版が合わないときは弾くのではなく、現在の全文と版を返して再マージさせる
     // (#114のdone→reviewと同じ「拒否ではなく情報を返す」形。LLMは読み直して考え直せる)
-    const contextIncoming = changed(u.context, cur?.context ?? null);
-    const contextStale = contextIncoming && u.context_version !== cur?.contextVersion;
+    // 追記は「既存の末尾に足す」だけなので版で守る必要がない。
+    // 全文置換と併用されたら、置換後の全文の末尾に足す (自然な読み方。片方を黙って捨てない)
+    const appended = typeof u.context_append === "string" ? stripSpeakerLabel(u.context_append).trim() : "";
+    const baseContext = u.context !== undefined ? u.context : cur?.context ?? null;
+    const nextContext = appended
+      ? [baseContext, appended].filter((s) => s && s.trim() !== "").join("\n\n")
+      : u.context;
+
+    const contextIncoming = changed(nextContext, cur?.context ?? null);
+    // 版を確認するのは全文置換のときだけ。追記のみなら読んでいなくてよい
+    const contextStale = u.context !== undefined && contextIncoming && u.context_version !== cur?.contextVersion;
     if (contextStale) {
       conflicts.push({
         id: u.id,
@@ -167,7 +188,7 @@ export function updateTasksAsAgent(updates: AgentTaskUpdate[]): {
         ...(keepReason ? { assignReason: stripSpeakerLabel(u.assign_reason) } : {}),
         ...(changed(due, cur?.due ?? null) ? { due } : {}),
         ...(blockedBy !== undefined && !sameDeps ? { blockedBy } : {}),
-        ...(contextIncoming && !contextStale ? { context: stripSpeakerLabel(u.context) } : {}),
+        ...(contextIncoming && !contextStale ? { context: stripSpeakerLabel(nextContext) } : {}),
         ...(changed(u.summary, cur?.summary ?? null) ? { summary: u.summary } : {}),
         ...(rejectedChanged ? { rejected: !!u.rejected } : {}),
       } as TaskPatch,

@@ -747,6 +747,18 @@ test("summary の契約はチャットとMCPで同じ文言になっている (�
 
   const dep = update.inputSchema.properties.updates.items.properties.blocked_by.description;
   expect(dep).toContain("それが終わらないと着手できない");
+
+  // 契約が「渡せないもの」を案内していないこと。additionalProperties:false なので、
+  // 存在しないパラメータ名を書くと渡した側が確実にエラーになる (実際 rejected の説明が
+  // 「reasonに根拠を書く」で、reason というパラメータは無かった)
+  const props = Object.keys(update.inputSchema.properties.updates.items.properties);
+  const rejected = update.inputSchema.properties.updates.items.properties.rejected.description;
+  for (const name of ["reason"]) {
+    expect(props).not.toContain(name);
+    expect(rejected).not.toContain(`${name}に`);
+  }
+  // 見出しは実際に更新できるものを言う (一覧しか見ないクライアントでも context_append に気づける)
+  expect(update.description).toContain("context_append");
 });
 
 test("完了は done_tasks ビューで引ける。登録日と取り違えようがない", async () => {

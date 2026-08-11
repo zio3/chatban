@@ -5,9 +5,11 @@ import {
   CONTEXT_WRITE_DESCRIPTION,
   PROJECT_CONTEXT_WRITE_DESCRIPTION,
   QUERY_LOG_DESCRIPTION,
+  REJECTED_DESCRIPTION,
   REORDER_DESCRIPTION,
   STATUS_DESCRIPTION,
   SUMMARY_DESCRIPTION,
+  UPDATE_TASKS_DESCRIPTION,
 } from "./chat.js";
 import { z } from "zod";
 import {
@@ -119,7 +121,7 @@ export function buildMcpServer(onEvent: (kind: "board" | "proposals") => void): 
   server.registerTool(
     "update_tasks",
     {
-      description: "既存タスクの状態・担当・タイトル・理由を更新する(複数可)",
+      description: UPDATE_TASKS_DESCRIPTION,
       inputSchema: {
         updates: z.array(
           z.object({
@@ -145,7 +147,7 @@ export function buildMcpServer(onEvent: (kind: "board" | "proposals") => void): 
             context_append: z.string().optional().describe(CONTEXT_APPEND_DESCRIPTION),
             due: z.string().nullable().optional().describe("期限 YYYY-MM-DD。解除はnull"),
             blocked_by: z.array(z.number().int()).nullable().optional().describe(`${BLOCKED_BY_DESCRIPTION}。全置換で、解除はnull`),
-            rejected: flexBool.describe("却下(やらない決定)フラグ。reasonに根拠を書く"),
+            rejected: flexBool.describe(REJECTED_DESCRIPTION),
           })
         ),
       },

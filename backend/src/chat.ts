@@ -111,6 +111,18 @@ export const REORDER_DESCRIPTION = [
   "対象は生きているタスクだけ。指定しなかったタスクは元の順のまま末尾に残るので消えない。他の列・アーカイブ済み・存在しないIDは無視して ignored で返す(全体は失敗しない)。",
 ].join("\n");
 
+/** update_tasks の見出し。「状態・担当・タイトル・理由」と書いていたが実際より狭く、
+ * summary / context / context_append / due / blocked_by も更新できる。
+ * 特に context_append は一覧しか見ないクライアントからは存在が読み取れなかった (指摘) */
+export const UPDATE_TASKS_DESCRIPTION =
+  "タスクの状態と内容を更新する(複数可)。状態・担当・タイトルのほか、summary(現況の1行)・経緯メモ・期限・依存も変えられる。経緯メモに1行足すだけなら context_append を使う(既存を読む必要も版も要らない)";
+
+/** rejected の説明。以前は「reasonに根拠を書く」としていたが、reason というパラメータは無い。
+ * 書けるのは assign_reason(なぜこの担当か)だけで、しかも個人プロジェクトでは消えている。
+ * additionalProperties:false なので、存在しない reason を渡すと確実にエラーになる (指摘) */
+export const REJECTED_DESCRIPTION =
+  "却下(やらない決定)フラグ。trueにするときは、なぜやらないと決めたかを summary に一言、詳しい経緯は経緯メモ(context / context_append)に書く。取り消しは false";
+
 /** summary の契約。
  *
  * 最初「状態ではなく注意点と次にやることを書く」と否定形で書いたが、これは間違いだった。
@@ -186,7 +198,7 @@ export const tools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
     type: "function",
     function: {
       name: "update_tasks",
-      description: "既存タスクの状態・担当・タイトル等を更新する(複数可)",
+      description: UPDATE_TASKS_DESCRIPTION,
       parameters: {
         type: "object",
         properties: {
@@ -203,7 +215,7 @@ export const tools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
                 summary: { type: "string", description: SUMMARY_DESCRIPTION },
                 due: { type: ["string", "null"], description: "期限 YYYY-MM-DD。解除はnull" },
                 blocked_by: { type: ["array", "null"], items: { type: "integer" }, description: `${BLOCKED_BY_DESCRIPTION}。全置換で、解除はnull` },
-                rejected: { type: "boolean", description: "却下(やらない決定)フラグ。却下時はtrue+reasonに根拠。取り消しはfalse" },
+                rejected: { type: "boolean", description: REJECTED_DESCRIPTION },
                 context: { type: "string", description: CONTEXT_WRITE_DESCRIPTION },
                 context_version: { type: "integer", description: "context を渡すときのみ必須。直前に読んだ contextVersion をそのまま添える" },
                 context_append: { type: "string", description: CONTEXT_APPEND_DESCRIPTION },

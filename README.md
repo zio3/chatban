@@ -44,7 +44,7 @@
 | フロント | Vite + React 19 + TypeScript + Tailwind CSS v4 + dnd-kit + Socket.IO |
 | バック | Express + better-sqlite3 + OpenAI SDK (→ [OrcaRouter](https://www.orcarouter.ai)) |
 | 外部連携 | MCPサーバー内蔵 (Claude Code等からボードを直接操作可能) |
-| テスト | Playwright E2E (13件) |
+| テスト | Playwright E2E + backendのユニットテスト (`node:test`) |
 
 アーキテクチャの全体像は [docs/architecture.md](docs/architecture.md)、コンセプトと現在地は [docs/product-overview.md](docs/product-overview.md)。
 AIに何をさせないか (権限境界) と、割り切った部分は [docs/security.md](docs/security.md)。
@@ -91,11 +91,13 @@ cd frontend; npm run dev   # http://localhost:5173 (こちらを開く。/api �
 ## テスト
 
 ```bash
-cd frontend
-npm run test:e2e   # Playwright (D&D・検収フロー・プロジェクト分離・ゴミ箱等。LLM呼び出しなし)
+cd frontend; npm run test:e2e   # Playwright (D&D・検収フロー・プロジェクト分離・ゴミ箱等。LLM呼び出しなし)
+cd backend;  npm test           # 判断ロジックのユニットテスト (node:test)
 ```
 
 E2Eは専用ポート(backend:8799 / frontend:5199)と専用データディレクトリ(`e2e-data/`)で動くため、開発サーバーと共存できます。
+
+ユニットテスト側にあるのは、**判断だけを純粋関数に切り出したもの**です。「Doneに確定してよいか」「許可リストに載っているか」「その要約はまだ有効か」といった判定はDBもHTTPも要らない形にできるので、そこはユニットで押さえ、DBやUIをまたぐ経路はE2Eで押さえています。件数を書かないのは、書くたびにズレるからです。
 
 ## MCP連携 (ドッグフーディング)
 

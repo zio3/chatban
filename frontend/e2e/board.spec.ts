@@ -13,6 +13,23 @@ async function createTask(title: string, status = "todo"): Promise<number> {
   return task.id;
 }
 
+/** Doneのタスクを用意する。POST /api/tasks に status:"done" を渡しても通らないので
+ * (Doneへの扉は検収だけ)、本番と同じ道を通す: review → 検収チェック → 確定 */
+async function createDoneTask(title: string): Promise<number> {
+  const id = await createTask(title, "review");
+  await fetch(`${API}/api/tasks/${id}/checked`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ checked: true }),
+  });
+  await fetch(`${API}/api/tasks/approve`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ids: [id] }),
+  });
+  return id;
+}
+
 async function getTaskStatus(id: number): Promise<string | undefined> {
   const res = await fetch(`${API}/api/board`);
   const board = await res.json();
@@ -330,7 +347,7 @@ test("タブごとに別プロジェクトを開ける。片方の更新はも�
 });
 
 test("Done列のカードはドラッグで持ち出せない (#105)", async ({ page }) => {
-  const id = await createTask("E2E: Doneから持ち出し禁止", "done");
+  const id = await createDoneTask("E2E: Doneから持ち出し禁止");
   await page.goto("/");
   const card = page.getByTestId("column-done").getByTestId(`task-card-${id}`);
   await expect(card).toBeVisible();
@@ -885,6 +902,55 @@ test("検収の確定はサーバー側で条件を確かめる (UIのフィル�
   expect(r.ok).toBe(true);
   expect(r.skipped).toBeUndefined();
   await expect.poll(() => getTaskStatus(ok)).toBe("done");
+});
+
+test("検収APIを通らないRESTからもDoneには入れない (扉は1つ)", async () => {
+  // 検収APIだけを厳しくしても、PATCH /api/tasks/:id に status:"done" を投げれば素通りしていた
+  // (自動レビュー指摘)。フロントは Board.tsx の handleDragEnd で Done列へのD&Dを禁止しているが、
+  // その禁止がクライアント側にしか無く、PR #1 で塞いだのとまったく同じ形の穴だった。
+  // 条件そのもの (Review列 + 検収済み) を updateTasks の不変条件にしたので、入口を問わない
+  const patch = async (id: number, body: unknown) =>
+    (
+      await fetch(`${API}/api/tasks/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      })
+    ).json();
+
+  const todo = await createTask("扉は1つ: Todoから直接Done");
+  const r1 = await patch(todo, { status: "done" });
+  expect(r1.status).toBe("todo");
+  expect(r1.note).toContain("Doneへは移していません"); // 黙って無視しない
+  expect(await getTaskStatus(todo)).toBe("todo");
+
+  // 同じ patch に入っている他のフィールドは保存する (status だけ戻す)
+  const unchecked = await createTask("扉は1つ: Review未検収", "review");
+  const r2 = await patch(unchecked, { status: "done", summary: "この一行は残る" });
+  expect(r2.status).toBe("review");
+  expect(r2.summary).toBe("この一行は残る");
+
+  // 新規作成でいきなりDoneも作れない (生まれた瞬間に検収済みのものは無い)
+  const created = await (
+    await fetch(`${API}/api/tasks`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title: "扉は1つ: 最初からDone", status: "done" }),
+    })
+  ).json();
+  expect(created.status).toBe("review");
+  expect(created.note).toContain("Doneへは移していません");
+
+  // 正常系: 検収を通ればこの経路でも入る (条件を満たすかどうかだけを見ている)
+  const ok = await createTask("扉は1つ: 検収済みならPATCHでも通る", "review");
+  await fetch(`${API}/api/tasks/${ok}/checked`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ checked: true }),
+  });
+  const r3 = await patch(ok, { status: "done" });
+  expect(r3.status).toBe("done");
+  expect(r3.note).toBeUndefined();
 });
 
 test("Doneから差し戻すと検収の印は消える (確認し直さずに戻せない)", async () => {

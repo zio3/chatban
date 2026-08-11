@@ -1,4 +1,4 @@
-import { createTask, getTask, updateTask, updateTasks, type TaskPatch } from "./db.js";
+import { createTask, DONE_GATE_RULE, getTask, updateTask, updateTasks, type TaskPatch } from "./db.js";
 import { cleanAgentText } from "./text.js";
 import type { TaskStatus } from "./types.js";
 
@@ -69,8 +69,11 @@ const NOT_FOUND_NOTE =
 const CONFLICT_NOTE =
   "経緯メモの版が合わないため、この行の更新は一切適用していません (他のフィールドも保存されていません)。conflicts の context に自分の追記をマージし、その contextVersion を添えて再実行してください。上書きに失敗したことをユーザーにも伝えてください";
 
+// 「できません」だけ返すと、エージェントは何度か言い換えて再挑戦する。
+// なぜ通らないのか(経路)と、代わりに何をしたのかを両方言う
 const DONE_NOTE =
-  "done を指定されましたが review に置きました。done への確定はボードの検収チェック(人間)のみが行えます。その旨をユーザーに伝えてください";
+  `done は指定できないので review に置きました。${DONE_GATE_RULE}。` +
+  "実装や作業が終わったという意味だと解釈しています。ユーザーには「reviewに置いたので検収してください」と伝えてください";
 
 export function createTasksAsAgent(tasks: AgentTaskInput[]): { created: unknown[]; note?: string } {
   let anyCoerced = false;

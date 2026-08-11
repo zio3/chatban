@@ -47,6 +47,10 @@ function rowToTask(r: any): Task {
 export function createTask(title: string, status: TaskStatus = "todo", assignee: string | null = null, assignReason: string | null = null): Task {
   // 新規作成でいきなり Done は作れない。検収は「実物を確かめた」記録なので、
   // 生まれた瞬間に確かめ終わっているものは無い (mayEnterDone と同じ理由)
+  if (!isTaskStatus(status)) {
+    log("api", `新規作成で未知の status=${JSON.stringify(status)} を指定されたので todo にしました: ${title}`);
+    status = "todo";
+  }
   if (status === "done") {
     log("api", `新規作成で status=done を指定されたので review にしました: ${title}`);
     status = "review";
@@ -82,6 +86,15 @@ export type TaskPatch = Partial<
  *
  * DONE_GATE_RULE は、断ったときに返す説明。REST・チャット・MCPで同じ文言を使う —
  * 「なぜ動かなかったのか」を入口ごとに違う言葉で返すと、別のルールがあるように読める */
+/** 実在する列。TypeScriptの TaskStatus は実行時には消えるので、外から来た値は必ずここで確かめる。
+ * "banana" のような値がそのまま保存されると、ボードは4列でしか抽出しないのでタスクが
+ * どの列にも出なくなり、詳細を開くと STATUS_LABELS[status] が undefined で画面が落ちる
+ * (自動レビュー指摘)。「消えた」ように見えて実在する、が一番たちが悪い */
+export const TASK_STATUSES = ["todo", "inprogress", "review", "done"] as const;
+export function isTaskStatus(v: unknown): v is TaskStatus {
+  return typeof v === "string" && (TASK_STATUSES as readonly string[]).includes(v);
+}
+
 export const DONE_GATE_RULE =
   "Doneへは「Review列に置く → 人間が検収チェックを付ける → 確定」の順でしか入りません。他の列からDoneへの直送はできません";
 
@@ -100,6 +113,13 @@ export function updateTasks(patches: { id: number; patch: TaskPatch }[]): (Task 
     // #87: 空文字の担当は「未割り当て」の意図。文字列""のまま保存すると
     // 誰にも割り当たっていないのにフィルタにも負荷計算にも乗らない幽霊状態になる
     if (patch.assignee === "") patch = { ...patch, assignee: null };
+    // 未知の列は無視する (その行の他の項目は保存する)。REST入口でも弾いているが、
+    // ここが最後の砦 — 入口が増えたときに片方だけ直る形にしない
+    if (patch.status !== undefined && !isTaskStatus(patch.status)) {
+      log("api", `#${id} に未知の status=${JSON.stringify(patch.status)} が来たので無視しました`);
+      const { status: _ignored, ...rest } = patch;
+      patch = rest; // キーごと落とす (status: undefined を残すと spread で上書きされて消える)
+    }
     let next = { ...cur, ...patch };
     // Doneへ入れるのは検収を通ったものだけ。条件を満たさない遷移は status だけ元に戻す
     // (行ごと捨てると、同じ patch に入っている summary や context まで消える)

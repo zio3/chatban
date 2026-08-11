@@ -953,6 +953,44 @@ test("検収APIを通らないRESTからもDoneには入れない (扉は1つ)",
   expect(r3.note).toBeUndefined();
 });
 
+test("入口で確かめる: 知らない列・居ないタスク・居ないプロジェクト", async () => {
+  // TypeScriptの型は実行時に消えるので、RESTは何でも保存できた。status:"banana" は
+  // ボードの4列に出ず、詳細を開くと STATUS_LABELS[status] が undefined で画面が落ちる。
+  // 「消えた」ように見えて実在する、が一番たちが悪い (自動レビュー指摘)
+  const created = await fetch(`${API}/api/tasks`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ title: "知らない列", status: "banana" }),
+  });
+  expect(created.status).toBe(400);
+  expect((await created.json()).error).toContain("todo / inprogress / review / done");
+
+  const id = await createTask("入口の検証");
+  const patched = await fetch(`${API}/api/tasks/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ status: "banana" }),
+  });
+  expect(patched.status).toBe(400);
+  expect(await getTaskStatus(id)).toBe("todo"); // 何も書き換わっていない
+
+  // 居ないタスクの専用チャットは、LLMを呼ぶ前に断る (呼んでから気づくと課金だけ発生する)
+  const ghost = await fetch(`${API}/api/tasks/999999/chat`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ message: "このタスクを進めて" }),
+  });
+  expect(ghost.status).toBe(404);
+
+  // 居ないプロジェクトのPATCHは500ではなく404 (古いタブと削除の競合で普通に踏む)
+  const noProject = await fetch(`${API}/api/projects/999999`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name: "変更後" }),
+  });
+  expect(noProject.status).toBe(404);
+});
+
 test("Doneから差し戻すと検収の印は消える (確認し直さずに戻せない)", async () => {
   // approveChecked が checked_at を「人が確かめた唯一の証拠」にしたので、
   // 差し戻しで印が残ると、確認し直さずにもう一度Doneへ通せてしまう

@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { extractChoices } from "./chat.js";
 import { differs } from "./archive.js";
 import { isAllowed, pickSpeaker, readCookie } from "./auth.js";
-import { DONE_GATE_RULE, mayEnterDone } from "./db.js";
+import { DONE_GATE_RULE, isTaskStatus, mayEnterDone } from "./db.js";
 import { AGENT_STATUS_VALUES } from "./chat.js";
 
 // 返信ボタンの記法 [[選択肢]] の取り出し。
@@ -163,4 +163,22 @@ test("断る理由 (経路) を説明する。できませんとだけ言わな�
   assert.match(DONE_GATE_RULE, /Review列/);
   assert.match(DONE_GATE_RULE, /検収/);
   assert.match(DONE_GATE_RULE, /直送はできません/);
+});
+
+// TypeScript の TaskStatus は実行時には消える。RESTは検証していなかったので
+// status:"banana" が保存でき、ボードは4列でしか抽出しないのでタスクがどこにも出ず、
+// 詳細を開くと STATUS_LABELS[status] が undefined で画面が落ちた (自動レビュー指摘)。
+// 「消えた」ように見えて実在する、が一番たちが悪い
+
+test("実在する列だけを通す", () => {
+  for (const s of ["todo", "inprogress", "review", "done"]) assert.equal(isTaskStatus(s), true);
+});
+
+test("知らない値は列として認めない", () => {
+  assert.equal(isTaskStatus("banana"), false);
+  assert.equal(isTaskStatus("Done"), false); // 大文字違いも別物
+  assert.equal(isTaskStatus(""), false);
+  assert.equal(isTaskStatus(undefined), false);
+  assert.equal(isTaskStatus(null), false);
+  assert.equal(isTaskStatus(3), false);
 });

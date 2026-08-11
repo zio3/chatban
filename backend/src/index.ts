@@ -59,6 +59,7 @@ import {
   saveChatMessage,
   updateTask,
   updateTasks,
+  approveChecked,
 } from "./db.js";
 
 const PORT = Number(process.env.PORT ?? 8787);
@@ -219,12 +220,22 @@ app.post("/api/tasks/:id/checked", (req, res) => {
 });
 
 // 一括検収 (#57/#60): Review→Doneの確定。複数前提の1ルート (単一もここを通る)
+// 検収の確定。Doneへ至る唯一の扉なので、条件(Review列 + 検収済み + 生きている)はサーバーが持つ。
+// 以前はUIのフィルタにだけ依存していて、直接叩けばTodoでもゴミ箱の中でもDoneにできた
 app.post("/api/tasks/approve", (req, res) => {
   const ids = (req.body?.ids ?? []) as number[];
   if (!Array.isArray(ids) || ids.length === 0) return res.status(400).json({ error: "ids required" });
-  const updated = updateTasks(ids.map((id) => ({ id, patch: { status: "done" as const } })));
-  broadcastBoard();
-  res.json({ ok: true, updated });
+  const { updated, skipped } = approveChecked(ids);
+  if (updated.length > 0) broadcastBoard();
+  res.json({
+    // 1件でも通らなければ ok:false。押した数と通った数が違うことに気づける (#120/#123と同じ形)
+    ok: skipped.length === 0,
+    updated,
+    ...(skipped.length > 0 ? { skipped } : {}),
+    ...(skipped.length > 0
+      ? { note: `${ids.length}件のうち${updated.length}件をDoneへ確定しました。残りは条件を満たしていません (Review列にあり、検収チェックが付いているものだけが通ります)` }
+      : {}),
+  });
 });
 
 // アーカイブ済み含む単一タスク取得 (#59: 要約カードの#xxリンクから詳細を開く用)

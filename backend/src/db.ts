@@ -116,6 +116,43 @@ export function updateTasks(patches: { id: number; patch: TaskPatch }[]): (Task 
   return results;
 }
 
+/** 検収の確定 (Review + 検収済み → Done)。Doneへ至る唯一の扉なので、条件はサーバーが持つ。
+ *
+ * 以前は POST /api/tasks/approve が ids をそのまま done にしていて、条件の判定は
+ * フロント(App.tsx の commitApproved が status==="review" && checkedAt で絞る)にしか無かった。
+ * 実測で、Todo のタスクも・Review未検収も・**ゴミ箱の中のタスクまで** done になった。
+ *
+ * docs/security.md には「Doneへ至る経路は人間のUI操作ただ1本」と書いてあるが、
+ * その1本が無条件だった。エージェントはこのAPIを持たないので「AIは通れない」は
+ * 守られていたものの、「人間が実物で確かめたものだけがDoneにある」は守られていない。
+ * UIが正しく振る舞うことに依存した不変条件は、画面の競合(古い一覧のまま確定を送る)でも破れる。
+ *
+ * better-sqlite3 は同期APIで、Nodeのイベントループ上では判定と更新の間に他のリクエストが
+ * 割り込まない。そのうえで、通らなかったものは理由つきで返す (黙って落とすと
+ * 「押したのに動かない」になる) */
+export function approveChecked(ids: number[]): {
+  updated: (Task | undefined)[];
+  skipped: { id: number; reason: string }[];
+} {
+  const skipped: { id: number; reason: string }[] = [];
+  const eligible: number[] = [];
+  // archived は Task 型に出していない (getTask はアーカイブ済みも返すが、UIは要約カード経由で読む)。
+  // ここは「確定してよいか」の判定なので、隠れている列も見る
+  const isArchived = (id: number) =>
+    !!(db().prepare("SELECT archived FROM tasks WHERE id = ?").get(id) as { archived: number } | undefined)?.archived;
+  for (const id of ids) {
+    const t = getTask(id);
+    if (!t) skipped.push({ id, reason: "存在しません" });
+    else if (t.trashedAt) skipped.push({ id, reason: "ゴミ箱にあります" });
+    else if (isArchived(id)) skipped.push({ id, reason: "すでにDoneへ確定してアーカイブ済みです" });
+    else if (t.status !== "review") skipped.push({ id, reason: `Review列にありません (いまは ${t.status})` });
+    else if (!t.checkedAt) skipped.push({ id, reason: "検収チェックが付いていません" });
+    else eligible.push(id);
+  }
+  const updated = eligible.length > 0 ? updateTasks(eligible.map((id) => ({ id, patch: { status: "done" as const } }))) : [];
+  return { updated, skipped };
+}
+
 export function updateTask(id: number, patch: TaskPatch): Task | undefined {
   return updateTasks([{ id, patch }])[0];
 }

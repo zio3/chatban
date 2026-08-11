@@ -464,6 +464,13 @@ test("done_at は完了に入った瞬間だけ打刻され、その後の編集
 
   expect((await get()).doneAt).toBeFalsy();
 
+  // 検収チェックを先に付ける。approve はサーバー側で「Review列 + 検収済み」を確かめるので、
+  // チェック無しでは通らない (以前は無条件に done にできたため、このテストも省略していた)
+  await fetch(`${API}/api/tasks/${id}/checked`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ checked: true }),
+  });
   await fetch(`${API}/api/tasks/approve`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -833,6 +840,51 @@ test("エラーにならない間違いには、結果と一緒に一言添え�
   // 正しく引いたときは余計なことを言わない
   const ok = await mcp("query_log", { scope: "audit", sql: "SELECT id, title FROM live_tasks LIMIT 3" });
   expect(ok.note).toBeUndefined();
+});
+
+test("検収の確定はサーバー側で条件を確かめる (UIのフィルタに依存しない)", async () => {
+  // Doneへ至る唯一の扉。以前は ids をそのまま done にしていて、直接叩けば
+  // Todoのタスクもゴミ箱の中のタスクもDoneにできた (実測で3ケースとも通った)
+  const todo = await createTask("検収ガード: Todoのまま");
+  const unchecked = await createTask("検収ガード: Review未検収", "review");
+  const trashed = await createTask("検収ガード: ゴミ箱");
+  await fetch(`${API}/api/tasks/${trashed}`, { method: "DELETE" });
+
+  const ng = await (
+    await fetch(`${API}/api/tasks/approve`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ids: [todo, unchecked, trashed] }),
+    })
+  ).json();
+  expect(ng.ok).toBe(false);
+  expect(ng.updated).toHaveLength(0);
+  expect(ng.skipped).toHaveLength(3);
+  // 通らなかった理由が分かる (黙って落とすと「押したのに動かない」になる)
+  expect(JSON.stringify(ng.skipped)).toContain("Review列にありません");
+  expect(JSON.stringify(ng.skipped)).toContain("検収チェックが付いていません");
+  expect(JSON.stringify(ng.skipped)).toContain("ゴミ箱");
+
+  expect(await getTaskStatus(todo)).toBe("todo");
+  expect(await getTaskStatus(unchecked)).toBe("review");
+
+  // 正常系: Review + 検収済み は通る
+  const ok = await createTask("検収ガード: 正しく検収済み", "review");
+  await fetch(`${API}/api/tasks/${ok}/checked`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ checked: true }),
+  });
+  const r = await (
+    await fetch(`${API}/api/tasks/approve`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ids: [ok] }),
+    })
+  ).json();
+  expect(r.ok).toBe(true);
+  expect(r.skipped).toBeUndefined();
+  await expect.poll(() => getTaskStatus(ok)).toBe("done");
 });
 
 test("存在しないプロジェクトを指定した操作は既定へ落とさず拒否する (#125)", async () => {

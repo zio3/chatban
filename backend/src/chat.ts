@@ -57,8 +57,9 @@ export interface ChatResult {
  * enum を無視した値が届きうる (MCPはzodで弾くが、こちらに検証は無い) */
 export const AGENT_STATUS_VALUES = ["todo", "inprogress", "review"] as const;
 const STATUS_VALUES = AGENT_STATUS_VALUES;
-/** 並べ替えられる列。done は検収後すぐ要約カードへ畳まれて一覧から消えるので対象にしない (#105) */
-const REORDERABLE_STATUSES = ["todo", "inprogress", "review"];
+/** 並べ替えられる列。done は検収後すぐ要約カードへ畳まれて一覧から消えるので対象にしない (#105)。
+ * これもチャットとMCPで共有する — 同じ一覧を2か所に書くと必ず片方だけ直る */
+export const REORDERABLE_STATUSES = ["todo", "inprogress", "review"] as const;
 
 /** #106/#108: 記録へのSQL窓口の説明。チャットとMCPで同じものを使う。
  * 入口ごとに書き分けると必ずズレる (#92 #108 #114 で3回起きた) */

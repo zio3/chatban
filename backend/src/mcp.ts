@@ -8,6 +8,7 @@ import {
   REJECTED_DESCRIPTION,
   REORDER_DESCRIPTION,
   AGENT_STATUS_VALUES,
+  REORDERABLE_STATUSES,
   STATUS_DESCRIPTION,
   SUMMARY_DESCRIPTION,
   UPDATE_TASKS_DESCRIPTION,
@@ -236,7 +237,7 @@ export function buildMcpServer(onEvent: (kind: "board" | "proposals") => void): 
     {
       description: REORDER_DESCRIPTION,
       inputSchema: {
-        status: z.enum(["todo", "inprogress", "review"]).describe("対象の列"),
+        status: z.enum(REORDERABLE_STATUSES).describe("対象の列"),
         ids: z.array(z.number().int()).describe("その列のタスクを並べたい順に"),
       },
     },

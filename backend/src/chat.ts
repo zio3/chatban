@@ -287,28 +287,6 @@ const tools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
   {
     type: "function",
     function: {
-      name: "ask",
-      description:
-        "聞き返すときに答えの候補を渡すと、返信ボタンになる(押すとその文字列がそのまま次の発言として届く)。" +
-        "候補を本文に箇条書きする代わりに使えるが、本文に書いても構わない — 会話の進み方は変わらない。" +
-        "質問文自体はツールに渡さず本文に書く。答えが自由記述になる問いや、聞かずに実行してよい判断では呼ばない。" +
-        "ボタンは次の発言で消えるので、押されるのを待つ状態にはならない",
-      parameters: {
-        type: "object",
-        properties: {
-          options: {
-            type: "array",
-            items: { type: "string" },
-            description: "ボタンの文言(2〜4個)。押されるとこの文字列がそのまま発言として送られるので、単体で意味が通る短文にする",
-          },
-        },
-        required: ["options"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
       name: "set_view",
       description: "ボードの表示フィルタを切り替える(「鈴木さんの分だけ見せて」など)。assigneeにnullを渡すと全員表示に戻す",
       parameters: {
@@ -437,22 +415,6 @@ async function execTool(name: string, args: any, uiActions: UiAction[], events: 
       uiActions.push({ type: "set_filter", assignee: args.assignee ?? null });
       return { ok: true };
     }
-    case "ask": {
-      // 選択肢だけ受け取る。質問文は本文に書かせる —
-      // ツール呼び出しと同じターンの本文はループが捨てるので(tool_callsがあるとcontinueする)、
-      // 「テキスト+ツール」を同時に期待しない形にしてある。ツール結果を返せば必ずもう1周回り、
-      // そこで本文が返る
-      const options = (Array.isArray(args.options) ? args.options : [])
-        .filter((o: unknown): o is string => typeof o === "string" && o.trim() !== "")
-        .map((o: string) => o.trim().slice(0, 24))
-        .slice(0, 4);
-      if (options.length === 0) return { ok: false, error: "options が空です" };
-      uiActions.push({ type: "ask", options });
-      return {
-        ok: true,
-        note: "返信ボタンを出しました。質問は続けて本文に書いてください。回答はユーザーの次の発言として届くので、いまは確定しないでください",
-      };
-    }
     default:
       return { error: `unknown tool: ${name}` };
   }
@@ -485,8 +447,6 @@ function buildSystemPrompt(
     "- 「#10は渡辺に」のような名指しの指名は、理由を言われていなければ assign_reason に「◯◯(発言者)による指名」とだけ書き、理由を作らない。",
     "- 「終わりました」等の完了報告は status=review に置き、「Reviewに置いたので確認OKなら承認を」と一言返す。勝手に done にしない (doneは検収済みの意味で、即アーカイブされる)。発言者名が分かればその人のタスクを優先して曖昧参照を解決する。",
     "- あなたは done に変更できない (ツールが受け付けず review に置き換わる)。完了・却下・承認はすべて status=review に置き、done への確定はボードのReview列の検収チェック(人間の操作)だけが行う。「doneにして」「まとめて承認」と言われたら review に置いた上で「確定はReview列の検収チェックからお願いします」と案内する。",
-    "- 聞き返すときに選択肢を示すなら、ask に渡して返信ボタンにしてもよい (「はい/いいえ」「上から順に振る/軽いものから」など)。渡した場合は同じ内容を本文にも書き直さない。使わずに本文で聞いても構わない。",
-    "- ask は入力の近道であって承認の関門ではない。ユーザーは押さずに打ち返してよいし、無視して別の話をしてもよい。ボタンは次の発言で消えるので、押されるのを待つ状態にはならない。",
     "- 「◯◯さんの分だけ見せて」は set_view を使う。",
     "- チーム共通の前提・決まりごと(締切、方針、用語など)を伝えられたら update_project_context で前提情報に反映する。",
     "- 特定タスクの経緯・決定事項・補足(「#22は◯◯方式でいくことにした」等)は update_task_context でそのタスクの経緯メモに記録する。",
@@ -503,6 +463,19 @@ function buildSystemPrompt(
     "- 画像やPDFが添付されたら内容を読み取って会話・操作に活かす。重要な情報(バグの症状、決定事項、資料の要点)はタスクの context や前提情報に文字で蒸留して記録する。ファイル原本はどこにも保存されないため、後から参照が必要な内容は必ず文字にして残す。",
     "- 「#AはB待ち」「Bが終わってから」等の依存表現は blocked_by に依存先IDを登録する(複数可)。索引の dep がそれ。依存先が未完了のタスクは割り振り提案の対象にせず、レポートでは「#N待ち」と添える。",
     "- 操作後は結果を一言で報告する。長い説明はしない。",
+    "",
+    "## 返答に選択肢を出す書き方",
+    "ユーザーに聞き返すとき、答えの候補が短い言葉で挙がるなら、その候補を [[ ]] で囲んで書く。",
+    "この記法はそのまま押せるボタンになり、押すと中の文字列がユーザーの発言として送られる。",
+    "",
+    "例1: 「#12を鈴木さんに振りますか?  [[鈴木さんに振る]] [[別の人にする]] [[まだ決めない]]」",
+    "例2: 「どの順で振りましょう。  [[上から順に]] [[軽いものから]] [[期限が近い順]]」",
+    "例3: 「#8はやらない方針にしますか?  [[却下にする]] [[保留のまま置く]]」",
+    "例4: 「どれから着手しますか。  [[#4から]] [[#5から]] [[#6から]]」",
+    "例5: 「未割り当ての4件、どう進めましょう。  [[全部おまかせで振る]] [[空いている人に振る]] [[いまは保留]]」",
+    "",
+    "候補を「- 」の箇条書きで並べる代わりに使う (両方は書かない)。タスクを選ばせるとき・進め方を選ばせるときも同じ。2〜4個まで。答えが自由記述になる問いには使わない。",
+    "ボタンは入力の近道であって承認の関門ではない。ユーザーは押さずに打ち返してよいし、無視して別の話をしてもよい。次の発言で消えるので、押されるのを待つ状態にはならない。",
     "",
     "## 設計思想 (構造カスタマイズの要望が来たときの応対)",
     "ChatBanは「会話が構造の代わりをする」ツール。ステータス4列は固定で、カスタム列・優先度フィールド・タグの追加要望には応じない。",
@@ -597,7 +570,6 @@ const TOOL_LABELS: Record<string, string> = {
   delete_tasks: "ゴミ箱へ移動",
   restore_tasks: "ゴミ箱から復元",
   set_view: "ビューを切替",
-  ask: "返信ボタンを用意",
   update_project_context: "前提情報を更新",
   compact_archive: "過去ログを整頓",
   reorder_tasks: "並び順を変更",
@@ -759,5 +731,45 @@ export async function runChatTurn(
     break;
   }
   usage.elapsedMs = Date.now() - t0;
+  const picked = extractChoices(reply);
+  if (picked.options.length > 0) {
+    // 抽出前の生テキストを残す。保存されるのは抽出後なので、記法の書かれ方を後から追えるのはここだけ
+    log("choices", `raw=${JSON.stringify(reply)} options=${JSON.stringify(picked.options)}`);
+    reply = picked.text;
+    uiActions.push({ type: "ask", options: picked.options });
+  }
   return { reply, trace, uiActions, usage };
+}
+
+/** 応答まるごとが2回書かれていたら1回に畳む。
+ *
+ * 実測: [[選択肢]] の記法を使った応答で、同じ本文+同じ選択肢を2回続けて書くことがある
+ * (2/2で再現。記法を使わない応答では起きていない)。原因はモデル側なので、
+ * プロンプトで直そうとせずここで畳む — 「間違えないようにする」ではなく
+ * 「間違えても取り返しがつく」に寄せる、このプロジェクトの既定方針と同じ扱い。 */
+function dedupeRepeatedBody(s: string): string {
+  // 実測の形は「本文 \n 同じ本文」。区切りの改行があるので長さの折半では割れない
+  const m = /^([\s\S]{8,}?)\s*\n\s*\1$/.exec(s.trim());
+  return m ? m[1] : s;
+}
+
+/** 本文中の [[選択肢]] を返信ボタンとして取り出す。
+ *
+ * 最初はツール(ask)にしていたが、実測で自発的にはまったく呼ばなかった(0/3。
+ * ツール定義とルール文を強めても変わらず)。他のツールは「呼ばないと目的を達成できない」のに対し、
+ * これだけは本文に箇条書きすれば同じことが伝わるので、呼ぶ動機が生まれない。
+ * 記法なら新しい行動ではなく書き方の指定で済み、生成の流れにそのまま乗る (zio案)。 */
+export function extractChoices(reply: string): { text: string; options: string[] } {
+  const options: string[] = [];
+  const text = dedupeRepeatedBody(reply)
+    .replace(/\[\[([^\[\]\n]{1,24})\]\]/g, (_m, label: string) => {
+      const v = label.trim();
+      if (v && options.length < 4 && !options.includes(v)) options.push(v);
+      return "";
+    })
+    // 選択肢だけの行が空行として残るので畳む
+    .replace(/[ \t]+$/gm, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+  return { text, options };
 }

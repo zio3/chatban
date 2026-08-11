@@ -836,3 +836,20 @@ test("MCPは接続URLのプロジェクトしか触れない (#125)", async () =
   const after = (await (await fetch(`${API}/api/tasks/${id}`)).json()) as any;
   expect(after.summary).toBeFalsy();
 });
+
+test("日本語が \\uXXXX エスケープで届いてもデコードして保存する", async () => {
+  // 実害: project 9 の前提情報が全文エスケープで保存され、296字が1,346字(トークン3.2倍)に
+  // 膨らんだうえ、LLMの読み取り精度も落ちていた (見出しの数を数え間違えた)
+  const escaped = "\\u30c6\\u30b9\\u30c8\\u306e\\u30bf\\u30a4\\u30c8\\u30eb"; // 「テストのタイトル」
+  const r = await mcp("create_tasks", { tasks: [{ title: escaped, summary: escaped }] });
+  const id = r.created[0].id;
+
+  const t = (await (await fetch(`${API}/api/tasks/${id}`)).json()) as any;
+  expect(t.title).toBe("テストのタイトル");
+  expect(t.summary).toBe("テストのタイトル");
+
+  // 単発のエスケープは壊さない (説明文で言及したいことがある)
+  const single = await mcp("create_tasks", { tasks: [{ title: "\\u0041 は A のこと" }] });
+  const t2 = (await (await fetch(`${API}/api/tasks/${single.created[0].id}`)).json()) as any;
+  expect(t2.title).toBe("\\u0041 は A のこと");
+});

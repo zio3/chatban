@@ -1,5 +1,5 @@
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import fs, { readFileSync } from "node:fs";
+import path, { join } from "node:path";
 import { homedir } from "node:os";
 import OpenAI from "openai";
 import { getSetting, loadModelPrices, recordLlmCall, saveModelPrices } from "./db.js";
@@ -136,6 +136,75 @@ export function getModel(slot: ModelSlot): string {
  * 同世代でも terra は明示なしで通ることを実測済み (2026-08-10) なので、対象はlunaに限定する */
 const NEEDS_REASONING_NONE = /gpt-5\.6-luna/;
 
+/** LLMへ実際に送った中身をそのままファイルに出す。
+ *
+ * 「入力トークンが多い」はメトリクスで分かるが、何が入っているかは実物を見ないと分からない。
+ * scripts/prompt-breakdown.ts は組み立て直した近似なので、こちらは本物。
+ * purpose ごとに最新1回を上書きし、round ごとに追記する (1ターンの中で messages が
+ * どう伸びるかが、ツール呼び出しのコストそのもの)。
+ *
+ * 既定でON。1回20〜60KB程度の書き込みで、logs/ は gitignore 済み。
+ * 止めたいときは CHATBAN_DUMP_PROMPT=0 */
+function dumpRequest(
+  purpose: string,
+  model: string,
+  params: Omit<OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming, "model">
+) {
+  if (process.env.CHATBAN_DUMP_PROMPT === "0") return;
+  try {
+    const dir = path.join(process.cwd(), "logs");
+    fs.mkdirSync(dir, { recursive: true });
+    const file = path.join(dir, `last-request-${purpose}.json`);
+
+    // 同じターンの2round目以降は、前のroundを消さずに足す。
+    // 1ターンの中で何がどれだけ積まれたかを、あとから1ファイルで追える
+    let prev: any = null;
+    try {
+      prev = JSON.parse(fs.readFileSync(file, "utf-8"));
+    } catch {
+      /* 初回・壊れていたら作り直す */
+    }
+    const isNewTurn = !prev || prev.model !== model || params.messages.length <= (prev.rounds?.[0]?.messageCount ?? 0);
+
+    const toolsJson = params.tools ? JSON.stringify(params.tools) : "";
+    const messagesJson = JSON.stringify(params.messages);
+    const round = {
+      at: new Date().toISOString(),
+      messageCount: params.messages.length,
+      chars: { messages: messagesJson.length, tools: toolsJson.length, total: messagesJson.length + toolsJson.length },
+      // 1メッセージずつの内訳。どのツール結果が重いかがここで分かる
+      messages: params.messages.map((m: any) => ({
+        role: m.role,
+        chars: typeof m.content === "string" ? m.content.length : JSON.stringify(m.content ?? "").length,
+        ...(m.tool_calls ? { toolCalls: m.tool_calls.map((c: any) => c.function?.name) } : {}),
+        content: m.content,
+        ...(m.tool_call_id ? { tool_call_id: m.tool_call_id } : {}),
+      })),
+    };
+
+    const out = isNewTurn
+      ? {
+          purpose,
+          model,
+          startedAt: round.at,
+          // ツール定義は毎round同じものが送られる。1回だけ載せて、内訳を先に出す
+          toolChars: toolsJson.length,
+          toolBreakdown: (params.tools ?? []).map((t: any) => ({
+            name: t.function?.name,
+            chars: JSON.stringify(t.function).length,
+          })).sort((a: any, b: any) => b.chars - a.chars),
+          tools: params.tools,
+          rounds: [round],
+        }
+      : { ...prev, rounds: [...(prev.rounds ?? []), round] };
+
+    fs.writeFileSync(file, JSON.stringify(out, null, 2), "utf-8");
+    log("llm", `dump ${purpose} round=${out.rounds.length} messages=${round.chars.messages}字 tools=${toolsJson.length}字`);
+  } catch (e: any) {
+    log("llm", `dump失敗: ${e?.message ?? e}`); // 記録に失敗しても本処理は止めない
+  }
+}
+
 export async function chatCompletion(
   purpose: string,
   model: string,
@@ -145,6 +214,7 @@ export async function chatCompletion(
 ) {
   const t0 = Date.now();
   log("llm", `-> ${purpose} model=${model} messages=${params.messages.length}`);
+  dumpRequest(purpose, model, params);
   // SDKのReasoningEffort型に 'none' が無いためキャストして通す (OrcaRouter/OpenAI側は受け付ける)
   const extra = params.tools?.length && NEEDS_REASONING_NONE.test(model) ? ({ reasoning_effort: "none" } as any) : {};
   let res;

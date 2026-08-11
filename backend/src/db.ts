@@ -1,5 +1,6 @@
 import { hooks } from "./hooks.js";
 import { admin, adminReadonly, currentProjectId, db, projectReadonly } from "./store.js";
+import { decodeUnicodeEscapes } from "./text.js";
 import type { Member, Proposal, Task, TaskStatus } from "./types.js";
 
 // #86: スキーマ定義とファイルの置き場は store.ts が持つ。
@@ -340,7 +341,11 @@ export function getProjectContextRow(): { text: string; updatedAt: string | null
 /** #115: 前提情報は全文上書き。エージェントからは版を添えないと書けない。
  * タスクの経緯メモ(#112)と同じ形だが、こちらは全員の前提でシステムプロンプトに常時載るため、
  * 読まずに書かれると運用ルールごと消える。人間のUI経路は version を省略して従来どおり上書きできる */
-export function setProjectContext(text: string, version?: number): { ok: boolean; current?: ReturnType<typeof getProjectContextRow> } {
+export function setProjectContext(rawText: string, version?: number): { ok: boolean; current?: ReturnType<typeof getProjectContextRow> } {
+  // 実際にここが壊れた: project 9 の前提情報が全文 \uXXXX エスケープで保存されていて、
+  // 296字が1,346字(トークンで3.2倍)に膨らみ、しかもLLMの読み取り精度も落ちていた。
+  // 前提情報はシステムプロンプトに常時載るので、発言のたびに払い続けることになる
+  const text = decodeUnicodeEscapes(rawText);
   const cur = getProjectContextRow();
   if (version !== undefined && version !== cur.version) return { ok: false, current: cur };
   db().prepare(

@@ -1,5 +1,6 @@
 import type OpenAI from "openai";
 import { CONTEXT_APPEND_DESCRIPTION, createTasksAsAgent, updateTasksAsAgent } from "./agentWrite.js";
+import { cleanAgentText } from "./text.js";
 import { compactArchive } from "./archive.js";
 import { getBoardPromptSection } from "./promptState.js";
 import {
@@ -149,7 +150,9 @@ export const BLOCKED_BY_DESCRIPTION =
 export const PROPOSE_DESCRIPTION =
   "割り振り案を提案する(人間の承認で確定)。理由はボード上で確かめられる事実だけを書く(保有件数・依存・期限・過去の完了実績)。裏付けが無いなら理由は書かない — 「実績がある」「経験を活かせる」のような、データで確かめられない理由を作らないこと";
 
-const tools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
+// 計測スクリプト(scripts/prompt-breakdown.ts)から実物を測れるように公開する。
+// 「何が入力トークンを食っているか」はソースを眺めても分からず、実物を数えるしかない
+export const tools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
   {
     type: "function",
     function: {
@@ -365,12 +368,6 @@ function toolsFor(personal: boolean): OpenAI.Chat.Completions.ChatCompletionTool
   return personalTools!;
 }
 
-/** 発言者ラベルが本文として書き写されたときの保険。プロンプトは漏れるがツール契約は漏れない (#87と同じ考え方)。
- * 先頭だけでなく行頭のどこに出ても落とす (経緯メモに段落として混ざる例があった) */
-function stripSpeakerLabel<T extends string | undefined | null>(v: T): T {
-  if (typeof v !== "string") return v;
-  return v.replace(/^\s*\[発言者:[^\]]*\]\s*/gm, "") as T;
-}
 
 async function execTool(name: string, args: any, uiActions: UiAction[], events: Set<string>): Promise<unknown> {
   switch (name) {
@@ -397,8 +394,8 @@ async function execTool(name: string, args: any, uiActions: UiAction[], events: 
       // #112/#114: 経緯メモの上書きも agentWrite を通す (版の確認を1箇所に集約)
       const r = updateTasksAsAgent([
         args.append
-          ? { id: args.id, context_append: stripSpeakerLabel(args.text) ?? "" }
-          : { id: args.id, context: stripSpeakerLabel(args.text) ?? "", context_version: args.context_version },
+          ? { id: args.id, context_append: cleanAgentText(args.text) ?? "" }
+          : { id: args.id, context: cleanAgentText(args.text) ?? "", context_version: args.context_version },
       ]);
       if (r.conflicts?.length) return { ok: false, conflict: r.conflicts[0], note: r.note };
       const updated = r.updated[0] as ReturnType<typeof getTask>;
@@ -462,7 +459,7 @@ async function execTool(name: string, args: any, uiActions: UiAction[], events: 
   }
 }
 
-function buildSystemPrompt(
+export function buildSystemPrompt(
   taskFocus?: ReturnType<typeof getTask>,
   speaker?: string,
   view?: string,
@@ -478,7 +475,10 @@ function buildSystemPrompt(
     "",
     "## 行動ルール",
     "- まず依頼か相談かを判別する。明確なアクション依頼(「〜を追加して」「〜やらないと」「タスク: 〜」「〜に対応したい」)だけを、確認を挟まず即 create_tasks で登録する。テンポ優先はこの依頼に限る。",
-    "- 質問・意見募集・感想(「どう思う?」「いいのかな?」「なんで〜?」、画像やPDFを見せての問いかけ等)は相談。タスク化せず、内容に踏み込んで会話で応える。タスクにする価値がありそうなら会話の末尾に「タスクに積みますか?」と一言添えるだけにし、登録は次のユーザー発言を待つ。",
+    // 定型文に記法を織り込んでおく。別の節に「返事は [[ ]] で囲む」と書いてあっても、
+    // 定型文が具体的に指定されていると そのまま出力されて記法が付かない (実測2/2)。
+    // 判断を挟ませず、コピーすれば記法が付いてくる形にする
+    "- 質問・意見募集・感想(「どう思う?」「いいのかな?」「なんで〜?」、画像やPDFを見せての問いかけ等)は相談。タスク化せず、内容に踏み込んで会話で応える。タスクにする価値がありそうなら会話の末尾に「タスクに積みますか?  [[積んで]] [[いまはいい]]」と一言添えるだけにし、登録は次のユーザー発言を待つ。",
     "- 依頼か相談か迷ったら相談として扱う (誤登録の削除コストより会話で受ける方が安い)。",
     "- create_tasks / update_tasks の報告では、必ず割り当てられたタスクID を「#12として登録しました」の形式で明記する (ユーザーは以後この番号で参照する)。",
     "- 相談・議論の流れからタスクを登録するときは、create_tasks の context に登録に至った経緯を要約して入れる。経緯のない単発の明確な依頼では省略可。",

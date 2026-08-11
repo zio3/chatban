@@ -1,4 +1,5 @@
 import { createTask, getTask, updateTask, updateTasks, type TaskPatch } from "./db.js";
+import { cleanAgentText } from "./text.js";
 import type { TaskStatus } from "./types.js";
 
 // #114: エージェント(内蔵チャット / MCP越しの外部エージェント)からのタスク書き込みは、
@@ -12,13 +13,6 @@ import type { TaskStatus } from "./types.js";
 // 「ルートは共通で強制、判断基準だけプロジェクト依存」(zio方針):
 // Doneへ至る経路はどのプロジェクトでも1本(人間の検収UI)。プロジェクトごとに違うのは
 // 「いつ検収OKを付けるか」であって、経路そのものではない。
-
-/** 発言者ラベルが本文として書き写されたときの保険 (#95)。プロンプトは漏れるがツール契約は漏れない。
- * 先頭だけでなく行頭のどこに出ても落とす (経緯メモに段落として混ざる例があった) */
-function stripSpeakerLabel<T extends string | undefined | null>(v: T): T {
-  if (typeof v !== "string") return v;
-  return v.replace(/^\s*\[発言者:[^\]]*\]\s*/gm, "") as T;
-}
 
 export interface AgentTaskInput {
   title: string;
@@ -84,14 +78,14 @@ export function createTasksAsAgent(tasks: AgentTaskInput[]): { created: unknown[
     const { status, coerced } = coerceStatus(t.status);
     if (coerced) anyCoerced = true;
     const task = createTask(
-      stripSpeakerLabel(t.title),
+      cleanAgentText(t.title),
       status ?? "todo",
-      t.assignee ?? null,
-      stripSpeakerLabel(t.assign_reason) ?? null
+      cleanAgentText(t.assignee) ?? null,
+      cleanAgentText(t.assign_reason) ?? null
     );
     const patch: TaskPatch = {
-      ...(t.context !== undefined ? { context: stripSpeakerLabel(t.context) } : {}),
-      ...(t.summary !== undefined ? { summary: t.summary } : {}),
+      ...(t.context !== undefined ? { context: cleanAgentText(t.context) } : {}),
+      ...(t.summary !== undefined ? { summary: cleanAgentText(t.summary) } : {}),
       ...(t.due !== undefined ? { due: t.due } : {}),
       ...(t.blocked_by !== undefined ? { blockedBy: t.blocked_by } : {}),
     };
@@ -133,7 +127,7 @@ export function updateTasksAsAgent(updates: AgentTaskUpdate[]): {
     const { status, coerced: didCoerce } = coerceStatus(u.status);
     if (didCoerce) coerced.push(u.id);
 
-    const assignee = u.assignee === "" ? null : u.assignee; // 空文字は「未割り当て」の意図とみなす
+    const assignee = u.assignee === "" ? null : cleanAgentText(u.assignee); // 空文字は「未割り当て」の意図とみなす
     const due = u.due === "" ? null : u.due;
     const blockedBy = u.blocked_by === undefined ? undefined : (u.blocked_by ?? null);
     const sameDeps =
@@ -158,7 +152,7 @@ export function updateTasksAsAgent(updates: AgentTaskUpdate[]): {
     // (#114のdone→reviewと同じ「拒否ではなく情報を返す」形。LLMは読み直して考え直せる)
     // 追記は「既存の末尾に足す」だけなので版で守る必要がない。
     // 全文置換と併用されたら、置換後の全文の末尾に足す (自然な読み方。片方を黙って捨てない)
-    const appended = typeof u.context_append === "string" ? stripSpeakerLabel(u.context_append).trim() : "";
+    const appended = typeof u.context_append === "string" ? cleanAgentText(u.context_append).trim() : "";
     const baseContext = u.context !== undefined ? u.context : cur?.context ?? null;
     const nextContext = appended
       ? [baseContext, appended].filter((s) => s && s.trim() !== "").join("\n\n")
@@ -186,14 +180,14 @@ export function updateTasksAsAgent(updates: AgentTaskUpdate[]): {
     return {
       id: u.id,
       patch: {
-        ...(changed(stripSpeakerLabel(u.title), cur?.title) ? { title: stripSpeakerLabel(u.title) } : {}),
+        ...(changed(cleanAgentText(u.title), cur?.title) ? { title: cleanAgentText(u.title) } : {}),
         ...(statusChanged ? { status: status as TaskStatus } : {}),
         ...(assigneeChanged ? { assignee } : {}),
-        ...(keepReason ? { assignReason: stripSpeakerLabel(u.assign_reason) } : {}),
+        ...(keepReason ? { assignReason: cleanAgentText(u.assign_reason) } : {}),
         ...(changed(due, cur?.due ?? null) ? { due } : {}),
         ...(blockedBy !== undefined && !sameDeps ? { blockedBy } : {}),
-        ...(contextIncoming && !contextStale ? { context: stripSpeakerLabel(nextContext) } : {}),
-        ...(changed(u.summary, cur?.summary ?? null) ? { summary: u.summary } : {}),
+        ...(contextIncoming && !contextStale ? { context: cleanAgentText(nextContext) } : {}),
+        ...(changed(cleanAgentText(u.summary), cur?.summary ?? null) ? { summary: cleanAgentText(u.summary) } : {}),
         ...(rejectedChanged ? { rejected: !!u.rejected } : {}),
       } as TaskPatch,
     };

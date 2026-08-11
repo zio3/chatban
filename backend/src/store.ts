@@ -269,6 +269,24 @@ ALTER TABLE proposals_new RENAME TO proposals;`);
   // 列を足したときに古い定義が残らないよう、毎回作り直す(VIEWは実体を持たないので安全)。
   // sort_key は COALESCE(sort,id) をそのまま出したもの。ORDER BY を書き忘れても
   // VIEW 側の並びで返るが、明示したいときはこの列を使える
+  // 完了したものだけを見るビュー。live_tasks の対になる (生きている / 終わった)。
+  //
+  // 説明で教えて漏れた罠を構造で消す。query_log の説明に「完了の集計には done_at を使う
+  // (created_at だと登録日を数えてしまう)」と書いてあるのに、実測のクエリ25本のうち1本が
+  //   SELECT date(created_at) d, COUNT(*) n FROM tasks WHERE archived=1 ...
+  // を投げていた。done_day を先に出しておけば date() すら書かなくてよく、
+  // そもそも created_at を完了日と取り違える余地がなくなる。
+  //
+  // ビューを増やすほど「どれを使うか」の判断が増えるので、2本(生きている/終わった)で止める
+  db.exec(`
+DROP VIEW IF EXISTS done_tasks;
+CREATE VIEW done_tasks AS
+  SELECT id, title, assignee, assign_reason, summary, rejected, checked_at, done_at,
+         date(done_at) AS done_day, summary_card_id, created_at
+    FROM tasks
+   WHERE done_at IS NOT NULL
+   ORDER BY done_at DESC;`);
+
   db.exec(`
 DROP VIEW IF EXISTS live_tasks;
 CREATE VIEW live_tasks AS

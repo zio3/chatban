@@ -742,6 +742,37 @@ test("summary の契約はチャットとMCPで同じ文言になっている (�
   expect(dep).toContain("それが終わらないと着手できない");
 });
 
+test("完了は done_tasks ビューで引ける。登録日と取り違えようがない", async () => {
+  const id = await createTask("完了ビューの検証", "review");
+  // 検収 → Done。done_at はこの瞬間に打刻される
+  await fetch(`${API}/api/tasks/${id}/checked`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ checked: true }),
+  });
+  await fetch(`${API}/api/tasks/approve`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ids: [id] }),
+  });
+
+  const r = await mcp("query_log", {
+    scope: "audit",
+    sql: `SELECT id, done_day, done_at FROM done_tasks WHERE id=${id}`,
+  });
+  expect(r.rows).toHaveLength(1);
+  // 日付は列として出ているので date() を書かなくてよい
+  expect((r.rows[0] as any).done_day).toBe((r.rows[0] as any).done_at.slice(0, 10));
+
+  // 終わっていないものは入らない (created_at を完了日と取り違える余地がない)
+  const alive = await createTask("まだ終わっていない");
+  const none = await mcp("query_log", {
+    scope: "audit",
+    sql: `SELECT id FROM done_tasks WHERE id=${alive}`,
+  });
+  expect(none.rows).toHaveLength(0);
+});
+
 test("要約カードの列は frozen (旧 settled)。SQL窓口から新しい名前で引ける", async () => {
   // 改名のマイグレーションが効いていること。旧名で引くと落ちる = 移行漏れが検出できる
   const r = await mcp("query_log", {

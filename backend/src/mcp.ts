@@ -7,6 +7,8 @@ import {
   QUERY_LOG_DESCRIPTION,
   REJECTED_DESCRIPTION,
   REORDER_DESCRIPTION,
+  AGENT_STATUS_VALUES,
+  REORDERABLE_STATUSES,
   STATUS_DESCRIPTION,
   SUMMARY_DESCRIPTION,
   UPDATE_TASKS_DESCRIPTION,
@@ -37,7 +39,8 @@ import { archiveState } from "./hooks.js";
 import { contextReference, contextTemplateHint, currentProjectId, getProject } from "./store.js";
 import type { TaskStatus } from "./types.js";
 
-const STATUS = z.enum(["todo", "inprogress", "review", "done"]);
+// 値の一覧はチャット側と共有する。入口ごとに書き分けると必ずズレる (#92 #108 #114 #125 #126)
+const STATUS = z.enum(AGENT_STATUS_VALUES);
 
 /** boolean を文字列で送ってくるMCPクライアントがある (実測: Claude Code から
  * reference=true を渡すと "true" が届き、z.boolean() が弾いた)。
@@ -234,7 +237,7 @@ export function buildMcpServer(onEvent: (kind: "board" | "proposals") => void): 
     {
       description: REORDER_DESCRIPTION,
       inputSchema: {
-        status: z.enum(["todo", "inprogress", "review"]).describe("対象の列"),
+        status: z.enum(REORDERABLE_STATUSES).describe("対象の列"),
         ids: z.array(z.number().int()).describe("その列のタスクを並べたい順に"),
       },
     },

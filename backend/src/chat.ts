@@ -48,9 +48,18 @@ export interface ChatResult {
   };
 }
 
-const STATUS_VALUES = ["todo", "inprogress", "review", "done"];
-/** 並べ替えられる列。done は検収後すぐ要約カードへ畳まれて一覧から消えるので対象にしない (#105) */
-const REORDERABLE_STATUSES = ["todo", "inprogress", "review"];
+/** エージェントが指定できる列。**done は無い** — 検収は人間のUIだけが通す扉なので、
+ * 契約に選択肢として置かない。以前は enum に done があり、受けた側 (coerceStatus) で
+ * review へ倒していたが、それは「押せるボタンを押した後で断る」形だった。
+ * 「プロンプトは漏れるが、経路が無いことは漏れない」— 選べないものは選ばれない。
+ *
+ * coerceStatus は残す。チャットのツール呼び出しはLLMが組み立てるJSONで、
+ * enum を無視した値が届きうる (MCPはzodで弾くが、こちらに検証は無い) */
+export const AGENT_STATUS_VALUES = ["todo", "inprogress", "review"] as const;
+const STATUS_VALUES = AGENT_STATUS_VALUES;
+/** 並べ替えられる列。done は検収後すぐ要約カードへ畳まれて一覧から消えるので対象にしない (#105)。
+ * これもチャットとMCPで共有する — 同じ一覧を2か所に書くと必ず片方だけ直る */
+export const REORDERABLE_STATUSES = ["todo", "inprogress", "review"] as const;
 
 /** #106/#108: 記録へのSQL窓口の説明。チャットとMCPで同じものを使う。
  * 入口ごとに書き分けると必ずズレる (#92 #108 #114 で3回起きた) */
@@ -95,7 +104,7 @@ export const QUERY_LOG_DESCRIPTION = [
  * 実例: あるプロジェクトは review=検収待ち、別のプロジェクトは review=相手待ち(返答・承認待ち)。
  * エージェントから見ると status の enum はどのプロジェクトでも同じに見えるので、契約側で断る */
 export const STATUS_DESCRIPTION =
-  "列の意味と「いつそこへ置くか」はプロジェクトごとに違う(例: reviewが検収待ちのプロジェクトと、相手待ちのプロジェクトがある)。状態を変える前にプロジェクトの前提情報を読み、そこの定義に従うこと。done はどのプロジェクトでも人間の検収でしか付かない";
+  "列の意味と「いつそこへ置くか」はプロジェクトごとに違う(例: reviewが検収待ちのプロジェクトと、相手待ちのプロジェクトがある)。状態を変える前にプロジェクトの前提情報を読み、そこの定義に従うこと。done はこの一覧に無い — どのプロジェクトでも、人間がボードで検収チェックを付けて確定したときにだけ付く。実装が終わったものは review に置く";
 
 /** #115: 前提情報は全文上書き。読まずに書くと全員の運用ルールが消える */
 export const PROJECT_CONTEXT_WRITE_DESCRIPTION =

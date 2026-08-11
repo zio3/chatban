@@ -62,6 +62,7 @@ import {
   updateTask,
   updateTasks,
   approveChecked,
+  DONE_GATE_RULE,
 } from "./db.js";
 
 const PORT = Number(process.env.PORT ?? 8787);
@@ -231,7 +232,11 @@ app.post("/api/tasks", (req, res) => {
   if (!title) return res.status(400).json({ error: "title required" });
   const task = createTask(title, status ?? "todo", assignee ?? null, assignReason ?? null);
   broadcastBoard();
-  res.json(task);
+  // 黙って別の列に入れない。指定と結果が違うことは必ず言う (#123と同じ形)
+  res.json({
+    ...task,
+    ...(status === "done" ? { note: DONE_GATE_NOTE } : {}),
+  });
 });
 
 // #108: 検収の印 (人が実物で確かめたという記録)。done とは別物で、
@@ -243,6 +248,10 @@ app.post("/api/tasks/:id/checked", (req, res) => {
   broadcastBoard();
   res.json(task);
 });
+
+// status:"done" を投げられたが動かさなかったときに添える。黙って無視すると
+// 「APIは200を返したのに列が動かない」になり、UIのバグに見える
+const DONE_GATE_NOTE = `Doneへは移していません。${DONE_GATE_RULE}。確定は POST /api/tasks/approve (ボードの検収ボタン) が行います`;
 
 // 一括検収 (#57/#60): Review→Doneの確定。複数前提の1ルート (単一もここを通る)
 // 検収の確定。Doneへ至る唯一の扉なので、条件(Review列 + 検収済み + 生きている)はサーバーが持つ。
@@ -274,7 +283,10 @@ app.patch("/api/tasks/:id", (req, res) => {
   const task = updateTask(Number(req.params.id), req.body ?? {});
   if (!task) return res.status(404).json({ error: "not found" });
   broadcastBoard();
-  res.json(task);
+  res.json({
+    ...task,
+    ...(req.body?.status === "done" && task.status !== "done" ? { note: DONE_GATE_NOTE } : {}),
+  });
 });
 
 // #102: 削除はゴミ箱行き (論理削除)。自然言語UIでは解釈ミスが必ず起きるので、

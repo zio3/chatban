@@ -7,7 +7,7 @@ import {
   getTask,
   listSummaryCards,
   reassignTasksToCard,
-  setCardSettled,
+  setCardFrozen,
   tasksOfCard,
   updateCardContent,
   type SummaryCard,
@@ -135,9 +135,9 @@ export async function regenerateCard(cardId: number, dateLabel?: string): Promis
 }
 
 /** #105: 1日経ったカードを日単位に統合する。粒度は時間とともに粗くなる:
- *   直近=検収バッチごと(内容ラベル) → 1日経過=その日1枚(日付ラベル) → 手動整頓=全部で1枚(settled)
+ *   直近=検収バッチごと(内容ラベル) → 1日経過=その日1枚(日付ラベル) → 手動整頓=全部で1枚(frozen)
  * 放っておくとバッチ単位のカードが増え続けるので、古くなったものから自動で畳む。
- * settledにはしない — 過去ログ化の引き金は手動整頓だけ、という #58 の定義を壊さないため。
+ * frozenにはしない — 過去ログ化の引き金は手動整頓だけ、という #58 の定義を壊さないため。
  *
  * 将来案: レンジを日だけでなく週・月・四半期・年へ段階的に上げていくと、
  * 何年運用しても常駐する要約カードの枚数が対数的にしか増えない (CLAUDE.mdに記載)。
@@ -146,7 +146,7 @@ async function rollUpOldCards(): Promise<void> {
   const today = new Date().toLocaleDateString("sv-SE"); // YYYY-MM-DD
   const byDate = new Map<string, SummaryCard[]>();
   for (const c of listSummaryCards()) {
-    if (c.settled || c.taskIds.length === 0) continue;
+    if (c.frozen || c.taskIds.length === 0) continue;
     const date = c.createdAt.slice(0, 10);
     if (date >= today) continue; // 今日のぶんは細かいまま残す
     byDate.set(date, [...(byDate.get(date) ?? []), c]);
@@ -198,7 +198,7 @@ export async function onTaskReopened(taskId: number): Promise<SummaryCard | unde
   return regenerateCard(cardId);
 }
 
-/** 過去ログ整頓: 全カードを1枚のsettled過去ログに統合 (生データから再要約するので薄まらない)。
+/** 過去ログ整頓: 全カードを1枚のfrozen過去ログに統合 (生データから再要約するので薄まらない)。
  * #58: 過去ログ化(settle)の唯一の引き金。次の完了から新しいアクティブカードが始まる */
 export async function compactArchive(): Promise<{ merged: number; card?: SummaryCard }> {
   const targets = listSummaryCards().filter((c) => c.taskIds.length > 0);
@@ -210,8 +210,8 @@ export async function compactArchive(): Promise<{ merged: number; card?: Summary
   // 白紙にしてから全生データで再要約 (要約の要約ではなく原本から作り直す)
   updateCardContent(keep.id, null, []);
   await regenerateCard(keep.id, todayLabel());
-  setCardSettled(keep.id);
+  setCardFrozen(keep.id);
   const card = getSummaryCard(keep.id);
-  log("archive", `compacted ${targets.length} cards -> card#${keep.id} (${allTaskIds.length} tasks, settled)`);
+  log("archive", `compacted ${targets.length} cards -> card#${keep.id} (${allTaskIds.length} tasks, frozen)`);
   return { merged: targets.length, card };
 }

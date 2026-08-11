@@ -151,7 +151,7 @@ CREATE TABLE IF NOT EXISTS summary_cards (
   title TEXT NOT NULL,
   elements TEXT NOT NULL,
   task_ids TEXT NOT NULL,
-  settled INTEGER NOT NULL DEFAULT 0,
+  frozen INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
 );
 `);
@@ -207,7 +207,23 @@ CREATE TABLE IF NOT EXISTS summary_cards (
   // #115/#116: 前提情報も全文上書きなので、タスクの経緯メモ(#112)と同じく版で守る。
   // こちらの方が失うものが大きい — プロジェクト全員の前提で、チャットのシステムプロンプトに常時載る
   addColumn("ALTER TABLE project_context ADD COLUMN version INTEGER NOT NULL DEFAULT 1");
-  addColumn("ALTER TABLE summary_cards ADD COLUMN settled INTEGER NOT NULL DEFAULT 0");
+  // settled → frozen。名前が実態から2回ズレていた:
+  //   #58以前: Doneカードに人間がチェックを付け、全部付いたら「確認済み=settled」
+  //   #58:     チェックボックス廃止 (検収がReview側に移った) → 引き金は手動整頓だけに
+  //   #105:    カードがバッチごとに分かれ、settledは「日次まとめの対象外」の意味も持った
+  // 「人が確認した」だったものが「もう育たない」になったのに、名前だけ残っていた。
+  // 作った本人(zio)も外部エージェントも意味を取り違えたので、実態に名前を合わせる。
+  // #92(reasonの用途が分からず汚された)と同型だが、今回は書いた本人にも分からなくなっていた
+  try {
+    const cols = (db.prepare("PRAGMA table_info(summary_cards)").all() as any[]).map((c) => c.name);
+    if (cols.includes("settled") && !cols.includes("frozen")) {
+      db.exec("ALTER TABLE summary_cards RENAME COLUMN settled TO frozen");
+      log("schema", "summary_cards.settled を frozen に改名しました");
+    }
+  } catch (e: any) {
+    log("schema", `summary_cards.settled の改名に失敗: ${e?.message ?? e}`);
+  }
+  addColumn("ALTER TABLE summary_cards ADD COLUMN frozen INTEGER NOT NULL DEFAULT 0");
   addColumn("ALTER TABLE chat_messages ADD COLUMN task_id INTEGER");
   // #126: 誰の発言かを記録する。監査ログは「何をしたか」だけでなく「誰が言ったか」が要る。
   // speaker=表示名 / speaker_email=ログイン済みのときだけ入る本人確認済みのアドレス。

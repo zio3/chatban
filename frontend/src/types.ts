@@ -41,7 +41,7 @@ export interface SummaryCard {
   title: string;
   elements: SummaryElement[];
   taskIds: number[];
-  settled: boolean;
+  frozen: boolean;
   createdAt: string;
 }
 

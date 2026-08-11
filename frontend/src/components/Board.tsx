@@ -219,7 +219,7 @@ function renderRefs(text: string, onOpen: (id: number) => void) {
 }
 
 // #58: チェックボックスは廃止 (done=検収済みなので把握確認が二重になる)。
-// アクティブカード=緑で開いた状態、整頓で過去ログ化(settled)されたカード=グレーで畳んだ状態
+// アクティブカード=緑で開いた状態、整頓で過去ログ化(frozen)されたカード=グレーで畳んだ状態
 function SummaryCardView({
   card,
   onOpenTask,
@@ -234,7 +234,7 @@ function SummaryCardView({
   return (
     <div
       data-testid={`summary-card-${card.id}`}
-      className={`rounded-lg border p-2.5 shadow-sm ${card.settled ? "border-slate-200 bg-slate-50" : "border-emerald-300 bg-emerald-50"}`}
+      className={`rounded-lg border p-2.5 shadow-sm ${card.frozen ? "border-slate-200 bg-slate-50" : "border-emerald-300 bg-emerald-50"}`}
     >
       <button onClick={() => setOpen(!open)} className="flex w-full items-center justify-between gap-2 text-left">
         <span className="text-sm font-bold text-slate-700">
@@ -327,9 +327,9 @@ function Column({
       {/* Done列: 要約カード常駐 (アクティブ→過去ログの順) */}
       {summaryCards &&
         [...summaryCards]
-          .sort((a, b) => Number(a.settled) - Number(b.settled) || b.id - a.id)
+          .sort((a, b) => Number(a.frozen) - Number(b.frozen) || b.id - a.id)
           .map((c, i) => (
-            <SummaryCardView key={c.id} card={c} onOpenTask={onOpenTask} defaultOpen={i === 0 && !c.settled} />
+            <SummaryCardView key={c.id} card={c} onOpenTask={onOpenTask} defaultOpen={i === 0 && !c.frozen} />
           ))}
       <SortableContext items={tasks.map((t) => t.id)} strategy={verticalListSortingStrategy}>
         {tasks.map((t) =>

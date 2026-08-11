@@ -672,6 +672,18 @@ test("生きているタスクは live_tasks ビューで引ける (母集団の
   expect(raw.rows).toHaveLength(1);
 });
 
+test("要約カードの列は frozen (旧 settled)。SQL窓口から新しい名前で引ける", async () => {
+  // 改名のマイグレーションが効いていること。旧名で引くと落ちる = 移行漏れが検出できる
+  const r = await mcp("query_log", {
+    scope: "audit",
+    sql: "SELECT id, title, frozen FROM summary_cards LIMIT 1",
+  });
+  expect(r.error).toBeUndefined();
+
+  const old = await mcp("query_log", { scope: "audit", sql: "SELECT settled FROM summary_cards LIMIT 1" });
+  expect(JSON.stringify(old)).toContain("no such column");
+});
+
 test("存在しないプロジェクトを指定した操作は既定へ落とさず拒否する (#125)", async () => {
   const bad = { "X-ChatBan-Project": "9999" };
 

@@ -238,7 +238,7 @@ export interface SummaryCard {
   title: string;
   elements: SummaryElement[];
   taskIds: number[];
-  settled: boolean;
+  frozen: boolean;
   createdAt: string;
 }
 
@@ -248,7 +248,7 @@ function rowToCard(r: any): SummaryCard {
     title: r.title,
     elements: JSON.parse(r.elements),
     taskIds: JSON.parse(r.task_ids),
-    settled: !!r.settled,
+    frozen: !!r.frozen,
     createdAt: r.created_at,
   };
 }
@@ -263,7 +263,7 @@ export function getSummaryCard(id: number): SummaryCard | undefined {
 }
 
 // #105: 完了タスクの合流先を検収バッチごとに新規作成する。
-// 以前は「settledでない最後のカード」に合流し続けたため、整頓するまで1枚が無限に育ち、
+// 以前は「frozenでない最後のカード」に合流し続けたため、整頓するまで1枚が無限に育ち、
 // 直近の作業と数時間前の作業が同じカードに畳まれて解像度が落ちていた。
 // 人間が「このまとまりを完了にする」と決めた単位(=検収バッチ)をそのまま粒度にする。
 // 分けるのは後からできないが、統合は compact_archive と日次まとめでできる = 細かい側に倒す。
@@ -320,8 +320,8 @@ export function reassignTasksToCard(taskIds: number[], cardId: number) {
   db().prepare("UPDATE summary_cards SET task_ids = ? WHERE id = ?").run(JSON.stringify(taskIds), cardId);
 }
 
-export function setCardSettled(cardId: number): void {
-  db().prepare("UPDATE summary_cards SET settled = 1 WHERE id = ?").run(cardId);
+export function setCardFrozen(cardId: number): void {
+  db().prepare("UPDATE summary_cards SET frozen = 1 WHERE id = ?").run(cardId);
 }
 
 export function getProjectContext(): string {

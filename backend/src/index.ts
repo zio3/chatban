@@ -18,6 +18,8 @@ import {
   loginWithGoogle,
   requireAuth,
   resolveSpeaker,
+  type SessionUser,
+  stillAllowedUser,
   userFromCookieHeader,
 } from "./auth.js";
 import { buildMcpServer } from "./mcp.js";
@@ -158,6 +160,22 @@ io.use((socket, next) => {
     next(new Error("unauthorized"));
   }
 });
+
+/** #113: 許可リストを変えたら、いま繋がっているSocketも見直す。
+ *
+ * 本人確認はハンドシェイクでしか行っていないので、除名しても繋ぎっぱなしの相手には
+ * board:changed が流れ続ける (自動レビュー指摘)。RESTを401にしても、ボードの中身は
+ * こちらから読めるので、アクセスを取り上げたことにならない。
+ * 「認証は入口で一度」ではなく「許可が変わったら現に繋がっているものも切る」 */
+function disconnectRevoked() {
+  if (!authEnabled()) return;
+  for (const socket of io.sockets.sockets.values()) {
+    const me = socket.data.user as SessionUser | undefined;
+    if (me && stillAllowedUser(me)) continue;
+    log("auth", `許可から外れた接続を切断: ${me?.email ?? "(不明)"}`);
+    socket.disconnect(true);
+  }
+}
 
 // #99: 配信はプロジェクト単位のroomへ。全クライアントへの一斉送信だと、
 // タブごとに別プロジェクトを開けるようにした瞬間(#97)に他プロジェクトの更新で画面が壊れる。
@@ -526,7 +544,10 @@ app.post("/api/settings/auth", (req, res) => {
     });
   const { clientId, allowedEmails } = req.body ?? {};
   if (typeof clientId === "string") setSetting("auth.googleClientId", clientId.trim());
-  if (typeof allowedEmails === "string") setSetting("auth.allowedEmails", allowedEmails.trim());
+  if (typeof allowedEmails === "string") {
+    setSetting("auth.allowedEmails", allowedEmails.trim());
+    disconnectRevoked(); // 外した相手が繋ぎっぱなしなら、その場で切る
+  }
   res.json({
     clientId: getSetting("auth.googleClientId") ?? "",
     allowedEmails: getSetting("auth.allowedEmails") ?? "",

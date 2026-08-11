@@ -76,8 +76,16 @@ export function updateTasks(patches: { id: number; patch: TaskPatch }[]): (Task 
     const contextChanged = patch.context !== undefined && patch.context !== cur.context;
     // #108: 作業中の列へ戻したら検収の印は無効になる。「確かめた」のは前の状態に対してなので、
     // 作り直しているものに印が残っていると、次の検収で「もう確認済み」と誤読される。
-    // done と review では消さない (done=検収の結果、review=検収待ちで印は進捗そのもの)
+    // review では消さない (検収待ちの列で印を付けてから一括確定するので、印は進捗そのもの)
     const backToWork = next.status === "todo" || next.status === "inprogress";
+    // Doneから出るときも消す。差し戻しは「確定を取り消した」ということなので、
+    // 前の検収の印をそのまま次の確定の根拠にはできない。
+    //
+    // approveChecked が checked_at を「人が確かめた唯一の証拠」として使い始めたことで、
+    // ここが実際に踏める穴になった: Done→Review に戻すと印が残り、確認し直さずに
+    // もう一度Doneへ通せてしまう (以前の approve は checked_at を見ていなかったので無害だった)。
+    // 印を消せば、差し戻したものは必ずもう一度チェックを付け直すことになる
+    const leavingDone = cur.status === "done" && next.status !== "done";
     db().prepare(
       "UPDATE tasks SET title = ?, status = ?, assignee = ?, assign_reason = ?, sort = ?, context = ?, summary = ?, due = ?, blocked_by = ?, rejected = ?, context_version = context_version + ?, checked_at = ?, done_at = ?, updated_at = datetime('now', 'localtime') WHERE id = ?"
     ).run(
@@ -92,7 +100,7 @@ export function updateTasks(patches: { id: number; patch: TaskPatch }[]): (Task 
       next.blockedBy?.length ? JSON.stringify(next.blockedBy) : null,
       next.rejected ? 1 : 0,
       contextChanged ? 1 : 0,
-      backToWork ? null : (cur.checkedAt ?? null),
+      backToWork || leavingDone ? null : (cur.checkedAt ?? null),
       // 完了に入った瞬間だけ打刻する。以降の編集では動かさない (updated_at と違い「終わった日」)
       next.status === "done" ? (cur.doneAt ?? new Date().toLocaleString("sv-SE")) : null,
       id

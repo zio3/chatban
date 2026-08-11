@@ -887,6 +887,51 @@ test("検収の確定はサーバー側で条件を確かめる (UIのフィル�
   await expect.poll(() => getTaskStatus(ok)).toBe("done");
 });
 
+test("Doneから差し戻すと検収の印は消える (確認し直さずに戻せない)", async () => {
+  // approveChecked が checked_at を「人が確かめた唯一の証拠」にしたので、
+  // 差し戻しで印が残ると、確認し直さずにもう一度Doneへ通せてしまう
+  const id = await createTask("差し戻しで印が消える検証", "review");
+  const check = (checked: boolean) =>
+    fetch(`${API}/api/tasks/${id}/checked`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ checked }),
+    });
+  const get = async () => (await (await fetch(`${API}/api/tasks/${id}`)).json()) as any;
+  const approve = async () =>
+    (await (
+      await fetch(`${API}/api/tasks/approve`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids: [id] }),
+      })
+    ).json()) as any;
+
+  await check(true);
+  expect((await approve()).ok).toBe(true);
+  await expect.poll(() => getTaskStatus(id)).toBe("done");
+  expect((await get()).checkedAt).toBeTruthy(); // Doneでは検収の結果として残る
+
+  // Doneから差し戻す (チャットの「戻して」やD&Dで起きる)
+  await fetch(`${API}/api/tasks/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ status: "review" }),
+  });
+  expect((await get()).checkedAt).toBeFalsy(); // 印は消える
+
+  // 印が無いので、そのままではもう一度Doneへ通せない
+  const again = await approve();
+  expect(again.ok).toBe(false);
+  expect(JSON.stringify(again.skipped)).toContain("検収チェックが付いていません");
+  expect(await getTaskStatus(id)).toBe("review");
+
+  // 付け直せば通る
+  await check(true);
+  expect((await approve()).ok).toBe(true);
+  await expect.poll(() => getTaskStatus(id)).toBe("done");
+});
+
 test("存在しないプロジェクトを指定した操作は既定へ落とさず拒否する (#125)", async () => {
   const bad = { "X-ChatBan-Project": "9999" };
 

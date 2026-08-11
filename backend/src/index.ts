@@ -265,7 +265,8 @@ app.post("/api/tasks", (req, res) => {
 // done は列が動いたこと、checked_at は検収が進んだこと。片方からもう片方を推測しない。
 // エージェントには読ませるが書かせない — この口はRESTにしか無い
 app.post("/api/tasks/:id/checked", (req, res) => {
-  const task = setChecked(Number(req.params.id), !!req.body?.checked);
+  const { task, error } = setChecked(Number(req.params.id), !!req.body?.checked);
+  if (error) return res.status(409).json({ error });
   if (!task) return res.status(404).json({ error: "not found" });
   broadcastBoard();
   res.json(task);

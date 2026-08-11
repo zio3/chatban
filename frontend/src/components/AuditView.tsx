@@ -1,4 +1,5 @@
 import { apiFetch } from "../api";
+import { projectIdFromUrl } from "../project";
 import { useEffect, useState } from "react";
 
 // #33: オーディットログ。会話・LLM呼び出し・割り振り履歴の時系列閲覧 (読み取り専用)
@@ -27,6 +28,35 @@ export default function AuditView() {
   const [data, setData] = useState<Audit | null>(null);
   const [tab, setTab] = useState<(typeof TABS)[number]["key"]>("chat");
   const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  /** #97: <a href> だとブラウザが直接取りに行くので X-ChatBan-Project が付かず、
+   * 表示しているプロジェクトではなくサーバー側の既定プロジェクトが落ちてくる
+   * (自動レビュー指摘)。監査ログ・会話・タスク・設定を含むフルダンプなので、
+   * 別プロジェクトの中身を持ち出してしまう。画面と同じ経路 (apiFetch) で取る。
+   *
+   * 「サーバー側に隠れた"いま見ているもの"を持たない」(#97) という作りなので、
+   * ヘッダを付けない経路はそれだけで別プロジェクトを指す */
+  async function exportAll() {
+    setBusy(true);
+    try {
+      const res = await apiFetch("/api/audit/export");
+      if (!res.ok) throw new Error(`${res.status}: ${await res.text()}`);
+      const url = URL.createObjectURL(await res.blob());
+      const a = document.createElement("a");
+      a.href = url;
+      // ファイル名は自分で作る。fetch経由だと Content-Disposition は効かないし、
+      // プロジェクト番号を入れておけば、別プロジェクトのExportと取り違えない
+      const stamp = new Date().toISOString().slice(0, 19).replace(/[-:T]/g, "");
+      a.download = `chatban-audit-p${projectIdFromUrl() ?? "default"}-${stamp}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
 
   useEffect(() => {
     apiFetch("/api/audit")
@@ -51,13 +81,13 @@ export default function AuditView() {
           </button>
         ))}
         {/* #83: 全テーブルのフルダンプ (検証利用)。表示は直近だけだがExportはもれなく全件 */}
-        <a
-          href="/api/audit/export"
-          download
-          className="ml-auto rounded-full border border-slate-300 bg-white px-3 py-1 text-sm text-slate-600 hover:bg-slate-100"
+        <button
+          onClick={exportAll}
+          disabled={busy}
+          className="ml-auto rounded-full border border-slate-300 bg-white px-3 py-1 text-sm text-slate-600 hover:bg-slate-100 disabled:opacity-50"
         >
-          ⬇ 全ログExport (JSON)
-        </a>
+          {busy ? "書き出し中…" : "⬇ 全ログExport (JSON)"}
+        </button>
       </div>
 
       {tab === "chat" && (

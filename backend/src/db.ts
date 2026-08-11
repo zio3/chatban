@@ -904,9 +904,20 @@ export function queryLogHelp(scope: "cost" | "audit", message: string): Record<s
 /** #108: 検収の印を付け外しする。人間のUI操作 (REST) からのみ呼ぶ。
  * agentWrite の TaskPatch には入れない — エージェントが「確認しておきました」と
  * 自分でチェックを付けてしまう事故を、プロンプトではなく経路の有無で防ぐ */
-export function setChecked(id: number, checked: boolean): Task | undefined {
+export function setChecked(id: number, checked: boolean): { task?: Task; error?: string } {
+  const cur = getTask(id);
+  if (!cur) return {};
+  // 印を付けられるのは Review にあるものだけ。以前は列を見ていなかったので、
+  // Todoのうちに印を付けてから Review へ動かすと、Reviewに入ってから一度も確かめずに
+  // 確定まで通せた (自動レビュー指摘)。mayEnterDone が「Review + 印」しか見ないぶん、
+  // 印を付ける側で順序を守らせる必要がある。外すのはいつでもよい (印を消す方向は安全)
+  if (checked) {
+    if (cur.trashedAt) return { error: "ゴミ箱にあるタスクには検収チェックを付けられません" };
+    if (cur.status !== "review")
+      return { error: `検収チェックを付けられるのは Review 列のタスクだけです (いまは ${cur.status})。${DONE_GATE_RULE}` };
+  }
   db()
     .prepare("UPDATE tasks SET checked_at = ? WHERE id = ?")
     .run(checked ? new Date().toLocaleString("sv-SE") : null, id);
-  return getTask(id);
+  return { task: getTask(id) };
 }

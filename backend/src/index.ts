@@ -62,6 +62,7 @@ import {
   updateTask,
   updateTasks,
   approveChecked,
+  DONE_GATE_RULE,
 } from "./db.js";
 
 const PORT = Number(process.env.PORT ?? 8787);
@@ -250,8 +251,7 @@ app.post("/api/tasks/:id/checked", (req, res) => {
 
 // status:"done" を投げられたが動かさなかったときに添える。黙って無視すると
 // 「APIは200を返したのに列が動かない」になり、UIのバグに見える
-const DONE_GATE_NOTE =
-  "Doneへは移していません。Doneに入れるのは Review列にあって検収チェックが付いたものだけで、確定は POST /api/tasks/approve (ボードの検収ボタン) が行います";
+const DONE_GATE_NOTE = `Doneへは移していません。${DONE_GATE_RULE}。確定は POST /api/tasks/approve (ボードの検収ボタン) が行います`;
 
 // 一括検収 (#57/#60): Review→Doneの確定。複数前提の1ルート (単一もここを通る)
 // 検収の確定。Doneへ至る唯一の扉なので、条件(Review列 + 検収済み + 生きている)はサーバーが持つ。

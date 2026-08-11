@@ -78,7 +78,13 @@ export type TaskPatch = Partial<
  * checked_at を立てられるのは REST /api/tasks/:id/checked だけ (=人間のUI操作) なので、
  * 入口がRESTでもMCPでもチャットでも「人間が検収したものしかDoneに無い」が成立する。
  *
- * 「プロンプトは漏れるが、経路が無いことは漏れない」— 契約の文言ではなくコードで持つ */
+ * 「プロンプトは漏れるが、経路が無いことは漏れない」— 契約の文言ではなくコードで持つ。
+ *
+ * DONE_GATE_RULE は、断ったときに返す説明。REST・チャット・MCPで同じ文言を使う —
+ * 「なぜ動かなかったのか」を入口ごとに違う言葉で返すと、別のルールがあるように読める */
+export const DONE_GATE_RULE =
+  "Doneへは「Review列に置く → 人間が検収チェックを付ける → 確定」の順でしか入りません。他の列からDoneへの直送はできません";
+
 export function mayEnterDone(cur: Pick<Task, "status" | "checkedAt" | "trashedAt">): boolean {
   return cur.status === "review" && !!cur.checkedAt && !cur.trashedAt;
 }

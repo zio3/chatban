@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { extractChoices } from "./chat.js";
 import { differs } from "./archive.js";
 import { isAllowed, pickSpeaker, readCookie } from "./auth.js";
-import { mayEnterDone } from "./db.js";
+import { DONE_GATE_RULE, mayEnterDone } from "./db.js";
 import { AGENT_STATUS_VALUES } from "./chat.js";
 
 // 返信ボタンの記法 [[選択肢]] の取り出し。
@@ -148,4 +148,12 @@ test("ゴミ箱にあるものは入れない (印が残っていても)", () =>
 
 test("エージェントの契約に done は無い — 選べないものは選ばれない", () => {
   assert.deepEqual([...AGENT_STATUS_VALUES], ["todo", "inprogress", "review"]);
+});
+
+test("断る理由 (経路) を説明する。できませんとだけ言わない", () => {
+  // 「できません」だけだと、エージェントは言い換えて再挑戦する。
+  // 順路を書いておけば、reviewに置いて人間に検収を促す、が次の一手になる
+  assert.match(DONE_GATE_RULE, /Review列/);
+  assert.match(DONE_GATE_RULE, /検収/);
+  assert.match(DONE_GATE_RULE, /直送はできません/);
 });

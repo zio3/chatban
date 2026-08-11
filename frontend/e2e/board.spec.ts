@@ -714,6 +714,9 @@ test("前提情報のリファレンスは、足りないときだけ知らせ�
   expect(withRef.reference).toContain("review = 検収待ち");
   expect(withRef.reference).toContain("review = 相手待ち");
   expect(withRef.referenceNote).toContain("そのまま書き戻さないこと");
+  // summary の書き分けと、追記が効く経緯メモの書き始め方
+  expect(withRef.reference).toContain("summary の書き方");
+  expect(withRef.reference).toContain("## 経過");
 
   // boolean を文字列で送るMCPクライアントがある (実測: Claude Code)。受け側で吸収する
   const asString = await mcp("get_project_context", { reference: "true" });
@@ -735,8 +738,10 @@ test("summary の契約はチャットとMCPで同じ文言になっている (�
   const update = tools.find((t) => t.name === "update_tasks");
   const summaryDesc = update.inputSchema.properties.updates.items.properties.summary.description;
   // MCP側は以前「現況の一言。カードに表示される」だけで、読み手が誰かが抜けていた
-  expect(summaryDesc).toContain("チャットが常時これを読んで");
-  expect(summaryDesc).toContain("注意点と次にやること");
+  expect(summaryDesc).toContain("AIとユーザーの両方に");
+  expect(summaryDesc).toContain("次の判断を促す");
+  // 「状態を書くな」という否定形はやめた (守られないので、書くべきものを名指しする)
+  expect(summaryDesc).not.toContain("状態ではなく");
 
   const dep = update.inputSchema.properties.updates.items.properties.blocked_by.description;
   expect(dep).toContain("それが終わらないと着手できない");

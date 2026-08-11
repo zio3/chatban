@@ -143,6 +143,9 @@ export async function regenerateCard(cardId: number, dateLabel?: string): Promis
   }
   const checkedElements = card.elements.filter((e) => e.checked);
   const { messages, taskData } = buildDecomposeMessages(tasks, checkedElements.map((e) => e.text));
+  // 生成を始めた時点の顔ぶれ。LLMを待っている間にカードの中身が変わったら、
+  // この結果はもう古い (下の isStale を参照)
+  const startedWith = tasks.map((t) => t.id);
 
   // 要素分解 (品質が肝・非同期なのでレイテンシ許容): ルーティング委任
   const res = await chatCompletion("archive-decompose", getModel("archive"), { messages });
@@ -150,6 +153,21 @@ export async function regenerateCard(cardId: number, dateLabel?: string): Promis
     `${tasks.length}件の完了: ${tasks.map((t) => `#${t.id}`).join(", ")}`,
   ];
   const elements: SummaryElement[] = [...checkedElements, ...newTexts.map((text) => ({ text, checked: false }))];
+
+  // 生成中にカードの顔ぶれが変わっていたら、この結果は捨てる。
+  //
+  // regenerateCard は「読む → LLMを待つ(10〜100秒) → 同じカードへ保存」なので、
+  // 待っている間に onTaskReopened でタスクが外れたり、次の検収バッチが走ったりすると、
+  // 古い顔ぶれで作った要約が後から新しい要約を上書きする。
+  // 実測: 2件で生成を始め、途中で1件外し、1件で作り直したあとに先発が完了すると、
+  // 外したはずのタスクが要約に残った。
+  //
+  // 直列化ではなく世代チェックにしたのは、遅い方を待たせても結果が古いことは変わらないため。
+  // 捨てたぶんは、外した側の処理 (onTaskReopened / onTasksCompleted) が改めて生成する
+  if (isStale(cardId, startedWith)) {
+    log("archive", `card#${cardId} の要約を破棄 (生成中に構成が変わった: [${startedWith}] → [${tasksOfCard(cardId).map((t) => t.id)}])`);
+    return getSummaryCard(cardId);
+  }
 
   // 要素を先に保存する。以前はタイトル生成の後にまとめて保存していたため、
   // 安いタイトル生成が詰まると、高い要素分解(57秒かけて成功)の結果まで失われていた。
@@ -162,9 +180,27 @@ export async function regenerateCard(cardId: number, dateLabel?: string): Promis
   // 中身のタスクを渡して内容ラベルを作らせる (日次まとめ済みのカードだけは日付ラベルのまま)
   if (!dateLabel) {
     const label = (await generateContentLabel(taskData.map((t) => t.title))) ?? todayLabel();
+    // タイトル生成の間にも構成は変わりうる。ここで書き戻すと、上で捨てたはずの
+    // 古い elements がタイトルと一緒に復活してしまう
+    if (isStale(cardId, startedWith)) {
+      log("archive", `card#${cardId} のタイトルを破棄 (タイトル生成中に構成が変わった)`);
+      return getSummaryCard(cardId);
+    }
     updateCardContent(cardId, label, elements);
   }
   return getSummaryCard(cardId);
+}
+
+/** 生成を始めた時点の顔ぶれと、いまの顔ぶれが違うか。
+ * カードごと消えている場合も「古い」扱いにする (消えたカードに書き戻すと復活する) */
+function isStale(cardId: number, startedWith: number[]): boolean {
+  if (!getSummaryCard(cardId)) return true;
+  return differs(tasksOfCard(cardId).map((t) => t.id), startedWith);
+}
+
+/** 顔ぶれが変わったか。DBに触らない部分だけ切り出してテストできるようにする */
+export function differs(now: number[], startedWith: number[]): boolean {
+  return now.length !== startedWith.length || now.some((id, i) => id !== startedWith[i]);
 }
 
 /** #105: 1日経ったカードを日単位に統合する。粒度は時間とともに粗くなる:

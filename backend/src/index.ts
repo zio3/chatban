@@ -18,6 +18,7 @@ import {
   loginWithGoogle,
   requireAuth,
   resolveSpeaker,
+  userFromCookieHeader,
 } from "./auth.js";
 import { buildMcpServer } from "./mcp.js";
 import { resetPromptState } from "./promptState.js";
@@ -132,7 +133,21 @@ app.use((req, res, next) => {
 });
 
 const server = http.createServer(app);
-const io = new Server(server, { cors: { origin: "*" } });
+// #113: ボードの中身は Socket.IO で流れるので、RESTだけ締めても意味がない。
+// origin:"*" のままだと他サイトのページから繋いで board:changed を受け取れてしまう。
+// CORSは express と同じ許可リストを使い、認証onなら接続時に本人確認する
+const io = new Server(server, { cors: { origin: ALLOWED_ORIGINS, credentials: true } });
+
+io.use((socket, next) => {
+  if (!authEnabled()) return next(); // 開発・E2Eは素通し (RESTと同じ判断)
+  const me = userFromCookieHeader(socket.handshake.headers.cookie);
+  if (!me) {
+    log("auth", "未認証のSocket.IO接続を拒否しました");
+    return next(new Error("unauthorized"));
+  }
+  socket.data.user = me;
+  next();
+});
 
 // #99: 配信はプロジェクト単位のroomへ。全クライアントへの一斉送信だと、
 // タブごとに別プロジェクトを開けるようにした瞬間(#97)に他プロジェクトの更新で画面が壊れる。

@@ -7,6 +7,7 @@ import {
   QUERY_LOG_DESCRIPTION,
   REJECTED_DESCRIPTION,
   REORDER_DESCRIPTION,
+  AGENT_STATUS_VALUES,
   STATUS_DESCRIPTION,
   SUMMARY_DESCRIPTION,
   UPDATE_TASKS_DESCRIPTION,
@@ -37,7 +38,8 @@ import { archiveState } from "./hooks.js";
 import { contextReference, contextTemplateHint, currentProjectId, getProject } from "./store.js";
 import type { TaskStatus } from "./types.js";
 
-const STATUS = z.enum(["todo", "inprogress", "review", "done"]);
+// 値の一覧はチャット側と共有する。入口ごとに書き分けると必ずズレる (#92 #108 #114 #125 #126)
+const STATUS = z.enum(AGENT_STATUS_VALUES);
 
 /** boolean を文字列で送ってくるMCPクライアントがある (実測: Claude Code から
  * reference=true を渡すと "true" が届き、z.boolean() が弾いた)。

@@ -1,4 +1,5 @@
 import { hooks } from "./hooks.js";
+import { log } from "./log.js";
 import { admin, adminReadonly, currentProjectId, db, projectReadonly } from "./store.js";
 import { decodeUnicodeEscapes } from "./text.js";
 import type { Member, Proposal, Task, TaskStatus } from "./types.js";
@@ -44,6 +45,12 @@ function rowToTask(r: any): Task {
 }
 
 export function createTask(title: string, status: TaskStatus = "todo", assignee: string | null = null, assignReason: string | null = null): Task {
+  // 新規作成でいきなり Done は作れない。検収は「実物を確かめた」記録なので、
+  // 生まれた瞬間に確かめ終わっているものは無い (mayEnterDone と同じ理由)
+  if (status === "done") {
+    log("api", `新規作成で status=done を指定されたので review にしました: ${title}`);
+    status = "review";
+  }
   const info = db()
     .prepare("INSERT INTO tasks (title, status, assignee, assign_reason) VALUES (?, ?, ?, ?)")
     .run(title, status, assignee, assignReason);
@@ -59,6 +66,23 @@ export type TaskPatch = Partial<
   Pick<Task, "title" | "status" | "assignee" | "assignReason" | "sort" | "context" | "summary" | "due" | "blockedBy" | "rejected">
 >;
 
+/** Doneへ入ってよい状態か。approveChecked が通す条件そのもの。
+ *
+ * PR #1 で「検収APIはサーバー側で条件を確かめる」ようにしたが、条件を持っていたのは
+ * approveChecked だけで、PATCH /api/tasks/:id に status:"done" を投げれば素通りしていた
+ * (自動レビュー指摘)。フロントは Board.tsx の handleDragEnd で Done列へのD&Dを禁止しているが、
+ * **その禁止がクライアント側にしか無い** — PR #1 で塞いだのとまったく同じ形の穴。
+ *
+ * そこで「検収APIだけが厳しい」のをやめ、**Doneに入れる条件そのもの**を updateTasks の
+ * 不変条件にする。approveChecked が通すものはこの条件を満たすので、迂回フラグは要らない。
+ * checked_at を立てられるのは REST /api/tasks/:id/checked だけ (=人間のUI操作) なので、
+ * 入口がRESTでもMCPでもチャットでも「人間が検収したものしかDoneに無い」が成立する。
+ *
+ * 「プロンプトは漏れるが、経路が無いことは漏れない」— 契約の文言ではなくコードで持つ */
+export function mayEnterDone(cur: Pick<Task, "status" | "checkedAt" | "trashedAt">): boolean {
+  return cur.status === "review" && !!cur.checkedAt && !cur.trashedAt;
+}
+
 /** 複数タスクの一括更新 (#60)。完了遷移はまとめて1回だけ通知する (要約再生成のバッチ化)。
  * 単一更新もこの関数の長さ1ケースとして扱う — Doneへ入るルートはここ1本 */
 export function updateTasks(patches: { id: number; patch: TaskPatch }[]): (Task | undefined)[] {
@@ -70,7 +94,13 @@ export function updateTasks(patches: { id: number; patch: TaskPatch }[]): (Task 
     // #87: 空文字の担当は「未割り当て」の意図。文字列""のまま保存すると
     // 誰にも割り当たっていないのにフィルタにも負荷計算にも乗らない幽霊状態になる
     if (patch.assignee === "") patch = { ...patch, assignee: null };
-    const next = { ...cur, ...patch };
+    let next = { ...cur, ...patch };
+    // Doneへ入れるのは検収を通ったものだけ。条件を満たさない遷移は status だけ元に戻す
+    // (行ごと捨てると、同じ patch に入っている summary や context まで消える)
+    if (cur.status !== "done" && next.status === "done" && !mayEnterDone(cur)) {
+      log("api", `#${id} をDoneへ動かす指定を拒否しました (いまは ${cur.status}${cur.checkedAt ? "" : "・検収チェックなし"})`);
+      next = { ...next, status: cur.status };
+    }
     // #112: 経緯メモが実際に変わったときだけ版を上げる。
     // 他の列の更新で上げてしまうと、context を書いている側が無関係な変更で弾かれる
     const contextChanged = patch.context !== undefined && patch.context !== cur.context;

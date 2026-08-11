@@ -3,6 +3,8 @@ import { test } from "node:test";
 import { extractChoices } from "./chat.js";
 import { differs } from "./archive.js";
 import { isAllowed, pickSpeaker, readCookie } from "./auth.js";
+import { mayEnterDone } from "./db.js";
+import { AGENT_STATUS_VALUES } from "./chat.js";
 
 // 返信ボタンの記法 [[選択肢]] の取り出し。
 // ここはLLMを介さずに固定できる唯一の部分なので (発火するかどうかはモデル次第でも、
@@ -118,4 +120,32 @@ test("他のCookieに混ざっていても取れる。無ければnull", () => {
   assert.equal(readCookie("x=1; chatban_session=tok; y=2", "chatban_session"), "tok");
   assert.equal(readCookie("x=1; y=2", "chatban_session"), null);
   assert.equal(readCookie(undefined, "chatban_session"), null);
+});
+
+// Doneへ入れる条件。PR #1 では検収API (approveChecked) だけが持っていたため、
+// PATCH /api/tasks/:id に status:"done" を投げれば素通りしていた (自動レビュー指摘)。
+// フロントは Done列へのD&Dを禁止しているが、その禁止がクライアント側にしか無かった —
+// PR #1 で塞いだのとまったく同じ形。条件そのものを updateTasks の不変条件にする。
+
+const review = { status: "review" as const, checkedAt: "2026-08-12 10:00", trashedAt: null };
+
+test("Review列で検収チェックが付いていれば入れる", () => {
+  assert.equal(mayEnterDone(review), true);
+});
+
+test("検収チェックが無ければ入れない (Review列にいても)", () => {
+  assert.equal(mayEnterDone({ ...review, checkedAt: null }), false);
+});
+
+test("Review列以外からは入れない", () => {
+  assert.equal(mayEnterDone({ ...review, status: "todo" }), false);
+  assert.equal(mayEnterDone({ ...review, status: "inprogress" }), false);
+});
+
+test("ゴミ箱にあるものは入れない (印が残っていても)", () => {
+  assert.equal(mayEnterDone({ ...review, trashedAt: "2026-08-12 09:00" }), false);
+});
+
+test("エージェントの契約に done は無い — 選べないものは選ばれない", () => {
+  assert.deepEqual([...AGENT_STATUS_VALUES], ["todo", "inprogress", "review"]);
 });

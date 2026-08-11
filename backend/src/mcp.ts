@@ -12,6 +12,7 @@ import {
 import { z } from "zod";
 import {
   queryLlmCalls,
+  queryLogHelp,
   queryProjectData,
   reorderTasks,
   createTask,
@@ -218,7 +219,9 @@ export function buildMcpServer(onEvent: (kind: "board" | "proposals") => void): 
       try {
         return text(scope === "audit" ? queryProjectData(sql) : queryLlmCalls(sql));
       } catch (e: any) {
-        return text({ ok: false, error: e?.message ?? String(e) });
+        // 失敗したら、直せるだけの材料を一緒に返す。チャットと同じ関数を使う
+        const error = e?.message ?? String(e);
+        return text({ ok: false, error, ...queryLogHelp(scope, error) });
       }
     }
   );

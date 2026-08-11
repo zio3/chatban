@@ -15,6 +15,7 @@ import {
   listTasks,
   memberLoads,
   queryLlmCalls,
+  queryLogHelp,
   queryProjectData,
   reorderTasks,
   resolveProposal,
@@ -425,10 +426,13 @@ async function execTool(name: string, args: any, uiActions: UiAction[], events: 
       };
     }
     case "query_log": {
+      const scope = args.scope === "audit" ? "audit" : "cost";
       try {
-        return args.scope === "audit" ? queryProjectData(args.sql ?? "") : queryLlmCalls(args.sql ?? "");
+        return scope === "audit" ? queryProjectData(args.sql ?? "") : queryLlmCalls(args.sql ?? "");
       } catch (e: any) {
-        return { ok: false, error: e?.message ?? String(e) };
+        // 失敗したら、直せるだけの材料を一緒に返す (説明を厚くする代わりの事後注入)
+        const error = e?.message ?? String(e);
+        return { ok: false, error, ...queryLogHelp(scope, error) };
       }
     }
     case "compact_archive": {

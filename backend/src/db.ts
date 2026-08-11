@@ -718,14 +718,86 @@ function runReadonly(
   conn: ReturnType<typeof adminReadonly>,
   sql: string,
   limit: number
-): { rows: unknown[]; sql: string; truncated: boolean } {
+): { rows: unknown[]; sql: string; truncated: boolean; note?: string } {
   const trimmed = sql.trim().replace(/;\s*$/, "");
   if (!/^(select|with)\b/i.test(trimmed)) throw new Error("SELECT か WITH で始まる読み取りクエリだけ実行できます");
   if (trimmed.includes(";")) throw new Error("複数の文は実行できません");
   const hit = PRIVATE_TABLES.find((t) => new RegExp(`\\b${t}\\b`, "i").test(trimmed));
   if (hit) throw new Error(`${hit} は参照できません (機密として閉じているテーブル)`);
   const rows = conn.prepare(trimmed).all() as unknown[];
-  return { rows: rows.slice(0, limit), sql: trimmed, truncated: rows.length > limit };
+  return { rows: rows.slice(0, limit), sql: trimmed, truncated: rows.length > limit, ...silentTrap(trimmed) };
+}
+
+/** エラーにならない間違いに、結果と一緒に一言添える。
+ *
+ * 「エラーが出る間違いは事後注入で治る。エラーが出ない間違いは事前に教えるしかない」
+ * (外部エージェントの整理)。ただし事前に教えても守られないものがあるので、
+ * せめて結果と一緒に言う。実際にどちらも実データで踏まれている:
+ *   - tasks 直引き → ゴミ箱・アーカイブ済みが混ざる (live_tasks を作った理由)
+ *   - created_at で完了を数える → 登録日を数えてしまう (done_tasks を作った理由) */
+function silentTrap(sql: string): { note?: string } {
+  const notes: string[] = [];
+  const s = sql.toLowerCase();
+  if (/\bfrom\s+tasks\b/.test(s) && !/trashed_at|archived/.test(s)) {
+    notes.push("tasks を直に引いています。ゴミ箱行き・アーカイブ済みも含まれるので、生きているタスクだけなら live_tasks を使ってください");
+  }
+  if (/count\s*\(|group\s+by/.test(s) && /date\s*\(\s*created_at/.test(s) && /\bfrom\s+tasks\b/.test(s)) {
+    notes.push("created_at は登録日です。完了の集計なら done_at (または done_tasks.done_day) を使ってください");
+  }
+  return notes.length > 0 ? { note: notes.join(" / ") } : {};
+}
+
+/** SQLが失敗したときに、直せるだけの材料を一緒に返す。
+ *
+ * ツール説明を厚くする代わりに、間違えたときにその場で渡す。説明を読ませ続けるより
+ * 安く、しかも「いま必要な情報」だけで済む。列やテーブルの一覧は実DBから引くので、
+ * スキーマを変えても説明とズレない (契約と実装のズレは何度も踏んでいる) */
+export function queryLogHelp(scope: "cost" | "audit", message: string): Record<string, unknown> {
+  const conn = scope === "audit" ? projectReadonly() : adminReadonly();
+  const help: Record<string, unknown> = {};
+  try {
+    const objects = (
+      conn.prepare("SELECT name, type FROM sqlite_master WHERE type IN ('table','view') ORDER BY type DESC, name").all() as {
+        name: string;
+        type: string;
+      }[]
+    ).filter((o) => !PRIVATE_TABLES.includes(o.name) && !o.name.startsWith("sqlite_"));
+
+    if (/no such (table|column)/i.test(message)) {
+      // 何がどこにあるかを、実DBの現物で返す
+      help.schema = Object.fromEntries(
+        objects.map((o) => [
+          `${o.name}${o.type === "view" ? " (ビュー)" : ""}`,
+          (conn.prepare("SELECT name FROM pragma_table_info(?)").all(o.name) as { name: string }[])
+            .map((c) => c.name)
+            .join(", "),
+        ])
+      );
+      if (scope === "audit") {
+        help.hint =
+          "生きているタスクは live_tasks、完了したものは done_tasks を使うと、条件を書かなくて済みます。ゴミ箱やアーカイブを見たいときだけ tasks を直に引いてください";
+      }
+    } else if (/no such function/i.test(message)) {
+      help.dialect = {
+        note: "SQLite には date_trunc / INTERVAL / NOW() / DATEADD がありません",
+        今日: "date('now','localtime')",
+        月初: "date('now','localtime','start of month')",
+        n日前: "date('now','localtime','-7 days')",
+        日付だけ取り出す: "date(created_at)",
+        時間帯: "strftime('%H', created_at) / substr(created_at,1,13)",
+        月ごと: "strftime('%Y-%m', created_at)",
+        文字列連結: "|| (+ ではない)",
+        真偽値: "0/1 (true/false ではない)",
+      };
+    } else if (/syntax error/i.test(message)) {
+      help.hint =
+        "実行できるのは SELECT か WITH で始まる1文だけです。セミコロンで区切った複数文・DMLを含むCTEは通りません";
+    }
+    help.tables = objects.map((o) => (o.type === "view" ? `${o.name} (ビュー)` : o.name));
+  } catch {
+    /* 補助情報が作れなくても、エラー自体は返す */
+  }
+  return help;
 }
 
 /** #108: 検収の印を付け外しする。人間のUI操作 (REST) からのみ呼ぶ。

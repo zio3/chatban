@@ -790,6 +790,37 @@ test("要約カードの列は frozen (旧 settled)。SQL窓口から新しい�
   expect(JSON.stringify(old)).toContain("no such column");
 });
 
+test("SQLが失敗したら、直せる材料を一緒に返す (説明を厚くする代わりの事後注入)", async () => {
+  // 列名を間違えたら、実DBから引いたスキーマが返る (説明とスキーマがズレない)
+  const badCol = await mcp("query_log", { scope: "audit", sql: "SELECT id, titel FROM live_tasks LIMIT 1" });
+  expect(badCol.ok).toBe(false);
+  expect(badCol.schema["live_tasks (ビュー)"]).toContain("title");
+  expect(badCol.hint).toContain("live_tasks");
+
+  // 他のDBの関数を使ったら、SQLiteでの書き方が返る
+  const badFn = await mcp("query_log", { scope: "cost", sql: "SELECT date_trunc('day', created_at) FROM llm_calls" });
+  expect(badFn.ok).toBe(false);
+  expect(JSON.stringify(badFn.dialect)).toContain("start of month");
+});
+
+test("エラーにならない間違いには、結果と一緒に一言添える", async () => {
+  // tasks 直引き = ゴミ箱もアーカイブも混ざる。エラーにならないので気づけない
+  const raw = await mcp("query_log", { scope: "audit", sql: "SELECT id, title FROM tasks LIMIT 3" });
+  expect(raw.rows.length).toBeGreaterThan(0); // 結果は普通に返る
+  expect(raw.note).toContain("live_tasks");
+
+  // created_at で完了を数える = 登録日を数えている (実データで踏まれていた間違い)
+  const wrongDate = await mcp("query_log", {
+    scope: "audit",
+    sql: "SELECT date(created_at) d, COUNT(*) n FROM tasks WHERE archived=1 GROUP BY 1",
+  });
+  expect(wrongDate.note).toContain("done_at");
+
+  // 正しく引いたときは余計なことを言わない
+  const ok = await mcp("query_log", { scope: "audit", sql: "SELECT id, title FROM live_tasks LIMIT 3" });
+  expect(ok.note).toBeUndefined();
+});
+
 test("存在しないプロジェクトを指定した操作は既定へ落とさず拒否する (#125)", async () => {
   const bad = { "X-ChatBan-Project": "9999" };
 

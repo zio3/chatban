@@ -672,6 +672,28 @@ test("生きているタスクは live_tasks ビューで引ける (母集団の
   expect(raw.rows).toHaveLength(1);
 });
 
+test("新しいプロジェクトの前提情報は空欄でなく既定値が入っている (推測させない)", async () => {
+  const res = await fetch(`${API}/api/projects`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name: `テンプレート検証 ${Date.now()}` }),
+  });
+  const created = (await res.json()) as any;
+  const id = created.project?.id ?? created.id;
+
+  const ctx = (await (
+    await fetch(`${API}/api/project-context`, { headers: { "X-ChatBan-Project": String(id) } })
+  ).json()) as any;
+
+  // 列の意味が空欄のままだと、LLMは一般的な意味で埋めてしまう (外部エージェントの実例)
+  expect(ctx.text).toContain("review = 検収待ち");
+  expect(ctx.text).toContain("done = 人間が実物で確かめたもの");
+  // やらない決定の残し方も既定値で書いてある (rejected が一度も使われなかった実例への手当て)
+  expect(ctx.text).toContain("rejected");
+  // ただし調整できることは明示されている (プロジェクトごとに違うのは review の意味)
+  expect(ctx.text).toContain("違うなら書き換える");
+});
+
 test("要約カードの列は frozen (旧 settled)。SQL窓口から新しい名前で引ける", async () => {
   // 改名のマイグレーションが効いていること。旧名で引くと落ちる = 移行漏れが検出できる
   const r = await mcp("query_log", {

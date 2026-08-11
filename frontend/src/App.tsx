@@ -11,6 +11,7 @@ import SettingsView from "./components/SettingsView";
 import TrashView from "./components/TrashView";
 import TaskDetailPanel from "./components/TaskDetailPanel";
 import { useChatTurn } from "./hooks/useChatTurn";
+import type { Attachment } from "./hooks/useAttachments";
 import { socket } from "./socket";
 import type { ChatEntry, Member, SummaryCard, Task } from "./types";
 
@@ -70,9 +71,21 @@ export default function App() {
       for (const a of res.uiActions) {
         // チャットからの絞り込みは単一指定。nullで解除 (#90でSetに変わったため詰め替える)
         if (a.type === "set_filter") setFilter(a.assignee ? new Set([a.assignee]) : new Set());
+        if (a.type === "ask") setAskOptions(a.options);
       }
     },
   });
+  // AIが添えた簡易返信ボタン。DBにもログにも残さず、次の発言で消える。
+  // 「押されるまで待っている状態」を作らないための割り切り — ボタンは入力の近道であって、
+  // 承認の経路ではない (経路にすると #127 で外した提案カードに逆戻りする)
+  const [askOptions, setAskOptions] = useState<string[]>([]);
+  const sendFromChat = useCallback(
+    (message: string, attachments?: Attachment[]) => {
+      setAskOptions([]);
+      mainChat.send(message, attachments);
+    },
+    [mainChat.send]
+  );
 
   // #86: プロジェクト一覧。切り替えるとボード・チャット・前提情報・メンバーが総取っ替えになる
   const [projects, setProjects] = useState<Project[]>([]);
@@ -481,8 +494,9 @@ export default function App() {
         sending={mainChat.sending}
         elapsedSec={mainChat.elapsedSec}
         suggestions={suggestions}
+        askOptions={askOptions}
         onOpenTask={openTask}
-        onSend={mainChat.send}
+        onSend={sendFromChat}
         onStop={mainChat.stop}
         onReset={resetChat}
       />

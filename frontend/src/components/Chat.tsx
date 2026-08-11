@@ -46,6 +46,7 @@ export default function Chat({
   sending,
   elapsedSec,
   suggestions,
+  askOptions,
   onOpenTask,
   onSend,
   onStop,
@@ -55,6 +56,8 @@ export default function Chat({
   sending: boolean;
   elapsedSec: number;
   suggestions: Suggestion[];
+  /** AIが直前の返答に添えた簡易返信。押すとその文字列がそのまま発言として送られ、次の発言で消える */
+  askOptions: string[];
   onOpenTask: (id: number) => void;
   onSend: (message: string, attachments?: Attachment[]) => void;
   onStop: () => void;
@@ -264,6 +267,22 @@ export default function Chat({
               ))}
               {/* リコメンドチップは会話が始まる前だけ表示 (押した瞬間チャットが始まり消える #75)。
                   固定チップ=即時 / ✨AI提案=非同期でちょい後に合流 */}
+              {/* AIが添えた簡易返信ボタン。承認UIではなく入力の近道なので、
+                  押さずに自由に打ち返してよいし、無視して別の話をしてもよい */}
+              {askOptions.length > 0 && !sending && (
+                <div className="flex flex-wrap items-center gap-2 pt-1.5">
+                  {askOptions.map((o, i) => (
+                    <button
+                      key={i}
+                      data-testid={`ask-option-${i}`}
+                      onClick={() => onSend(o)}
+                      className="rounded-full border border-slate-300 bg-white px-3.5 py-1.5 text-sm text-slate-700 shadow-sm hover:border-indigo-400 hover:bg-indigo-50 hover:text-indigo-700"
+                    >
+                      {o}
+                    </button>
+                  ))}
+                </div>
+              )}
               {log.length === 0 && suggestions.length > 0 && (
                 <div className="flex flex-wrap items-center gap-2.5 pt-2">
                   {suggestions.map((s, i) => (

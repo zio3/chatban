@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { extractChoices } from "./chat.js";
 import { differs } from "./archive.js";
 import { isAllowed, pickSpeaker, readCookie } from "./auth.js";
-import { DONE_GATE_RULE, isTaskStatus, mayEnterDone } from "./db.js";
+import { DONE_GATE_RULE, exportableSettings, isTaskStatus, mayEnterDone } from "./db.js";
 import { AGENT_STATUS_VALUES } from "./chat.js";
 
 // 返信ボタンの記法 [[選択肢]] の取り出し。
@@ -181,4 +181,22 @@ test("知らない値は列として認めない", () => {
   assert.equal(isTaskStatus(undefined), false);
   assert.equal(isTaskStatus(null), false);
   assert.equal(isTaskStatus(3), false);
+});
+
+// Export は「検証のために人へ渡すファイル」「記事の一次資料」。settings を全行そのまま
+// 出していたため、セッション署名鍵が平文で入っていた (自動レビュー指摘)。
+// 鍵があれば任意のメールアドレスでCookieを偽造でき、許可リストも同じファイルにある。
+
+test("Exportに署名鍵の実物を載せない", () => {
+  const rows = exportableSettings();
+  const secret = rows.find((r) => r.key === "auth.sessionSecret");
+  // 環境によっては未発行 (一度もログインしていない) ので、有るときだけ確かめる
+  if (secret) assert.equal(secret.value, "***");
+  for (const r of rows) assert.ok(!/^[0-9a-f]{64}$/.test(r.value), `${r.key} に64桁hexが素で載っている`);
+});
+
+test("伏せるのは鍵だけ。設定が存在したことは記録として残す", () => {
+  const rows = exportableSettings();
+  // モデル設定などは値ごと残る (#88: どのモデルで動いていたかを追うため)
+  for (const r of rows) assert.ok(typeof r.key === "string" && r.key.length > 0);
 });

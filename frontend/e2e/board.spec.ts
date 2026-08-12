@@ -1042,6 +1042,13 @@ test("全ログExportは人が読める形で返る (改行とインデント)",
   expect(text.split("\n").length).toBeGreaterThan(10); // 1行に潰れていない
   expect(text).toContain('\n  "'); // トップレベルのキーが2スペース下がっている
   expect(() => JSON.parse(text)).not.toThrow(); // 整形してもJSONとして壊れていない
+
+  // Exportは人に渡すファイル。セッション署名鍵が平文で入っていると、
+  // 渡した先で任意のメールアドレスのCookieを偽造できる
+  const dump = JSON.parse(text) as { settings: { key: string; value: string }[] };
+  const secret = dump.settings.find((r) => r.key === "auth.sessionSecret");
+  if (secret) expect(secret.value).toBe("***");
+  expect(text).not.toMatch(/"[0-9a-f]{64}"/); // 64桁hexが素で出ていない
 });
 
 test("Doneから差し戻すと検収の印は消える (確認し直さずに戻せない)", async () => {

@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import Database from "better-sqlite3";
-import { existsSync, mkdirSync, readdirSync, renameSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, renameSync, unlinkSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { log } from "./log.js";
 
@@ -765,97 +765,109 @@ export function migrateLegacyDbIfNeeded(): void {
     return;
   }
 
-  const p = insertProject("ChatBan開発");
-  const dest = projectFilePath(p);
+  // **原本には最後まで触らない。**コピーを作り、コピーに対して作業し、
+  // 全部うまくいったときだけ原本を消す (外部レビュー指摘)。
+  //
+  // 以前は「移動してから作業し、失敗したら戻す」形にしていたが、戻せていなかった:
+  // projectDb() を呼んだ時点で移動後のファイルに ensureProjectSchema が当たり、
+  // 列の追加・改名・lane列の削除まで済んでいる。ファイルの場所を戻しても中身は別物だった。
+  // 管理DB側も、途中まで upsert した settings は戻せていなかった (既存値の上書きも含む)。
+  //
+  // VACUUM INTO なら**読み取り専用の接続からコピーが作れる**ので、
+  // WALのチェックポイントすら原本に対して行わなくて済む (コピー先は畳まれた状態で出る)。
   mkdirSync(PROJECT_DIR, { recursive: true });
-  // WALを畳んでから移動する (-wal/-shm を持ち歩かなくて済む)
-  const src = open(legacy);
-  src.pragma("wal_checkpoint(TRUNCATE)");
-  src.close();
-  const moved: [string, string][] = [];
-  renameSync(legacy, dest);
-  moved.push([dest, legacy]);
-  for (const sfx of ["-wal", "-shm"]) {
-    if (existsSync(legacy + sfx)) {
-      renameSync(legacy + sfx, dest + sfx);
-      moved.push([dest + sfx, legacy + sfx]);
+  const work = join(PROJECT_DIR, `.migrating-${process.pid}.db`);
+  if (existsSync(work)) unlinkSync(work); // 前回の異常終了の残骸
+  {
+    const ro = new Database(legacy, { readonly: true });
+    try {
+      ro.prepare("VACUUM INTO ?").run(work);
+    } finally {
+      ro.close();
     }
   }
 
+  let projectId: number | undefined;
   let carried = 0;
   try {
-    const pdb = projectDb(p.id);
-    // llm_calls を管理DBへ引っ越す (プロジェクトDB側からは落とす)。
-    //
-    // **例外を「テーブルが無い」の代わりにしない** (外部レビュー指摘)。
-    // 初期版のDBには cached_tokens が無いので SELECT が no such column で失敗する。
-    // それを「無い」として空で通すと、下の DROP まで進んで**コスト記録が全部消える**。
-    // 存在は sqlite_master で確かめ、**実際にある列だけ**を移す
-    if (hasTable(pdb, "llm_calls")) {
-      const have = columnsOf(pdb, "llm_calls");
-      const wanted = [
-        "purpose",
-        "model",
-        "routed_model",
-        "prompt_tokens",
-        "completion_tokens",
-        "cached_tokens",
-        "elapsed_ms",
-        "created_at",
-      ].filter((c) => have.has(c));
-      const rows = pdb.prepare(`SELECT ${wanted.join(", ")} FROM llm_calls ORDER BY id`).all() as any[];
-      const cols = [...wanted, "project_id"];
-      const ins = admin.prepare(
-        `INSERT INTO llm_calls (${cols.join(", ")}) VALUES (${cols.map(() => "?").join(", ")})`
+    // スキーマを当てるのも読むのも、DROPするのも**コピーに対して**
+    const wdb = new Database(work);
+    let calls: { cols: string[]; rows: any[] } = { cols: [], rows: [] };
+    let settings: { key: string; value: string }[] = [];
+    try {
+      ensureProjectSchema(wdb);
+      // **例外を「テーブルが無い」の代わりにしない** (外部レビュー指摘)。
+      // 初期版のDBには cached_tokens が無いので SELECT が no such column で失敗する。
+      // それを「無い」として空で通すと DROP まで進んで**コスト記録が全部消える**。
+      // 存在は sqlite_master で確かめ、**実際にある列だけ**を移す
+      if (hasTable(wdb, "llm_calls")) {
+        const have = columnsOf(wdb, "llm_calls");
+        const cols = [
+          "purpose",
+          "model",
+          "routed_model",
+          "prompt_tokens",
+          "completion_tokens",
+          "cached_tokens",
+          "elapsed_ms",
+          "created_at",
+        ].filter((c) => have.has(c));
+        calls = { cols, rows: wdb.prepare(`SELECT ${cols.join(", ")} FROM llm_calls ORDER BY id`).all() as any[] };
+      }
+      if (hasTable(wdb, "settings")) {
+        settings = wdb.prepare("SELECT key, value FROM settings").all() as { key: string; value: string }[];
+      }
+      // 管理DBへ移したもの / プロジェクトDBに居るべきでないものを落とす
+      // (projects・project_members は project_id 方式を試した名残。空のまま残っている)
+      wdb.exec(
+        "DROP TABLE IF EXISTS llm_calls; DROP TABLE IF EXISTS settings; DROP TABLE IF EXISTS projects; DROP TABLE IF EXISTS project_members;"
       );
-      admin.transaction(() => {
-        for (const r of rows) ins.run(...wanted.map((c) => r[c]), p.id);
-      })();
-      carried = rows.length;
-      const dropped = wanted.length < 8 ? ` (この版に無い列: ${8 - wanted.length}個)` : "";
-      log("project", `llm_calls ${carried}件を管理DBへ移しました${dropped}`);
-    } else {
-      log("project", `${legacy} に llm_calls はありませんでした (引き継ぐコスト記録なし)`);
+    } finally {
+      wdb.close();
     }
-    // 旧 settings も引き継ぐ (モデル設定はアプリ全体の設定として管理DBへ)
-    if (hasTable(pdb, "settings")) {
-      const s = pdb.prepare("SELECT key, value FROM settings").all() as { key: string; value: string }[];
+
+    // 管理DBへの書き込みは**まとめて1トランザクション**。
+    // プロジェクト行の作成もこの中に入れる — 外に出すと、後続で失敗したとき行だけが残り、
+    // 次の起動で listProjects().length > 0 により移行そのものが飛ばされる (指摘)
+    projectId = admin.transaction(() => {
+      const p = insertProject("ChatBan開発");
+      if (calls.rows.length > 0) {
+        const cols = [...calls.cols, "project_id"];
+        const ins = admin.prepare(
+          `INSERT INTO llm_calls (${cols.join(", ")}) VALUES (${cols.map(() => "?").join(", ")})`
+        );
+        for (const r of calls.rows) ins.run(...calls.cols.map((c) => r[c]), p.id);
+      }
       const insS = admin.prepare(
         "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value"
       );
-      for (const r of s) insS.run(r.key, r.value);
+      for (const r of settings) insS.run(r.key, r.value);
+      return p.id;
+    })();
+    carried = calls.rows.length;
+
+    // ここまで来たら置き場所へ移し、原本を消す。**成功して初めて原本に触る**
+    const dest = projectFilePath(getProject(projectId)!);
+    renameSync(work, dest);
+    unlinkSync(legacy);
+    for (const sfx of ["-wal", "-shm"]) {
+      if (existsSync(legacy + sfx)) unlinkSync(legacy + sfx);
     }
-    // 管理DBへ移したもの / プロジェクトDBに居るべきでないものを落とす
-    // (projects・project_members は project_id 方式を試した名残。空のまま残っている)
-    pdb.exec(
-      "DROP TABLE IF EXISTS llm_calls; DROP TABLE IF EXISTS settings; DROP TABLE IF EXISTS projects; DROP TABLE IF EXISTS project_members;"
-    );
+    setActiveProjectId(projectId);
+    const dropped = calls.cols.length > 0 && calls.cols.length < 8 ? ` / この版に無い列: ${8 - calls.cols.length}個` : "";
+    log("project", `migrated legacy ${legacy} -> ${dest} (llm_calls ${carried}件を管理DBへ${dropped})`);
   } catch (e: any) {
-    // **失敗したら消さずに戻す。**引き継ぎに失敗したものを DROP すると、
-    // 起動はできても記録が消えている状態になる — 起動しないほうがまだ直せる。
-    // ファイルを元の場所へ返し、管理DBの行も消して、次の起動でやり直せる形にする
-    closeProjectDb(p.id);
-    for (const [from, to] of moved) {
-      try {
-        if (existsSync(from)) renameSync(from, to);
-      } catch {
-        /* 戻せなくても、下の throw で人間に見せるのが先 */
-      }
-    }
+    // コピーを捨てるだけ。管理DBはトランザクションごと巻き戻り、**原本は一度も触っていない**
     try {
-      admin.prepare("DELETE FROM llm_calls WHERE project_id = ?").run(p.id);
-      admin.prepare("DELETE FROM projects WHERE id = ?").run(p.id);
-      if (existsSync(dest)) renameSync(dest, legacy);
+      if (existsSync(work)) unlinkSync(work);
     } catch {
-      /* 同上 */
+      /* 消せなくても、下の throw で人間に見せるのが先 */
     }
-    log("project", `${legacy} の取り込みに失敗したので元に戻しました: ${e?.message ?? e}`);
+    log("project", `${legacy} の取り込みに失敗しました (原本はそのまま): ${e?.message ?? e}`);
     throw new Error(
-      `旧DB (${legacy}) の取り込みに失敗しました。原本は元の場所に戻してあります。中身を確認してください: ${e?.message ?? e}`
+      `旧DB (${legacy}) の取り込みに失敗しました。原本には手を付けていないので、中身を確認してから起動し直してください: ${e?.message ?? e}`
     );
   }
-  setActiveProjectId(p.id);
-  log("project", `migrated legacy ${legacy} -> ${dest} (llm_calls ${carried}件を管理DBへ)`);
 }
 
 /** 起動時に孤児ファイルを拾わないための健全性チェック (ログのみ) */

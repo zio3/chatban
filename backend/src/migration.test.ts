@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import Database from "better-sqlite3";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -97,6 +98,35 @@ const projectNames = (dataDir: string): string[] => {
     db.close();
   }
 };
+const countSettings = (dataDir: string): number => {
+  const db = new Database(adminOf(dataDir), { readonly: true });
+  try {
+    return (db.prepare("SELECT COUNT(*) c FROM settings").get() as { c: number }).c;
+  } finally {
+    db.close();
+  }
+};
+
+/** 原本が変わっていないことを、ファイルの中身そのもので確かめる */
+const sha256 = (path: string): string => createHash("sha256").update(readFileSync(path)).digest("hex");
+const schemaOf = (path: string): string[] => {
+  const db = new Database(path, { readonly: true });
+  try {
+    return (db.prepare("SELECT sql FROM sqlite_master ORDER BY name").all() as { sql: string | null }[])
+      .map((r) => r.sql ?? "")
+      .filter(Boolean);
+  } finally {
+    db.close();
+  }
+};
+const taskTitles = (path: string): string[] => {
+  const db = new Database(path, { readonly: true });
+  try {
+    return (db.prepare("SELECT title FROM tasks ORDER BY id").all() as { title: string }[]).map((r) => r.title);
+  } finally {
+    db.close();
+  }
+};
 
 test("0バイトのDBファイルは無視して正常に起動する", () => {
   withTempDir((dir) => {
@@ -156,6 +186,48 @@ test("ChatBanの旧DBは取り込む。コスト記録も引き継ぐ", () => {
     assert.equal(existsSync(legacy), false, "原本は data/projects/ へ移動している");
     assert.deepEqual(projectNames(dataDir), ["ChatBan開発"]);
     assert.equal(countLlmCalls(dataDir), 3, "コスト記録が引き継がれるべき");
+  });
+});
+
+test("移行の途中で失敗しても、原本も管理DBも変わらない", () => {
+  // 以前は「移動してから作業し、失敗したら戻す」形で、戻せていなかった:
+  // projectDb() を呼んだ時点で移動後のファイルにスキーマ変更が当たっており、
+  // 場所を戻しても中身は別物。settings の upsert も戻せていなかった (既存値の上書きを含む)。
+  //
+  // 失敗は自然に起こせるものを使う: 管理DBの settings.value は NOT NULL なので、
+  // 旧DBに value=NULL の行があると upsert がそこで落ちる
+  withTempDir((dir) => {
+    const legacy = join(dir, "chatban.db");
+    makeLegacyDb(legacy, { cachedTokens: true, llmCalls: 4 });
+    const db = new Database(legacy);
+    db.exec("CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT)");
+    db.prepare("INSERT INTO settings (key, value) VALUES (?, ?)").run("model.main", "openai/x");
+    db.prepare("INSERT INTO settings (key, value) VALUES (?, NULL)").run("壊れている行");
+    db.close();
+
+    const before = { hash: sha256(legacy), schema: schemaOf(legacy), tasks: taskTitles(legacy) };
+    const dataDir = join(dir, "data");
+
+    const r = runMigration(dataDir, legacy, dir);
+    assert.equal(r.ok, false, "失敗するべきケース");
+    assert.match(r.output, /手を付けていない/, "原本に触っていないことを伝えるべき");
+
+    // 原本が1バイトも変わっていない (スキーマ変更が当たっていない・データも無事)
+    assert.ok(existsSync(legacy), "原本は元の場所にあるべき");
+    assert.equal(sha256(legacy), before.hash, "原本のハッシュが変わっている");
+    assert.deepEqual(schemaOf(legacy), before.schema, "原本のスキーマが変わっている");
+    assert.deepEqual(taskTitles(legacy), before.tasks, "原本のデータが変わっている");
+
+    // 管理DBも元どおり (途中まで入った行が残らない)
+    assert.deepEqual(projectNames(dataDir), [], "プロジェクト行が残っている");
+    assert.equal(countLlmCalls(dataDir), 0, "コスト記録が中途半端に入っている");
+    assert.equal(countSettings(dataDir), 0, "設定が中途半端に入っている");
+
+    // 作業用のコピーも残らない
+    const leftovers = existsSync(join(dataDir, "projects"))
+      ? readdirSync(join(dataDir, "projects")).filter((f) => f.includes("migrating"))
+      : [];
+    assert.deepEqual(leftovers, [], "作業用コピーが残っている");
   });
 });
 

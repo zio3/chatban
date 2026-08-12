@@ -223,9 +223,16 @@ export default function App() {
     const ids = tasks.filter((t) => t.status === "review" && t.checkedAt).map((t) => t.id);
     if (ids.length === 0) return;
     // 複数前提の一括確定API (#60): N件でも要約再生成は1回
-    api.approveTasks(ids).catch((e) => {
-      setToast({ message: `検収に失敗しました: ${e?.message ?? e}` });
-    });
+    api
+      .approveTasks(ids)
+      // #1: 条件を満たさないものはサーバーが弾いて note で理由を返す。
+      // HTTPは200なので、ここで見ないと「押したのに動かない」だけが残る
+      .then((r) => {
+        if (!r.ok && r.note) setToast({ message: r.note });
+      })
+      .catch((e) => {
+        setToast({ message: `検収に失敗しました: ${e?.message ?? e}` });
+      });
   }, [tasks]);
 
 

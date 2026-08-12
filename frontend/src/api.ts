@@ -2,7 +2,18 @@ import { currentProjectHeader } from "./project";
 import type { ChatResponse, Member, SummaryCard, Task, TaskStatus } from "./types";
 
 async function json<T>(res: Response): Promise<T> {
-  if (!res.ok) throw new Error(`${res.status}: ${await res.text()}`);
+  // サーバーは断る理由を {error} で返すので、それをそのまま人に見せる。
+  // ステータスと生のJSONを並べても、読む人には何が起きたか分からない
+  if (!res.ok) {
+    const body = await res.text();
+    let message = body;
+    try {
+      message = JSON.parse(body)?.error ?? body;
+    } catch {
+      /* JSONでなければ本文をそのまま */
+    }
+    throw new Error(message || `${res.status}`);
+  }
   return res.json();
 }
 
@@ -77,18 +88,21 @@ export const api = {
     }).then((r) => json<Task>(r)),
   getTask: (id: number) => apiFetch(`/api/tasks/${id}`).then((r) => json<Task>(r)),
   // #108: 検収の印。この口はRESTにしか無い (エージェントは読めるが書けない)
+  // fetch はHTTPエラーでは reject しないので、json() を通さないと呼び出し側の
+  // .catch (楽観更新のロールバック) が永久に発火しない。サーバーが409で断っても
+  // 画面はチェック済みのまま、という食い違いになる
   setChecked: (id: number, checked: boolean) =>
     apiFetch(`/api/tasks/${id}/checked`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ checked }),
-    }),
+    }).then((r) => json<Task>(r)),
   approveTasks: (ids: number[]) =>
     apiFetch("/api/tasks/approve", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ ids }),
-    }).then((r) => json<{ ok: boolean }>(r)),
+    }).then((r) => json<{ ok: boolean; note?: string }>(r)),
   chatLog: (taskId?: number) =>
     apiFetch(`/api/chat/log${taskId != null ? `?taskId=${taskId}` : ""}`).then((r) =>
       json<{ messages: { role: "user" | "assistant"; content: string; trace?: unknown; usage?: unknown }[] }>(r)

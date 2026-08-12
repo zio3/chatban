@@ -874,11 +874,18 @@ export function loadModelPrices() {
  * 失敗が安全側に倒れる。
  *
  * ここは QUERY_LOG_DESCRIPTION (ツール説明に書いてあるテーブル一覧) と同じ集合であるべきなので、
- * 説明とコードがズレていないことを E2E で確かめている (入口ごとの書き分けは #92 #108 #114 で3回ズレた) */
+ * 説明とコードがズレていないことを E2E で確かめている (入口ごとの書き分けは #92 #108 #114 で3回ズレた)。
+ *
+ * **ビューはテーブルと同じ扱い** (判定を type IN ('table','view') から作っている)。
+ * ただし**ビューを載せることは、そのビューが中で参照しているテーブルを載せることと同じ**。
+ * 名前の照合はSQLの文字列しか見ないし、EXPLAIN も展開後を見るので、定義の中身までは辿らない。
+ * いまの live_tasks / done_tasks はどちらも tasks しか見ておらず、その tasks も載っているので実害はない。
+ * 機密を参照するビューを「列を絞ってあるから安全」と足すと、そこから読めるようになる —
+ * ここは見える名前の一覧ではなく、**到達できる範囲の宣言**として読むこと */
 export const PUBLIC_TABLES: Record<"cost" | "audit", readonly string[]> = {
   // 請求は口座単位なので全プロジェクト横断 (projects は名前を引くため)
   cost: ["llm_calls", "model_prices", "projects"],
-  // 接続中のプロジェクトの記録だけ。live_tasks / done_tasks はビュー
+  // 接続中のプロジェクトの記録だけ。live_tasks / done_tasks はビュー (どちらも tasks を見ている)
   audit: [
     "tasks",
     "live_tasks",

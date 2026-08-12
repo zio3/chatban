@@ -238,9 +238,18 @@ export function restoreTask(id: number): Task | undefined {
   return getTask(id);
 }
 
-/** 実体を消す。人間のUI操作からのみ通す (チャット・MCPからは呼ばない) */
+/** 実体を消す。人間のUI操作からのみ通す (チャット・MCPからは呼ばない)。
+ *
+ * **ゴミ箱にあるものだけ。** id しか見ていなかったので、ボード上の生タスクのIDを
+ * 直接投げると、ゴミ箱を経由せず実体が消えた (自動レビュー指摘)。
+ * #102 で「間違えないようにするのではなく、間違えても取り返しがつく形にする」と決めたのに、
+ * 取り返しのつかない口が条件なしで開いていた — 一段目(ゴミ箱)を通っていないものを
+ * 二段目(完全削除)が受け付けるなら、二段構えの意味がない。
+ *
+ * 復元できる状態を必ず一度経由させる。条件はコードで持つ (UIがゴミ箱画面からしか
+ * 呼ばない、に依存しない — #57/#69 と同じ形) */
 export function purgeTask(id: number): boolean {
-  return db().prepare("DELETE FROM tasks WHERE id = ?").run(id).changes > 0;
+  return db().prepare("DELETE FROM tasks WHERE id = ? AND trashed_at IS NOT NULL").run(id).changes > 0;
 }
 
 export function listMembers(): Member[] {

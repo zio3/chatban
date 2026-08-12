@@ -1107,6 +1107,54 @@ test("ゴミ箱のタスクは担当負荷にもプロジェクト件数にも�
   expect(after.project).toBe(beforeCount);
 });
 
+test("完全削除はゴミ箱を通ったものだけ (取り返しのつく形を必ず一度経由させる)", async () => {
+  // #102 で「間違えないようにするのではなく、間違えても取り返しがつく形にする」と決めたのに、
+  // DELETE /api/trash/:id が id しか見ておらず、ボード上の生タスクのIDを直接投げると
+  // ゴミ箱を経由せず実体が消えた (自動レビュー指摘)。二段構えの二段目が無条件では意味がない
+  const alive = await createTask("完全削除: 生きているタスク");
+  const purge = (id: number) => fetch(`${API}/api/trash/${id}`, { method: "DELETE" });
+
+  const ng = await purge(alive);
+  expect(ng.status).toBe(409);
+  expect((await ng.json()).error).toContain("ゴミ箱にないタスク");
+  expect(await getTaskStatus(alive)).toBe("todo"); // 消えていない
+
+  // ゴミ箱へ移してからなら通る
+  await fetch(`${API}/api/tasks/${alive}`, { method: "DELETE" });
+  expect((await purge(alive)).status).toBe(200);
+  expect((await fetch(`${API}/api/tasks/${alive}`)).status).toBe(404);
+
+  // 存在しないIDは404 (「ゴミ箱に無い」と「そもそも無い」を区別する)
+  expect((await purge(999999)).status).toBe(404);
+});
+
+test("不正なmembersは書き込む前に断る (途中まで適用して500にしない)", async () => {
+  // 配列かどうかしか見ておらず、数値やnullが混ざるとDB層の .trim() で例外になっていた。
+  // 新規作成は行とDBファイルを作った後に落ちるので一覧に作りかけが残り、
+  // 更新は名前を変えた後に落ちるので500なのに名前だけ変わる
+  const names = async () => ((await (await fetch(`${API}/api/projects`)).json()).projects as any[]).map((p) => p.name);
+  const before = await names();
+
+  const created = await fetch(`${API}/api/projects`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name: "E2E: 作りかけが残らない", members: ["zio", 1] }),
+  });
+  expect(created.status).toBe(400);
+  expect(await names()).toEqual(before); // 作りかけが残っていない
+
+  // 更新側も、名前だけ変わることがない
+  const target = (await (await fetch(`${API}/api/projects`)).json()).projects[0];
+  const patched = await fetch(`${API}/api/projects/${target.id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name: "E2E: この名前にはならない", members: [null] }),
+  });
+  expect(patched.status).toBe(400);
+  const after = (await (await fetch(`${API}/api/projects`)).json()).projects.find((p: any) => p.id === target.id);
+  expect(after.name).toBe(target.name);
+});
+
 test("Doneから差し戻すと検収の印は消える (確認し直さずに戻せない)", async () => {
   // approveChecked が checked_at を「人が確かめた唯一の証拠」にしたので、
   // 差し戻しで印が残ると、確認し直さずにもう一度Doneへ通せてしまう

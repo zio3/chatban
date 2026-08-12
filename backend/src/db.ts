@@ -247,12 +247,22 @@ export function listMembers(): Member[] {
   return db().prepare("SELECT * FROM members ORDER BY id").all() as Member[];
 }
 
+/** 担当ごとの未完了件数。**ボードに見えているものだけを数える。**
+ *
+ * ゴミ箱もアーカイブ済みも数えていたので、消したタスクが担当者に乗り続けていた
+ * (自動レビュー指摘)。この数字はLLMのシステムプロンプトに入って割り振り判断の材料になるので、
+ * ずれると「消したタスクのせいでAIがその人を忙しいと誤認し、別の人へ振る」ことになる。
+ * 画面に出ている数字が違う、で済まない — 判断材料そのものが汚れる。
+ *
+ * 条件はボードの一覧 (live_tasks) と同じにする。母集団の条件を書き分けると必ずズレる */
 export function memberLoads(): { name: string; openTasks: number }[] {
   return listMembers().map((m) => ({
     name: m.name,
     openTasks: (
       db()
-        .prepare("SELECT COUNT(*) AS c FROM tasks WHERE assignee = ? AND status != 'done'")
+        .prepare(
+          "SELECT COUNT(*) AS c FROM tasks WHERE assignee = ? AND status != 'done' AND trashed_at IS NULL AND archived = 0"
+        )
         .get(m.name) as { c: number }
     ).c,
   }));

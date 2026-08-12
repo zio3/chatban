@@ -189,10 +189,26 @@ const room = (projectId: number) => `project:${projectId}`;
 
 io.on("connection", (socket) => {
   const q = socket.handshake.query.project;
-  const requested = q != null ? Number(q) : NaN;
-  const pinned = Number.isFinite(requested) && !!getProject(requested);
-  socket.data.pinned = pinned;
-  socket.join(room(pinned ? requested : activeProjectId()));
+  // 指定なし (query が無い) = 表示中のプロジェクトに追従。指定あり = その1つに固定
+  if (q == null || q === "") {
+    socket.data.pinned = false;
+    socket.join(room(activeProjectId()));
+    return;
+  }
+  const requested = Number(q);
+  // #125: 指定したのに存在しないプロジェクトなら、どのroomにも入れない。
+  // 以前は「指定なし」と同じ扱いにして既定プロジェクトのroomへ入れていたので、
+  // /p/999999 を開くと REST は400で読み込み失敗になる一方、Socket からは既定プロジェクトの
+  // board:changed が届き、**存在しないURLの上に別プロジェクトのタスクが並んだ**
+  // (自動レビュー指摘)。RESTが拒否するものを Socket が黙って別物にすり替えない —
+  // 入口ごとに境界が違うと、利用者はどちらを信じてよいか分からない
+  if (!Number.isFinite(requested) || !getProject(requested)) {
+    socket.data.pinned = true; // 追従の対象にもしない (あとから既定へ引き込まれないように)
+    log("api", `存在しないプロジェクト #${String(q)} を指定したSocket接続をどのroomにも入れませんでした`);
+    return;
+  }
+  socket.data.pinned = true;
+  socket.join(room(requested));
 });
 
 /** 表示中プロジェクトが変わったとき、追従組を新しいroomへ移す (明示指定のクライアントはそのまま) */

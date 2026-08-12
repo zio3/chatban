@@ -681,18 +681,48 @@ export function trashProject(id: number): void {
 
 // --- 旧構成 (backend/chatban.db 単一ファイル) からの移行 -------------------
 
+/** 取り込んでよい旧DBか。空ファイル・別物・壊れたファイルを移行対象にしない。
+ * 判定は tasks テーブルの有無 — ChatBanのDBなら必ずあり、たまたま同名の別ファイルには無い */
+function looksLikeChatBanDb(path: string): boolean {
+  if (!existsSync(path)) return false;
+  let probe: Database.Database | undefined;
+  try {
+    probe = new Database(path, { readonly: true });
+    return !!probe.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='tasks'").get();
+  } catch {
+    return false; // SQLiteですらない・壊れている
+  } finally {
+    probe?.close();
+  }
+}
+
 /** 起動時に一度だけ: 旧 chatban.db があればプロジェクト1として取り込む。
  * llm_calls だけは管理DBへ移す (コストは口座単位で見るため) */
 export function migrateLegacyDbIfNeeded(): void {
   if (listProjects().length > 0) return;
 
   const legacy = process.env.DB_PATH ?? "chatban.db";
-  if (!existsSync(legacy)) {
-    // まっさらな環境: 既定のプロジェクトを1つ作るだけ
+
+  // まっさらな環境: 既定のプロジェクトを1つ作るだけ
+  const startEmpty = () => {
     const p = insertProject("マイプロジェクト");
     projectDb(p.id);
     setActiveProjectId(p.id);
     log("project", `initialized empty project #${p.id}`);
+  };
+
+  // **ファイルがあるだけでは取り込まない。**中身がChatBanのDBかを先に確かめる。
+  //
+  // 実際に踏んだ: 調査中に作られた0バイトの chatban.db が置かれていただけで、
+  // 移行に入って rename を済ませたあと llm_calls の SELECT で落ち、**サーバーが起動しなくなった**。
+  // しかも rename は済んでいるので、次の起動では legacy が無く「まっさら」扱いになる —
+  // 1回だけ落ちて、症状が消える。原因に辿り着きにくい壊れ方だった。
+  //
+  // 「途中まで適用して失敗」を作らない (#120と同じ考え方)。動かす前に確かめる
+  if (!looksLikeChatBanDb(legacy)) {
+    if (existsSync(legacy))
+      log("project", `${legacy} は取り込みませんでした (ChatBanのDBに見えません。tasks テーブルがありません)`);
+    startEmpty();
     return;
   }
 
@@ -709,12 +739,19 @@ export function migrateLegacyDbIfNeeded(): void {
   }
 
   const pdb = projectDb(p.id);
-  // llm_calls を管理DBへ引っ越す (プロジェクトDB側からは落とす)
-  const rows = pdb
-    .prepare(
-      "SELECT purpose, model, routed_model, prompt_tokens, completion_tokens, cached_tokens, elapsed_ms, created_at FROM llm_calls ORDER BY id"
-    )
-    .all() as any[];
+  // llm_calls を管理DBへ引っ越す (プロジェクトDB側からは落とす)。
+  // 無くても落とさない — ここで投げると、rename が済んだあとなので中途半端な状態で起動不能になる。
+  // 隣の settings は最初から try で囲ってあったのに、こちらだけ無防備だった
+  let rows: any[] = [];
+  try {
+    rows = pdb
+      .prepare(
+        "SELECT purpose, model, routed_model, prompt_tokens, completion_tokens, cached_tokens, elapsed_ms, created_at FROM llm_calls ORDER BY id"
+      )
+      .all() as any[];
+  } catch {
+    log("project", `${legacy} に llm_calls がありませんでした (コスト記録の引き継ぎはスキップします)`);
+  }
   const ins = admin.prepare(
     "INSERT INTO llm_calls (purpose, model, routed_model, prompt_tokens, completion_tokens, cached_tokens, elapsed_ms, project_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
   );

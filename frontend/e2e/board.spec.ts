@@ -1502,3 +1502,25 @@ test("AI提案チップはプロジェクトごとにOFFにできる。OFFの間
   await expect(toggle).toHaveText("💡 提案ON");
   expect(await enabledOf(1)).toBe(true);
 });
+
+test("チャットの処理中は提案チップを生成しない (#162)", async () => {
+  // 上流が遅いときに並走するとTTFTが悪化する (実測: 単独12秒 → 3本並走で30〜55秒)。
+  // しかもチップは会話が始まる前にしか出ないので、送信した瞬間から表示される余地が無い。
+  // ここではLLMを呼ばずに、抑止のフラグが立っている間だけ空になることを確かめる
+  const id = await createTask("チャット中の抑止を確かめる");
+
+  // 応答が返る前に叩きたいので、待たずに走らせる。E2E環境のLLMは失敗してよい
+  // (成否によらず runChatTurn には入るので、その間フラグは立つ)
+  const chatting = fetch(`${API}/api/tasks/${id}/chat`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ message: "状況は?", history: [] }),
+  }).catch(() => null);
+
+  // 立ち上がりを待ってから確認する
+  await new Promise((r) => setTimeout(r, 300));
+  const during = (await (await fetch(`${API}/api/suggestions`)).json()) as any;
+  expect(during.suggestions).toEqual([]);
+
+  await chatting;
+});

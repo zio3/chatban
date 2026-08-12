@@ -685,10 +685,26 @@ const SUGGEST_TTL_MS = 5 * 60 * 1000;
 // プロジェクトAの生成中にBが要求したときAの結果がBへ返る (タブごとに別プロジェクト #97)
 const suggestInflight = new Map<string, Promise<{ label: string; message: string }[]>>();
 
+/** #162: いまチャットを処理中のプロジェクト。提案チップはこの間だけ譲る。
+ *
+ * 上流が遅いときに並走するとTTFTが目に見えて悪化する (実測: 単独12秒 → chat+chat+suggest の
+ * 3本並走で30〜55秒)。しかもチップは「会話が始まる前」にしか表示されない (log.length===0) ので、
+ * 送信した瞬間から画面に出る余地が無い — **表示されないものを作るために待たされていた**。
+ *
+ * プロジェクト単位で持つのは #119 と同じ理由。1本しか持たないと、
+ * Aのチャット中にBの提案まで止まる (タブごとに別プロジェクト #97) */
+const chatInflight = new Map<number, number>();
+
+export function isChatBusy(projectId: number): boolean {
+  return (chatInflight.get(projectId) ?? 0) > 0;
+}
+
 export async function generateSuggestions(): Promise<{ label: string; message: string }[]> {
   // #167: このプロジェクトで提案チップを切っているなら、LLMを呼ばずに空で返す。
   // 表示だけ消す形にしなかったのは、切っている間は呼び出し自体を止めたいため (コストも止まる)
   if (!suggestEnabled(currentProjectId())) return [];
+  // #162: 会話の処理中は譲る。この間はチップが表示されないので、生成しても捨てるだけになる
+  if (isChatBusy(currentProjectId())) return [];
   // 新規プロジェクト(ボードが空)では読むべき文脈が無い。LLMを呼ばずに空で返す
   // — UI側は「方針を伝える」導線だけを出す (#86)
   if (listTasks().length === 0 && listSummaryCards().length === 0) return [];
@@ -747,6 +763,38 @@ export async function runChatTurn(
   attachments?: ChatAttachment[],
   view?: string,
   /** #126: 発言者がログイン済みか。自己申告と区別してプロンプトに書く */
+  speakerVerified?: boolean
+): Promise<ChatResult> {
+  const project = currentProjectId();
+  chatInflight.set(project, (chatInflight.get(project) ?? 0) + 1);
+  try {
+    return await runChatTurnInner(
+      userMessage,
+      history,
+      onEvent,
+      onProgress,
+      taskFocusId,
+      speaker,
+      attachments,
+      view,
+      speakerVerified
+    );
+  } finally {
+    const n = (chatInflight.get(project) ?? 1) - 1;
+    if (n > 0) chatInflight.set(project, n);
+    else chatInflight.delete(project);
+  }
+}
+
+async function runChatTurnInner(
+  userMessage: string,
+  history: { role: "user" | "assistant"; content: string }[],
+  onEvent: (kind: "board" | "proposals") => void,
+  onProgress?: (label: string) => void,
+  taskFocusId?: number,
+  speaker?: string,
+  attachments?: ChatAttachment[],
+  view?: string,
   speakerVerified?: boolean
 ): Promise<ChatResult> {
   const t0 = Date.now();

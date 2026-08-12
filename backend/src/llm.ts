@@ -231,8 +231,10 @@ export async function chatCompletion(
   purpose: string,
   model: string,
   params: Omit<OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming, "model">,
-  /** 応答が返らないまま詰まるのを防ぐ。省略時はSDK既定 (実際にタイトル生成が数分返らない事例があった) */
-  opts?: { timeoutMs?: number }
+  /** 応答が返らないまま詰まるのを防ぐ。省略時はSDK既定 (実際にタイトル生成が数分返らない事例があった)。
+   * signal: 呼び出しを途中でやめる (#162: チャットが始まったら提案の生成は捨てる。
+   * 結果を無視するだけでは上流の応答を待ち続けるので、TTFTの奪い合いが解消しない) */
+  opts?: { timeoutMs?: number; signal?: AbortSignal }
 ) {
   const t0 = Date.now();
   log("llm", `-> ${purpose} model=${model} messages=${params.messages.length}`);
@@ -241,9 +243,13 @@ export async function chatCompletion(
   const extra = params.tools?.length && NEEDS_REASONING_NONE.test(model) ? ({ reasoning_effort: "none" } as any) : {};
   let res;
   try {
+    const reqOpts = {
+      ...(opts?.timeoutMs ? { timeout: opts.timeoutMs } : {}),
+      ...(opts?.signal ? { signal: opts.signal } : {}),
+    };
     res = await client.chat.completions.create(
       { ...params, ...extra, model },
-      opts?.timeoutMs ? { timeout: opts.timeoutMs } : undefined
+      Object.keys(reqOpts).length > 0 ? reqOpts : undefined
     );
   } catch (e: any) {
     log("llm", `!! ${purpose} model=${model} FAILED after ${Date.now() - t0}ms: ${e?.status ?? ""} ${e?.message ?? e}`);

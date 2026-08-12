@@ -1524,3 +1524,32 @@ test("チャットの処理中は提案チップを生成しない (#162)", asyn
 
   await chatting;
 });
+
+test("先に始まっていた提案生成は、チャットが始まったら中断される (#162)", async () => {
+  // 開始時のフラグを見るだけでは片方向にしか効かない (外部レビュー指摘)。
+  // 実際の画面ではページ表示直後に /api/suggestions が走るので、
+  // 「suggest開始 → chat開始」のほうが普通の順番。こちらを止められないと意味がない。
+  //
+  // 結果を捨てるだけでは足りず、接続ごとやめる必要がある
+  // (捨てるだけだと上流の応答は待ち続けるので、止めたかったTTFTの奪い合いが残る)
+  const id = await createTask("suggest先行の中断を確かめる");
+
+  // suggestを先に始める。待たない
+  const suggesting = fetch(`${API}/api/suggestions`)
+    .then((r) => r.json())
+    .catch(() => null);
+
+  // 走り出してからチャットを送る
+  await new Promise((r) => setTimeout(r, 400));
+  const chatting = fetch(`${API}/api/tasks/${id}/chat`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ message: "状況は?", history: [] }),
+  }).catch(() => null);
+
+  // 中断されるので、チャットの完了を待たずに空で返る
+  const s = (await suggesting) as any;
+  expect(s?.suggestions).toEqual([]);
+
+  await chatting;
+});

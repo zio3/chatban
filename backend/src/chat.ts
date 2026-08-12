@@ -699,6 +699,27 @@ export function isChatBusy(projectId: number): boolean {
   return (chatInflight.get(projectId) ?? 0) > 0;
 }
 
+/** 進行中の提案生成。チャットが始まったら中断する。
+ *
+ * 開始時のフラグを見るだけでは**片方向にしか効かない** (外部レビュー指摘)。
+ * 実際の画面ではページ表示直後に /api/suggestions が走るので、
+ * 「suggest開始 → chat開始」が普通の順番で、そのままでは並走が残っていた。
+ *
+ * 結果を捨てるだけでは足りない — 上流の応答は待ち続けるので、
+ * 止めたかったTTFTの奪い合いがそのまま残る。**接続ごとやめる**必要がある。
+ *
+ * 同じプロジェクトで複数走りうる (suggestInflight のキーは systemPrompt なので、
+ * 内容が違えば並走する) ので Set で持つ */
+const suggestAborts = new Map<number, Set<AbortController>>();
+
+function abortSuggestsFor(projectId: number): void {
+  const set = suggestAborts.get(projectId);
+  if (!set?.size) return;
+  for (const ac of set) ac.abort();
+  set.clear();
+  log("chat", `提案の生成を中断しました (project #${projectId} でチャットが始まったため)`);
+}
+
 export async function generateSuggestions(): Promise<{ label: string; message: string }[]> {
   // #167: このプロジェクトで提案チップを切っているなら、LLMを呼ばずに空で返す。
   // 表示だけ消す形にしなかったのは、切っている間は呼び出し自体を止めたいため (コストも止まる)
@@ -715,30 +736,52 @@ export async function generateSuggestions(): Promise<{ label: string; message: s
   // 同時到着 (StrictModeの二重実行はほぼ同時に来る) は1本にまとめる
   const running = suggestInflight.get(systemPrompt);
   if (running) return running;
-  const job = generateSuggestionsUncached(systemPrompt)
+  // チャットが始まったら中断できるようにしておく
+  const project = currentProjectId();
+  const ac = new AbortController();
+  const acs = suggestAborts.get(project) ?? new Set<AbortController>();
+  acs.add(ac);
+  suggestAborts.set(project, acs);
+  const job = generateSuggestionsUncached(systemPrompt, ac.signal)
     .then((value) => {
       suggestCache = { key: systemPrompt, value, at: Date.now() };
       return value;
     })
+    // 中断は失敗ではない (チャットに譲っただけ)。呼び出し側の catch まで投げず空で返す —
+    // /api/suggestions は失敗を空配列に倒すので結果は同じだが、ログにエラーを残さない
+    .catch((e) => {
+      if (ac.signal.aborted) return [];
+      throw e;
+    })
     .finally(() => {
       suggestInflight.delete(systemPrompt);
+      acs.delete(ac);
+      if (acs.size === 0) suggestAborts.delete(project);
     });
   suggestInflight.set(systemPrompt, job);
   return job;
 }
 
-async function generateSuggestionsUncached(systemPrompt: string): Promise<{ label: string; message: string }[]> {
-  const res = await chatCompletion("suggest", getModel("main"), {
-    messages: [
+async function generateSuggestionsUncached(
+  systemPrompt: string,
+  signal: AbortSignal
+): Promise<{ label: string; message: string }[]> {
+  const res = await chatCompletion(
+    "suggest",
+    getModel("main"),
+    {
+      messages: [
       { role: "system", content: systemPrompt },
       {
         role: "user",
         content:
           'ボードの現状を読んで、いまユーザーにとって価値のある操作を最大3つ提案して。ツールは呼ばない。出力はJSON配列のみ: [{"label":"絵文字+15字以内の短文","message":"チャットにそのまま投げる依頼文"}]。期限接近・依存解除・検収たまり・未割り当てなど文脈が根拠のものを優先。',
       },
-    ],
-    tools: toolsFor(memberLoads().length === 0),
-  });
+      ],
+      tools: toolsFor(memberLoads().length === 0),
+    },
+    { signal }
+  );
   const text = res.choices[0].message.content ?? "";
   const m = text.match(/\[[\s\S]*\]/);
   if (!m) return [];
@@ -767,6 +810,9 @@ export async function runChatTurn(
 ): Promise<ChatResult> {
   const project = currentProjectId();
   chatInflight.set(project, (chatInflight.get(project) ?? 0) + 1);
+  // 先に始まっていた提案生成は捨てる。フラグだけでは「chat→suggest」の順しか止められず、
+  // 実際の画面で普通に起きる「suggest→chat」の順で並走が残っていた (外部レビュー指摘)
+  abortSuggestsFor(project);
   try {
     return await runChatTurnInner(
       userMessage,

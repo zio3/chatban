@@ -903,6 +903,10 @@ export function queryProjectData(sql: string, limit = 200) {
   return runReadonly(projectReadonly(), sql, limit, "audit");
 }
 
+/** 仮想テーブルを見つけて弾いたときの例外。EXPLAIN 自体の失敗と区別するために型で持つ
+ * (メッセージで見分けると、文言を直した瞬間に握り潰しへ倒れる) */
+class VirtualTableError extends Error {}
+
 function runReadonly(
   conn: ReturnType<typeof adminReadonly>,
   sql: string,
@@ -924,13 +928,30 @@ function runReadonly(
   const hit = forbidden.find((t) => new RegExp(`\\b${t}\\b`, "i").test(trimmed));
   if (hit) throw new Error(`${hit} は参照できません (この窓口から引けるのは ${allowed.join(" / ")} だけです)`);
   // 上の照合は「sqlite_master に載っているもの」から作るので、**sqlite_master 自身は載らない**。
-  // 旧実装は名前を直書きして閉じていたぶん、ここだけ許可リスト化で取りこぼした
-  // (E2Eが拾った)。内部の名前空間はまとめて閉じる — pragma関数もテーブルではないので同じ扱い。
-  // どちらもテーブルの一覧が読める経路で、閉じたい理由が同じ
-  if (/\b(sqlite|pragma)_\w+/i.test(trimmed))
+  // 旧実装は名前を直書きして閉じていたぶん、ここだけ許可リスト化で取りこぼした (E2Eが拾った)
+  if (/\bsqlite_\w+/i.test(trimmed))
     throw new Error(
-      `sqlite_ / pragma_ で始まる内部の名前は参照できません (この窓口から引けるのは ${allowed.join(" / ")} だけです)`
+      `sqlite_ で始まる内部の名前は参照できません (この窓口から引けるのは ${allowed.join(" / ")} だけです)`
     );
+  // **仮想テーブルは名前で数え上げない。**sqlite_master に載らないので実在名の照合では捕まらず、
+  // 名前を並べる方式では「知らないものは開く」から抜け出せない。実際 pragma_* を閉じた直後に
+  // dbstat が残っていた (外部レビュー指摘) — dbstat は全テーブル名とページ構成を返すので、
+  // このPRが塞ごうとしていた settings の存在漏れがそのまま残っていた。
+  //
+  // EXPLAIN すると仮想テーブルへのアクセスは必ず VOpen になる (通常のテーブルは OpenRead)。
+  // 名前ではなく機構で塞ぐので、SQLiteに仮想テーブルが増えても効く。
+  // EXPLAIN は計画を組み立てるだけで問い合わせを実行しない
+  try {
+    const plan = conn.prepare(`EXPLAIN ${trimmed}`).all() as { opcode: string }[];
+    if (plan.some((r) => r.opcode === "VOpen"))
+      throw new VirtualTableError(
+        `仮想テーブル (dbstat / pragma_* など) は参照できません (この窓口から引けるのは ${allowed.join(" / ")} だけです)`
+      );
+  } catch (e) {
+    // 弾いた本人の例外はそのまま上げる。EXPLAIN 自体が失敗したときは握って先へ進める —
+    // 構文エラーなら下の prepare が同じ理由で落ち、そちらの方が直せる材料が多い
+    if (e instanceof VirtualTableError) throw e;
+  }
   const rows = conn.prepare(trimmed).all() as unknown[];
   return { rows: rows.slice(0, limit), sql: trimmed, truncated: rows.length > limit, ...silentTrap(trimmed) };
 }

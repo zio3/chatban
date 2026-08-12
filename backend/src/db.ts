@@ -200,6 +200,10 @@ export function approveChecked(ids: number[]): {
 } {
   const skipped: { id: number; reason: string }[] = [];
   const eligible: number[] = [];
+  // 同じIDが2回入っていたら1回として扱う。判定も更新も2度走り、updated に同じタスクが
+  // 2件載って「2件確定しました」に見えていた (#157)。押した数と通った数を突き合わせられる
+  // ようにしてある (#120/#123) のに、その数字自体が水増しされては意味がない
+  ids = [...new Set(ids)];
   // archived は Task 型に出していない (getTask はアーカイブ済みも返すが、UIは要約カード経由で読む)。
   // ここは「確定してよいか」の判定なので、隠れている列も見る
   const isArchived = (id: number) =>

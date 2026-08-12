@@ -1155,6 +1155,68 @@ test("不正なmembersは書き込む前に断る (途中まで適用して500�
   expect(after.name).toBe(target.name);
 });
 
+test("既定プロジェクトは無効にできない (見えない・消せない・でも書き込まれる、を作らない)", async () => {
+  // activeProjectId() は archived を見ないので、既定を無効にすると
+  // ドロップダウンから消えるのに既定のまま残り、ヘッダ指定のない操作の行き先であり続ける。
+  // trashProject は active を弾くので削除もできない (自動コードレビュー指摘)
+  const projects = (await (await fetch(`${API}/api/projects`)).json()).projects as any[];
+  const active = projects.find((p) => p.active);
+  expect(active).toBeTruthy();
+
+  const patch = (id: number, body: unknown) =>
+    fetch(`${API}/api/projects/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+
+  const ng = await patch(active.id, { archived: true });
+  expect(ng.status).toBe(409);
+  expect((await ng.json()).error).toContain("既定のプロジェクトは無効にできません");
+
+  // 名前と同時に投げても、名前だけ変わることがない (途中まで適用しない)
+  const ng2 = await patch(active.id, { name: "E2E: この名前にはならない", archived: true });
+  expect(ng2.status).toBe(409);
+  const after = ((await (await fetch(`${API}/api/projects`)).json()).projects as any[]).find(
+    (p) => p.id === active.id
+  );
+  expect(after.name).toBe(active.name);
+  expect(after.archived).toBe(false);
+
+  // 既定でないプロジェクトなら従来どおり無効にできる (塞ぎすぎていない)
+  const other = (
+    await (
+      await fetch(`${API}/api/projects`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: "E2E: 無効にできる側", members: [] }),
+      })
+    ).json()
+  ).project.id as number;
+  expect((await patch(other, { archived: true })).status).toBe(200);
+});
+
+test("同じIDを2回渡しても1件として確定する (#157)", async () => {
+  // 判定も更新も2度走り、updated に同じタスクが2件載って「2件確定しました」に見えていた。
+  // 押した数と通った数を突き合わせられるようにしてあるのに、その数字が水増しされては意味がない
+  const id = await createTask("重複ID: 1件として数える", "review");
+  await fetch(`${API}/api/tasks/${id}/checked`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ checked: true }),
+  });
+  const r = await (
+    await fetch(`${API}/api/tasks/approve`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ids: [id, id, id] }),
+    })
+  ).json();
+  expect(r.ok).toBe(true);
+  expect(r.updated).toHaveLength(1);
+  expect(r.updated[0].id).toBe(id);
+});
+
 test("Doneから差し戻すと検収の印は消える (確認し直さずに戻せない)", async () => {
   // approveChecked が checked_at を「人が確かめた唯一の証拠」にしたので、
   // 差し戻しで印が残ると、確認し直さずにもう一度Doneへ通せてしまう

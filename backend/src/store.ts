@@ -340,8 +340,20 @@ export function renameProject(id: number, name: string): void {
   admin.prepare("UPDATE projects SET name = ? WHERE id = ?").run(name, id);
 }
 
-/** #107: 無効/有効の切り替え。隠すだけで実体は残る */
+/** #107: 無効/有効の切り替え。隠すだけで実体は残る。
+ *
+ * **既定 (active) のプロジェクトは無効にできない。** activeProjectId() は archived を見ないので、
+ * 無効にするとドロップダウンからは消えるのに既定のまま残り、
+ * ヘッダ指定のないREST操作やSocketの追従先として書き込まれ続ける。
+ * さらに trashProject が active を弾くので削除もできない —
+ * **見えない・消せない・でも書き込まれる**状態が作れてしまう (自動コードレビュー指摘)。
+ *
+ * 削除と同じ形で断る。隠す操作と消す操作で「既定は触れない」の扱いが割れているほうが不自然 */
 export function setProjectArchived(id: number, archived: boolean): void {
+  if (archived && id === activeProjectId())
+    throw new Error(
+      "既定のプロジェクトは無効にできません。ヘッダ指定のない操作の行き先として使われるため、一覧から消すと辿れなくなります"
+    );
   admin.prepare("UPDATE projects SET archived = ? WHERE id = ?").run(archived ? 1 : 0, id);
 }
 

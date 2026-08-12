@@ -577,13 +577,20 @@ app.patch("/api/projects/:id", (req, res) => {
   // 存在確認をしないと、更新自体は0件で静かに通ったあと broadcastBoard(id) が投げて500になる。
   // 設定を古いタブで開いたまま別タブで削除する、という普通の競合で踏む (自動レビュー指摘)
   if (!getProject(id)) return res.status(404).json({ error: `project #${req.params.id} not found` });
-  const { name, members } = req.body ?? {};
-  // 何も書き始める前にまとめて確かめる (途中まで適用して500、を作らない)
+  const { name, members, archived } = req.body ?? {};
+  // 何も書き始める前にまとめて確かめる (途中まで適用して500、を作らない)。
+  // 既定プロジェクトの無効化はDB層が投げるので、ここで先に同じ判定を通す —
+  // 名前を変えた後に投げると「500なのに名前だけ変わる」になる
   const ngMembers = badMembers(members);
   if (ngMembers) return res.status(400).json({ error: ngMembers });
+  if (archived === true && id === activeProjectId())
+    return res.status(409).json({
+      error:
+        "既定のプロジェクトは無効にできません。ヘッダ指定のない操作の行き先として使われるため、一覧から消すと辿れなくなります",
+    });
   if (typeof name === "string" && name.trim()) renameProject(id, name.trim());
   if (Array.isArray(members)) setProjectMembers(id, members);
-  if (typeof req.body?.archived === "boolean") setProjectArchived(id, req.body.archived);
+  if (typeof archived === "boolean") setProjectArchived(id, archived);
   io.emit("project:changed", { projects: projectSummaries() });
   broadcastBoard(id);
   res.json({ ok: true, projects: projectSummaries() });

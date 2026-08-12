@@ -5,4 +5,4 @@ import { projectIdFromUrl } from "./project";
 // #97/#99: 表示中のプロジェクトを接続時に固定する。サーバー側はプロジェクト単位のroomへ配信するので、
 // タブごとに別プロジェクトを開いても他方の更新は届かない
 const projectId = projectIdFromUrl();
-export const socket = io(projectId ? { query: { project: projectId } } : {});
+export const socket = io(projectId !== null ? { query: { project: projectId } } : {});

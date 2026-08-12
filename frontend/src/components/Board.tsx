@@ -375,6 +375,7 @@ function Column({
 
 export default function Board({
   tasks,
+  allTasks,
   summaryCards,
   archiveWorking,
   onMove,
@@ -384,6 +385,8 @@ export default function Board({
   onCommitApproved,
 }: {
   tasks: Task[];
+  /** 依存の判定に使う母集団。フィルタで隠れているものも含む全件 (#41/#90) */
+  allTasks: Task[];
   summaryCards: SummaryCard[];
   archiveWorking?: boolean;
   onMove: (move: MovePayload) => void;
@@ -396,10 +399,15 @@ export default function Board({
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
 
   const byStatus = (s: TaskStatus) => tasks.filter((t) => t.status === s);
-  // #41: 依存バッジの未解決判定 (依存先がボード上に未完了で残っていれば「待ち」)
-  const openIds = new Set(tasks.filter((t) => t.status !== "done").map((t) => t.id));
-  // #111: 依存先の中身をチップから引くための索引 (アーカイブ済みは載らない。クリックで取りに行く)
-  const taskById = new Map(tasks.map((t) => [t.id, t]));
+  // #41: 依存バッジの未解決判定 (依存先がボード上に未完了で残っていれば「待ち」)。
+  // #111: 依存先の中身をチップから引くための索引 (アーカイブ済みは載らない。クリックで取りに行く)。
+  //
+  // **描画はフィルタ後、依存の判定は全件**。同じ配列から両方作っていたので、
+  // 別担当の未完了タスクに依存しているとき、担当フィルタでそれが隠れた瞬間に
+  // 「待ち」表示まで消え、依存関係が実態と逆に見えた (自動レビュー指摘)。
+  // フィルタは見せ方の話であって、待ちかどうかの事実は変わらない
+  const openIds = new Set(allTasks.filter((t) => t.status !== "done").map((t) => t.id));
+  const taskById = new Map(allTasks.map((t) => [t.id, t]));
 
   function locate(overId: number | TaskStatus): { status: TaskStatus; index: number } | null {
     if (COLUMNS.some((c) => c.key === overId)) {

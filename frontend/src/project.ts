@@ -8,16 +8,24 @@
 // 「見えない状態が事故を起こす」— 担当フィルタが効いていることに気づけずタスクが消えたように
 // 見えた件(#90)と同じ構図で、こちらはその親玉にあたる。
 
-/** URLから読む。/p/<id> でなければ null (=既定プロジェクトへ着地させる) */
+/** URLから読む。/p/<id> でなければ null (=既定プロジェクトへ着地させる)。
+ * 0 は実在しないIDなので null 扱い — 「指定なし」と区別できないと、下の真偽判定で
+ * 既定プロジェクトに化ける (自動レビュー指摘) */
 export function projectIdFromUrl(): number | null {
   const m = location.pathname.match(/^\/p\/(\d+)/);
-  return m ? Number(m[1]) : null;
+  if (!m) return null;
+  const id = Number(m[1]);
+  return Number.isFinite(id) && id > 0 ? id : null;
 }
 
-/** APIリクエストに載せるプロジェクト。URLに無ければ載せない (サーバー側の既定に任せる) */
+/** APIリクエストに載せるプロジェクト。URLに無ければ載せない (サーバー側の既定に任せる)。
+ * null との比較にする — `id ?` だと 0 だけが「指定なし」に化け、/p/0 を開いているのに
+ * 既定プロジェクトの中身が出て、そのまま既定へ書き込めた。
+ * サーバーは「指定したのに無いプロジェクト」を400で拒否する (#125) のに、
+ * ヘッダを載せないぶんその拒否にすら到達しない */
 export function currentProjectHeader(): Record<string, string> {
   const id = projectIdFromUrl();
-  return id ? { "X-ChatBan-Project": String(id) } : {};
+  return id !== null ? { "X-ChatBan-Project": String(id) } : {};
 }
 
 /** プロジェクトを切り替える。ページごと移動させて状態を持ち越さない

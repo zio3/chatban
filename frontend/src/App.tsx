@@ -486,6 +486,7 @@ export default function App() {
         {view === "board" && !loading && !loadError && (
           <Board
             tasks={visibleTasks}
+            allTasks={sortedTasks}
             summaryCards={summaryCards}
             archiveWorking={archiveWorking}
             onMove={moveTask}

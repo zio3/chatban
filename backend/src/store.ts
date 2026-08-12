@@ -379,11 +379,23 @@ export function projectDb(id: number): Database.Database {
   return db;
 }
 
+/** そのプロジェクトへの接続を全部閉じる。
+ *
+ * 読み書き用 (handles) だけを閉じていたので、**SQL窓口で一度でも監査クエリを流した
+ * プロジェクトは削除できなくなっていた** (自動レビュー指摘)。projectReadonly() が
+ * 別の Map (roHandles) にハンドルを持ち続け、Windowsでは開いたままのSQLiteファイルを
+ * renameSync できず EBUSY になる。プロセスを再起動するまで復旧しない。
+ *
+ * 「接続を1つ足したら、閉じる側にも足す」を忘れると、Windowsでだけ壊れる。
+ * 開ける場所が2つあるなら閉じる場所も2つ要る */
 export function closeProjectDb(id: number): void {
-  const h = handles.get(id);
-  if (!h) return;
-  h.close();
-  handles.delete(id);
+  for (const map of [handles, roHandles]) {
+    const h = map.get(id);
+    if (h) {
+      h.close();
+      map.delete(id);
+    }
+  }
 }
 
 /** アクティブプロジェクト。サーバー側で1つだけ持つ (MCP・チャットのツール契約に

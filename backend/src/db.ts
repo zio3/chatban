@@ -98,6 +98,15 @@ export function isTaskStatus(v: unknown): v is TaskStatus {
 export const DONE_GATE_RULE =
   "Doneへは「Review列に置く → 人間が検収チェックを付ける → 確定」の順でしか入りません。他の列からDoneへの直送はできません";
 
+/** Doneへ確定して要約カードに畳まれたか。
+ *
+ * archived は Task 型に出していない (getTask はアーカイブ済みも返すが、UIは要約カード経由で読む)。
+ * 「確定してよいか」「消してよいか」の判定は隠れている列も見る必要があるので、ここに1本だけ置く */
+export function isArchived(id: number): boolean {
+  return !!(db().prepare("SELECT archived FROM tasks WHERE id = ?").get(id) as { archived: number } | undefined)
+    ?.archived;
+}
+
 export function mayEnterDone(cur: Pick<Task, "status" | "checkedAt" | "trashedAt">): boolean {
   return cur.status === "review" && !!cur.checkedAt && !cur.trashedAt;
 }
@@ -204,10 +213,6 @@ export function approveChecked(ids: number[]): {
   // 2件載って「2件確定しました」に見えていた (#157)。押した数と通った数を突き合わせられる
   // ようにしてある (#120/#123) のに、その数字自体が水増しされては意味がない
   ids = [...new Set(ids)];
-  // archived は Task 型に出していない (getTask はアーカイブ済みも返すが、UIは要約カード経由で読む)。
-  // ここは「確定してよいか」の判定なので、隠れている列も見る
-  const isArchived = (id: number) =>
-    !!(db().prepare("SELECT archived FROM tasks WHERE id = ?").get(id) as { archived: number } | undefined)?.archived;
   for (const id of ids) {
     const t = getTask(id);
     if (!t) skipped.push({ id, reason: "存在しません" });
@@ -232,7 +237,13 @@ export function updateTask(id: number, patch: TaskPatch): Task | undefined {
 export function trashTask(id: number): boolean {
   return (
     db()
-      .prepare("UPDATE tasks SET trashed_at = datetime('now', 'localtime') WHERE id = ? AND trashed_at IS NULL")
+      .prepare(
+        // アーカイブ済み (Doneへ確定して要約カードに畳まれたもの) は対象外。
+        // 要約カードの task_ids は更新されないので、消すとカードに存在しないIDが残り、
+        // 開くと404になる — 検収済み成果の監査元が壊れる (自動レビュー指摘)。
+        // ボードから見えないタスクをチャット/MCPがIDで名指しできてしまうのが入口だった
+        "UPDATE tasks SET trashed_at = datetime('now', 'localtime') WHERE id = ? AND trashed_at IS NULL AND archived = 0"
+      )
       .run(id).changes > 0
   );
 }

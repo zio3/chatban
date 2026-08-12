@@ -1217,6 +1217,45 @@ test("同じIDを2回渡しても1件として確定する (#157)", async () => 
   expect(r.updated[0].id).toBe(id);
 });
 
+test("担当フィルタで隠れても、依存の「待ち」は消えない (#41/#90)", async ({ page }) => {
+  // 描画はフィルタ後・依存の判定は全件、になっていなかった。別担当の未完了タスクに
+  // 依存しているとき、フィルタでそれが隠れた瞬間に「待ち」表示まで消え、
+  // 依存関係が実態と逆に見えた (自動レビュー指摘)。フィルタは見せ方の話で、事実は変わらない
+  const mk = async (title: string, assignee: string) =>
+    (
+      await (
+        await fetch(`${API}/api/tasks`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ title, assignee }),
+        })
+      ).json()
+    ).id as number;
+
+  const blocker = await mk("E2E: 依存先(別担当で未完了)", "フィルタ検証Bob");
+  const waiting = await mk("E2E: 依存元(表示される側)", "フィルタ検証Alice");
+  await fetch(`${API}/api/tasks/${waiting}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ blockedBy: [blocker] }),
+  });
+
+  await page.goto("/");
+  const chip = page.getByTestId(`task-card-${waiting}`).getByTestId(`dep-chip-${blocker}`);
+  await expect(chip).toHaveAttribute("title", /依存先\(別担当で未完了\)/);
+
+  // Aliceだけに絞る → 依存先(Bob担当)はボードから消える
+  await page.getByRole("button", { name: "フィルタ検証Alice", exact: true }).click();
+  await expect(page.getByTestId(`task-card-${blocker}`)).toBeHidden();
+  await expect(page.getByTestId(`task-card-${waiting}`)).toBeVisible();
+
+  // それでも依存先の中身は引けたまま。「完了してアーカイブ済み」にはならない
+  await expect(chip).toHaveAttribute("title", /依存先\(別担当で未完了\)/);
+  await expect(chip).not.toHaveAttribute("title", /アーカイブ済み/);
+  // 未解決のまま = 取り消し線にならない
+  await expect(chip).not.toHaveClass(/line-through/);
+});
+
 test("Doneから差し戻すと検収の印は消える (確認し直さずに戻せない)", async () => {
   // approveChecked が checked_at を「人が確かめた唯一の証拠」にしたので、
   // 差し戻しで印が残ると、確認し直さずにもう一度Doneへ通せてしまう

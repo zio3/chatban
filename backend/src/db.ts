@@ -578,7 +578,12 @@ export function metrics() {
   };
 }
 
-/** 全ログExport (#83): 検証利用向けのフルダンプ。全テーブルをもれなく生のまま出す (期間指定は将来必要になったら) */
+/** 全ログExport (#83): 検証利用向けのフルダンプ。全テーブルを生のまま出す (期間指定は将来必要になったら)。
+ *
+ * **唯一の例外がセッション署名鍵で、伏字にしている** (下の exportableSettings)。
+ * ここに「もれなく生のまま」と書いてあると、渡す前に中身を確かめる人が
+ * 「何も伏せていない」と読む — Exportの安全性を判断する人が最初に読む場所なので、
+ * 例外があることはこの行で言う */
 export function exportAll() {
   const all = (table: string) => db().prepare(`SELECT * FROM ${table} ORDER BY id`).all();
   return {
@@ -591,8 +596,30 @@ export function exportAll() {
     proposals: all("proposals"),
     members: all("members"),
     projectContext: db().prepare("SELECT * FROM project_context WHERE id = 1").get() ?? null,
-    settings: admin.prepare("SELECT * FROM settings ORDER BY key").all(), // #88: どのモデルで動いていたかの記録
+    settings: exportableSettings(), // #88: どのモデルで動いていたかの記録
   };
+}
+
+/** Export に載せてよい設定だけを返す。
+ *
+ * settings をそのまま全行出したせいで、**セッション署名鍵 (auth.sessionSecret) が
+ * 平文で入っていた** (自動レビュー指摘)。この鍵があれば任意のメールアドレス・有効期限の
+ * Cookie を自分で署名でき、許可リストのメールアドレスも同じファイルに入っているので、
+ * 認証を有効にしても許可ユーザーになりすませる。検証用にExportを渡しただけで、
+ * 以後のセッションまで危険になる。
+ *
+ * Export は「検証のために人へ渡すファイル」「記事の一次資料」なので、
+ * 渡した先で悪用できるものを載せない。**除外リストではなく伏字**にしているのは、
+ * 「その設定が存在すること」自体は記録として意味があるため (どのモデルで動いていたか
+ * を追う #88 の目的と同じ)。
+ *
+ * 判定は「鍵かどうか」ではなく列挙で持つ。新しい設定が増えたときに黙って漏れる側へ
+ * 倒れないよう、載せてよいものを決めるのではなく、伏せるものを明示して増やす */
+const REDACTED_SETTINGS = new Set(["auth.sessionSecret"]);
+export function exportableSettings(): { key: string; value: string }[] {
+  return (admin.prepare("SELECT * FROM settings ORDER BY key").all() as { key: string; value: string }[]).map((r) =>
+    REDACTED_SETTINGS.has(r.key) ? { ...r, value: "***" } : r
+  );
 }
 
 /** オーディットログ (#33): 会話・LLM呼び出し・割り振り履歴の時系列閲覧用 */

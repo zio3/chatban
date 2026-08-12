@@ -488,11 +488,16 @@ app.get("/api/suggestions", async (_req, res) => {
   }
 });
 
-// 全ログExport (#83): 全テーブルのフルダンプをJSONダウンロード (検証利用)
+// 全ログExport (#83): 全テーブルのダンプをJSONダウンロード (検証利用)。
+// セッション署名鍵だけ伏字 (db.ts の exportableSettings)。伏せる判断はDB層にあるので
+// この口からは見えないが、「渡してよいファイルか」を考える人はまずここを読む
 app.get("/api/audit/export", (_req, res) => {
   const stamp = new Date().toISOString().slice(0, 19).replace(/[-:T]/g, "").slice(0, 14);
   res.setHeader("Content-Disposition", `attachment; filename="chatban-audit-${stamp}.json"`);
-  res.json(exportAll());
+  // #83: これは機械向けのAPIレスポンスではなく、人が開いて読むファイル (検証・記事の一次資料)。
+  // res.json() の1行JSONだと、エディタで開いた瞬間に折り返しの壁になって読めない。
+  // ここだけ整形して返す — 他のAPIレスポンスまで太らせない (zio依頼)
+  res.type("application/json").send(JSON.stringify(exportAll(), null, 2));
 });
 
 // プロジェクト (#86): SQLiteファイルごと分かれている。切り替えるとボード・チャット・

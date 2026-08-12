@@ -412,6 +412,15 @@ async function execTool(name: string, args: any, uiActions: UiAction[], events: 
       events.add("board");
       return { ok: true, results };
     }
+    case "restore_tasks": {
+      // ツール定義とゴミ箱画面のプロンプトには公開してあるのに、ここに分岐が無く
+      // unknown tool を返していた (自動レビュー指摘)。画面が「チャットで戻せる」と
+      // 案内しているのに成立しない状態。MCP側には実装があり、**入口ごとに機能が違っていた**
+      // (#92 #108 #114 #125 #126 と同じ形。契約だけ公開して実装を書き忘れる、が新しい)
+      const results = (args.ids as number[]).map((id) => ({ id, restored: !!restoreTask(id) }));
+      events.add("board");
+      return { ok: true, results };
+    }
     case "update_task_context": {
       // #112/#114: 経緯メモの上書きも agentWrite を通す (版の確認を1箇所に集約)
       const r = updateTasksAsAgent([

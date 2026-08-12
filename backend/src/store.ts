@@ -429,7 +429,14 @@ export function currentProjectId(): number {
 }
 
 export function setActiveProjectId(id: number): void {
-  if (!getProject(id)) throw new Error(`project #${id} not found`);
+  const row = getProject(id);
+  if (!row) throw new Error(`project #${id} not found`);
+  // 無効化済み (ドロップダウンに出ない) ものを既定にしない。
+  // setProjectArchived 側で「既定は無効にできない」を塞いだが、**順序を入れ替えれば同じ状態が作れた**
+  // (先に無効化 → activate)。「見えない・消せない・でも書き込まれる」は入口ごとに塞ぐのではなく、
+  // 「既定 かつ 無効」という組み合わせ自体を作らせない (自動レビュー指摘)
+  if (row.archived)
+    throw new Error("無効になっているプロジェクトは既定にできません (先に有効へ戻してください)");
   admin
     .prepare(
       "INSERT INTO settings (key, value, updated_at) VALUES ('project.active', ?, datetime('now','localtime')) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at"

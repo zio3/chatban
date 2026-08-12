@@ -1534,22 +1534,31 @@ test("先に始まっていた提案生成は、チャットが始まったら�
   // (捨てるだけだと上流の応答は待ち続けるので、止めたかったTTFTの奪い合いが残る)
   const id = await createTask("suggest先行の中断を確かめる");
 
-  // suggestを先に始める。待たない
-  const suggesting = fetch(`${API}/api/suggestions`)
-    .then((r) => r.json())
-    .catch(() => null);
+  // 狙いたいのは「suggestが走っている最中にchatが来る」状態。
+  // suggestが先に終わってしまうと中断する相手がいないので、その回は検証にならない。
+  // 何回か試して、狙いの並びになった回で確かめる (時間の見積もりに賭けない)
+  let observed = false;
+  for (let attempt = 0; attempt < 3 && !observed; attempt++) {
+    // ボードを変えて提案キャッシュを外す。同じ状態だとLLMを呼ばずに即返る
+    await createTask(`suggest先行の中断を確かめる (${attempt})`);
 
-  // 走り出してからチャットを送る
-  await new Promise((r) => setTimeout(r, 400));
-  const chatting = fetch(`${API}/api/tasks/${id}/chat`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ message: "状況は?", history: [] }),
-  }).catch(() => null);
+    // suggestを先に始める。待たない
+    const suggesting = fetch(`${API}/api/suggestions`)
+      .then((r) => r.json())
+      .catch(() => null);
 
-  // 中断されるので、チャットの完了を待たずに空で返る
-  const s = (await suggesting) as any;
-  expect(s?.suggestions).toEqual([]);
+    // 走り出してからチャットを送る
+    await new Promise((r) => setTimeout(r, 300));
+    const chatting = fetch(`${API}/api/tasks/${id}/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message: "状況は?", history: [] }),
+    }).catch(() => null);
 
-  await chatting;
+    // 中断されていれば、チャットの完了を待たずに空で返る
+    const s = (await suggesting) as any;
+    if (Array.isArray(s?.suggestions) && s.suggestions.length === 0) observed = true;
+    await chatting;
+  }
+  expect(observed, "3回試しても中断が観測できなかった (suggestが毎回chatより先に完了した?)").toBe(true);
 });

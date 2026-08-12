@@ -252,7 +252,13 @@ export async function chatCompletion(
       Object.keys(reqOpts).length > 0 ? reqOpts : undefined
     );
   } catch (e: any) {
-    log("llm", `!! ${purpose} model=${model} FAILED after ${Date.now() - t0}ms: ${e?.status ?? ""} ${e?.message ?? e}`);
+    // 中断は失敗ではない (#162: チャットが始まったので提案の生成を譲っただけ)。
+    // FAILED として残すと、監査ログ上は上流のエラーと見分けが付かなくなる
+    if (opts?.signal?.aborted) {
+      log("llm", `-- ${purpose} model=${model} ABORTED after ${Date.now() - t0}ms (呼び出し側が中断)`);
+    } else {
+      log("llm", `!! ${purpose} model=${model} FAILED after ${Date.now() - t0}ms: ${e?.status ?? ""} ${e?.message ?? e}`);
+    }
     throw e;
   }
   const elapsedMs = Date.now() - t0;

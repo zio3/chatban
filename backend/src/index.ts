@@ -184,7 +184,8 @@ function disconnectRevoked() {
 // 「どのプロジェクトの通知か」を送信側が必ず意識する形にしておく。
 //
 // クライアントは接続時に project を指定できる (指定なし=表示中のプロジェクトに追従)。
-// 追従組はプロジェクト切替時にサーバー側でroomを移し替える
+// 追従組はプロジェクト切替時にサーバー側でroomを移し替える。
+// 指定したのに存在しないプロジェクトなら、どのroomにも入れない (下の #125)
 const room = (projectId: number) => `project:${projectId}`;
 
 io.on("connection", (socket) => {

@@ -991,6 +991,48 @@ test("入口で確かめる: 知らない列・居ないタスク・居ないプ
   expect(noProject.status).toBe(404);
 });
 
+test("検収の印を付けられるのはReview列だけ (順序を飛ばして確定できない)", async () => {
+  // Doneへの遷移は「Review + 印」を見ているが、印を付ける側が列を見ていなかったので、
+  // Todoのうちに印を付けてからReviewへ動かすと、Reviewに入ってから一度も確かめずに
+  // 確定まで通せた (自動レビュー指摘)。順序そのものを守らせる
+  const check = (id: number, checked = true) =>
+    fetch(`${API}/api/tasks/${id}/checked`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ checked }),
+    });
+
+  const todo = await createTask("順序飛ばし: Todoで印を付ける");
+  const ng = await check(todo);
+  expect(ng.status).toBe(409);
+  expect((await ng.json()).error).toContain("Review 列のタスクだけ");
+
+  // Reviewへ動かしてからなら付く。そのうえで確定できる
+  await fetch(`${API}/api/tasks/${todo}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ status: "review" }),
+  });
+  expect((await check(todo)).status).toBe(200);
+  const r = await (
+    await fetch(`${API}/api/tasks/approve`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ids: [todo] }),
+    })
+  ).json();
+  expect(r.ok).toBe(true);
+
+  // ゴミ箱のタスクにも付けられない
+  const trashed = await createTask("順序飛ばし: ゴミ箱", "review");
+  await fetch(`${API}/api/tasks/${trashed}`, { method: "DELETE" });
+  expect((await check(trashed)).status).toBe(409);
+
+  // 外すのはいつでもよい (印を消す方向は安全)
+  const plain = await createTask("順序飛ばし: 印を外すのは自由");
+  expect((await check(plain, false)).status).toBe(200);
+});
+
 test("Doneから差し戻すと検収の印は消える (確認し直さずに戻せない)", async () => {
   // approveChecked が checked_at を「人が確かめた唯一の証拠」にしたので、
   // 差し戻しで印が残ると、確認し直さずにもう一度Doneへ通せてしまう

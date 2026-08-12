@@ -12,26 +12,41 @@ export default function AuthSettings() {
   const [allowedEmails, setAllowedEmails] = useState("");
   const [enabled, setEnabled] = useState(false);
   const [saved, setSaved] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     apiFetch("/api/settings/auth")
-      .then((r) => r.json())
+      .then(async (r) => {
+        if (!r.ok) throw new Error((await r.json().catch(() => ({})))?.error ?? `${r.status}`);
+        return r.json();
+      })
       .then((d) => {
         setClientId(d.clientId);
         setAllowedEmails(d.allowedEmails);
         setEnabled(d.enabled);
       })
-      .catch(() => {});
+      .catch((e) => setError(String(e.message ?? e)));
   }, []);
 
+  /** ここは「これから誰を通すか」を決める画面なので、保存できたかどうかを取り違えない。
+   * 以前はステータスを見ておらず、403のエラーJSONもそのまま成功として扱って
+   * 「保存しました」と出していた (自動レビュー指摘)。DBは変わっていないのに
+   * 反映されたと思い込むと、認証を有効にした瞬間に想定と違う許可リストで動く */
   const save = async () => {
-    const r = await apiFetch("/api/settings/auth", {
+    setError(null);
+    const res = await apiFetch("/api/settings/auth", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ clientId, allowedEmails }),
-    }).then((x) => x.json());
-    setClientId(r.clientId);
-    setAllowedEmails(r.allowedEmails);
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      setSaved(null);
+      setError(body?.error ?? `保存できませんでした (${res.status})`);
+      return;
+    }
+    setClientId(body.clientId);
+    setAllowedEmails(body.allowedEmails);
     setSaved(new Date().toLocaleTimeString("ja-JP"));
   };
 
@@ -68,7 +83,9 @@ export default function AuthSettings() {
         />
       </label>
       <p className="mt-1 text-[11px] text-slate-400">
-        ここに無いアカウントはサーバー側で拒否する。空のときは最初にログインした人を登録する (設定画面に入れず詰むのを防ぐため)
+        ここに無いアカウントはサーバー側で拒否する。<strong>一度も設定していないとき</strong>だけ、最初にログインした人を登録する
+        (設定画面に入れず詰むのを防ぐため)。<strong>一度保存したあとで空にすると全員を拒否する</strong> —
+        そうすると再設定はサーバーのローカル端末からしかできなくなる
       </p>
 
       <div className="mt-3 flex items-center gap-3">
@@ -78,7 +95,8 @@ export default function AuthSettings() {
         >
           保存
         </button>
-        {saved && <span className="text-[11px] text-emerald-600">保存しました ({saved})</span>}
+        {saved && !error && <span className="text-[11px] text-emerald-600">保存しました ({saved})</span>}
+        {error && <span className="text-[11px] text-red-600">{error}</span>}
       </div>
     </section>
   );

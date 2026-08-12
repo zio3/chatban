@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { extractChoices } from "./chat.js";
 import { differs } from "./archive.js";
+import { readFileSync } from "node:fs";
 import { isAllowed, pickSpeaker, readCookie } from "./auth.js";
+import { tools } from "./chat.js";
 import { DONE_GATE_RULE, exportableSettings, isTaskStatus, mayEnterDone } from "./db.js";
 import { AGENT_STATUS_VALUES } from "./chat.js";
 
@@ -199,4 +201,18 @@ test("伏せるのは鍵だけ。設定が存在したことは記録として�
   const rows = exportableSettings();
   // モデル設定などは値ごと残る (#88: どのモデルで動いていたかを追うため)
   for (const r of rows) assert.ok(typeof r.key === "string" && r.key.length > 0);
+});
+
+// 公開しているツールに実装があるか。restore_tasks はツール定義とゴミ箱画面のプロンプトに
+// 出しているのに実行の分岐が無く、呼ばれると unknown tool が返っていた (自動レビュー指摘)。
+// 画面が「チャットで戻せる」と案内しているのに成立しない状態で、MCP側には実装があった。
+// 「入口ごとに契約がズレる」の変種 — 契約だけ公開して実装を書き忘れる形。
+// 個別に直すのではなく、公開と実装の突き合わせを機械で見る。
+
+test("チャットに公開したツールには必ず実装がある", () => {
+  const src = readFileSync(new URL("./chat.ts", import.meta.url), "utf8");
+  const implemented = new Set([...src.matchAll(/^\s*case "([a-z_]+)":/gm)].map((m) => m[1]));
+  const published = tools.map((t: any) => t.function.name);
+  const missing = published.filter((n: string) => !implemented.has(n));
+  assert.deepEqual(missing, [], `実装の無いツール: ${missing.join(", ")}`);
 });

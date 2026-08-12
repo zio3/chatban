@@ -1256,6 +1256,44 @@ test("担当フィルタで隠れても、依存の「待ち」は消えない (
   await expect(chip).not.toHaveClass(/line-through/);
 });
 
+test("無効化したプロジェクトは既定にできない (順序を変えても不可視状態を作れない)", async () => {
+  // setProjectArchived 側で「既定は無効にできない」を塞いだが、順序を入れ替えれば
+  // 同じ状態が作れた (先に無効化 → activate)。「既定 かつ 無効」という組み合わせ自体を作らせない
+  const id = (
+    await (
+      await fetch(`${API}/api/projects`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: "E2E: 無効なら既定にできない", members: [] }),
+      })
+    ).json()
+  ).project.id as number;
+
+  // 既定でないので無効化はできる
+  const off = await fetch(`${API}/api/projects/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ archived: true }),
+  });
+  expect(off.status).toBe(200);
+
+  // そのまま既定にしようとすると断られる
+  const act = await fetch(`${API}/api/projects/${id}/activate`, { method: "POST" });
+  expect(act.status).toBe(400);
+  expect((await act.json()).error).toContain("無効になっているプロジェクトは既定にできません");
+
+  // 有効へ戻せば既定にできる (塞ぎすぎていない)。戻したあと元の既定に復帰させる
+  const before = ((await (await fetch(`${API}/api/projects`)).json()).projects as any[]).find((p) => p.active).id;
+  await fetch(`${API}/api/projects/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ archived: false }),
+  });
+  expect((await fetch(`${API}/api/projects/${id}/activate`, { method: "POST" })).status).toBe(200);
+  await fetch(`${API}/api/projects/${before}/activate`, { method: "POST" });
+  await fetch(`${API}/api/projects/${id}`, { method: "DELETE" });
+});
+
 test("Doneから差し戻すと検収の印は消える (確認し直さずに戻せない)", async () => {
   // approveChecked が checked_at を「人が確かめた唯一の証拠」にしたので、
   // 差し戻しで印が残ると、確認し直さずにもう一度Doneへ通せてしまう

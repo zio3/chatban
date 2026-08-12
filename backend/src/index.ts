@@ -223,9 +223,14 @@ function rejoinFollowers(projectId: number) {
 }
 
 function broadcastBoard(projectId = currentProjectId()) {
-  // 中身の取得もそのプロジェクトのスコープで行う (非同期フックから呼ばれる場合があるため)
+  // 中身の取得もそのプロジェクトのスコープで行う (非同期フックから呼ばれる場合があるため)。
+  // members も一緒に流す — メンバーを足しても担当フィルタと割り振り提案が
+  // 再読み込みまで古いままだった (自動レビュー指摘)。/api/board が返す3点セットと
+  // 同じものを流す形にして、「初回だけ揃っていて以後ズレる」を作らない
   withProject(projectId, () =>
-    io.to(room(projectId)).emit("board:changed", { tasks: listTasks(), summaryCards: listSummaryCards() })
+    io
+      .to(room(projectId))
+      .emit("board:changed", { tasks: listTasks(), summaryCards: listSummaryCards(), members: listMembers() })
   );
 }
 
@@ -565,6 +570,9 @@ app.post("/api/projects", (req, res) => {
   const ngMembers = badMembers(members);
   if (ngMembers) return res.status(400).json({ error: ngMembers });
   const p = createProjectWithMembers(String(name).trim(), Array.isArray(members) ? members : []);
+  // 作成だけ配信していなかったので、ヘッダーの選択肢に出るのが再読み込み後だった。
+  // 画面は「ヘッダーのプロジェクト選択から移動」と案内しているのに辿れない (自動レビュー指摘)
+  io.emit("project:changed", { projects: projectSummaries() });
   res.json({ ok: true, project: p });
 });
 

@@ -119,14 +119,26 @@ export default function App() {
     reload();
     // #72: メインチャットはリロードで新規 (会話は作業記憶。重要事項はプロジェクト前提/タスク経緯メモに
     // 蒸留されて残り、生ログはDB保存済みで📜監査タブから見える)。タスクチャットは経緯ログなので復元維持
-    const onBoard = (p: { tasks: Task[]; summaryCards?: SummaryCard[] }) => {
+    const onBoard = (p: { tasks: Task[]; summaryCards?: SummaryCard[]; members?: Member[] }) => {
       setTasks(p.tasks);
       if (p.summaryCards) setSummaryCards(p.summaryCards);
+      // メンバーを足したら担当フィルタと割り振り提案にすぐ効く (以前は再読み込みまで古いまま)
+      if (p.members) setMembers(p.members);
     };
     // Done要約カードの非同期再生成中インジケータ (#56)
     const onArchive = (p: { count: number }) => setArchiveWorking(p.count > 0);
     // プロジェクトが切り替わったら全部読み直す (他のタブ/端末での切り替えにも追従する)
-    const onProject = (p: { projects: Project[] }) => setProjects(p.projects);
+    const onProject = (p: { projects: Project[] }) => {
+      setProjects(p.projects);
+      // いま開いているプロジェクトが消えていたら、そのURLに留まらない。
+      // 残っていても操作はすべて 400 (project not found) になり、
+      // 「古いボードが表示されているのに何も動かない」状態になる (自動レビュー指摘)
+      const here = projectIdFromUrl();
+      if (here !== null && !p.projects.some((x) => x.id === here)) {
+        const fallback = p.projects.find((x) => x.active) ?? p.projects.find((x) => !x.archived) ?? p.projects[0];
+        if (fallback) gotoProject(fallback.id);
+      }
+    };
     socket.on("board:changed", onBoard);
     socket.on("archive:working", onArchive);
     socket.on("project:changed", onProject);

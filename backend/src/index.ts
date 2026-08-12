@@ -65,6 +65,7 @@ import {
   updateTasks,
   approveChecked,
   DONE_GATE_RULE,
+  isArchived,
   isTaskStatus,
   TASK_STATUSES,
 } from "./db.js";
@@ -342,7 +343,15 @@ app.patch("/api/tasks/:id", (req, res) => {
 // #102: 削除はゴミ箱行き (論理削除)。自然言語UIでは解釈ミスが必ず起きるので、
 // 「間違えないようにする」のではなく「間違えても取り返しがつく」形にする
 app.delete("/api/tasks/:id", (req, res) => {
-  const ok = trashTask(Number(req.params.id));
+  const id = Number(req.params.id);
+  // アーカイブ済み (Doneへ確定して要約カードに畳まれたもの) は消せない。
+  // 「見つからない」と返すと、実在するのに存在しないことになって混乱する
+  const cur = getTask(id);
+  if (cur && !cur.trashedAt && isArchived(id))
+    return res.status(409).json({
+      error: "Doneへ確定して要約カードに畳まれたタスクは削除できません (要約から辿れなくなるため)",
+    });
+  const ok = trashTask(id);
   if (!ok) return res.status(404).json({ error: "not found" });
   broadcastBoard();
   res.json({ ok: true });

@@ -361,8 +361,18 @@ app.post("/api/tasks/:id/restore", (req, res) => {
 
 // 実体の削除。人間のUI操作からのみ通す (チャット・MCPにはこの口を出さない)
 app.delete("/api/trash/:id", (req, res) => {
-  const ok = purgeTask(Number(req.params.id));
-  if (!ok) return res.status(404).json({ error: "not found" });
+  const id = Number(req.params.id);
+  // 生きているタスクを名指しされたら、消さずに理由を返す。
+  // 「ゴミ箱に無い」と「そもそも存在しない」を区別する — 前者は操作ミス、後者は古い一覧
+  const alive = getTask(id);
+  if (alive && !alive.trashedAt)
+    return res.status(409).json({
+      error: "ゴミ箱にないタスクは完全削除できません。先に削除 (ゴミ箱へ移動) してください",
+    });
+  if (!purgeTask(id)) return res.status(404).json({ error: "not found" });
+  // 消えたことを開いている画面へ伝える。以前は通知しておらず、DBから消えた後も
+  // 次の更新までカードが残り、触って初めて404になった
+  broadcastBoard();
   res.json({ ok: true });
 });
 
@@ -517,6 +527,23 @@ app.get("/api/audit/export", (_req, res) => {
   res.type("application/json").send(JSON.stringify(exportAll(), null, 2));
 });
 
+/** メンバー名の配列として受け取れる形か。書き込みを始める前に確かめる。
+ *
+ * 配列かどうかしか見ていなかったので、数値やnullが1つ混ざるとDB層の .trim() で例外になり、
+ * **途中まで書けた状態で500** になっていた (自動レビュー指摘)。
+ * 新規作成は管理DBの行とプロジェクトDBファイルを作った後に落ちるので、一覧に
+ * 作りかけが残る。更新は名前を変えた後に落ちるので、500なのに名前だけ変わる。
+ *
+ * 「途中まで適用して失敗」は一番たちが悪い — 呼んだ側は失敗として扱うのに、
+ * 実際には一部が残る。#120 で「版が合わない更新は同じ行の他のフィールドも保存しない」と
+ * したのと同じ考え方を、入口の検証でも通す */
+function badMembers(members: unknown): string | null {
+  if (members === undefined) return null;
+  if (!Array.isArray(members)) return "members は文字列の配列で指定してください";
+  const bad = members.find((m) => typeof m !== "string");
+  return bad === undefined ? null : `members に文字列でない値が含まれています (${JSON.stringify(bad)})`;
+}
+
 // プロジェクト (#86): SQLiteファイルごと分かれている。切り替えるとボード・チャット・
 // 前提情報・メンバーがまとめて入れ替わる (アクティブはサーバー側に1つ)
 app.get("/api/projects", (_req, res) => {
@@ -526,6 +553,8 @@ app.get("/api/projects", (_req, res) => {
 app.post("/api/projects", (req, res) => {
   const { name, members } = req.body ?? {};
   if (!name || !String(name).trim()) return res.status(400).json({ error: "name required" });
+  const ngMembers = badMembers(members);
+  if (ngMembers) return res.status(400).json({ error: ngMembers });
   const p = createProjectWithMembers(String(name).trim(), Array.isArray(members) ? members : []);
   res.json({ ok: true, project: p });
 });
@@ -549,6 +578,9 @@ app.patch("/api/projects/:id", (req, res) => {
   // 設定を古いタブで開いたまま別タブで削除する、という普通の競合で踏む (自動レビュー指摘)
   if (!getProject(id)) return res.status(404).json({ error: `project #${req.params.id} not found` });
   const { name, members } = req.body ?? {};
+  // 何も書き始める前にまとめて確かめる (途中まで適用して500、を作らない)
+  const ngMembers = badMembers(members);
+  if (ngMembers) return res.status(400).json({ error: ngMembers });
   if (typeof name === "string" && name.trim()) renameProject(id, name.trim());
   if (Array.isArray(members)) setProjectMembers(id, members);
   if (typeof req.body?.archived === "boolean") setProjectArchived(id, req.body.archived);

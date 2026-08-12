@@ -179,7 +179,11 @@ export default function ProjectSettings() {
                   >
                     編集
                   </button>
-                  {p.id !== projectIdFromUrl() && projects.length > 1 && (
+                  {/* サーバー側の既定プロジェクト (active) は消せない。URLで別のものを開いていても
+                      サーバーの active は変わらないので、「表示中でなければ削除できる」だけを条件に
+                      していると、押しても必ず400になるボタンが出る (自動レビュー指摘)。
+                      押せるのに必ず失敗するボタンは、無いより悪い */}
+                  {p.id !== projectIdFromUrl() && !p.active && projects.length > 1 && (
                     <button
                       disabled={busy}
                       onClick={() => run(() => api.deleteProject(p.id))}
@@ -188,6 +192,14 @@ export default function ProjectSettings() {
                     >
                       削除
                     </button>
+                  )}
+                  {p.active && p.id !== projectIdFromUrl() && (
+                    <span
+                      className="self-center text-[11px] text-slate-400"
+                      title="サーバーの既定プロジェクト。ここが起点になるので消せない (別のプロジェクトを既定にすれば消せる)"
+                    >
+                      既定
+                    </span>
                   )}
                 </span>
               </div>

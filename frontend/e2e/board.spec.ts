@@ -1051,6 +1051,62 @@ test("全ログExportは人が読める形で返る (改行とインデント)",
   expect(text).not.toMatch(/"[0-9a-f]{64}"/); // 64桁hexが素で出ていない
 });
 
+test("存在しないプロジェクトを指定したSocketは、既定プロジェクトの更新を受け取らない (#125)", async () => {
+  // RESTは存在しないプロジェクト指定を400で拒否するのに、Socketだけ「指定なし」と同じ扱いに
+  // 落として既定プロジェクトのroomへ入れていた。/p/999999 を開くと画面は読み込み失敗なのに、
+  // Socketからは既定プロジェクトのタスクが流れてきて、存在しないURLの上に別物が並ぶ
+  const ghost = io(API, { query: { project: 999999 }, transports: ["websocket"] });
+  const received: unknown[] = [];
+  ghost.on("board:changed", (p) => received.push(p));
+  await new Promise<void>((r) => ghost.on("connect", () => r()));
+
+  // 既定プロジェクトを動かしても届かない
+  await createTask("E2E: 存在しないプロジェクト指定の検証");
+  await new Promise((r) => setTimeout(r, 600));
+  expect(received).toHaveLength(0);
+
+  ghost.close();
+
+  // 対照: 実在するプロジェクトを指定すれば従来どおり届く (塞ぎすぎていない)
+  const ok = io(API, { query: { project: 1 }, transports: ["websocket"] });
+  const got: unknown[] = [];
+  ok.on("board:changed", (p) => got.push(p));
+  await new Promise<void>((r) => ok.on("connect", () => r()));
+  await createTask("E2E: 実在プロジェクト指定の対照");
+  await expect.poll(() => got.length).toBeGreaterThan(0);
+  ok.close();
+});
+
+test("ゴミ箱のタスクは担当負荷にもプロジェクト件数にも数えない", async () => {
+  // 担当負荷はLLMのシステムプロンプトに入って割り振り判断の材料になる。
+  // 消したタスクが乗り続けると「そのせいでAIが別の人へ振る」ことになる (自動レビュー指摘)
+  const before = await (await fetch(`${API}/api/projects`)).json();
+  const beforeCount = before.projects.find((p: any) => p.id === 1).openTasks as number;
+
+  const res = await fetch(`${API}/api/tasks`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ title: "E2E: ゴミ箱と件数", assignee: "zio" }),
+  });
+  const id = (await res.json()).id as number;
+
+  const counts = async () => {
+    const projects = await (await fetch(`${API}/api/projects`)).json();
+    const board = await (await fetch(`${API}/api/board`)).json();
+    return {
+      project: projects.projects.find((p: any) => p.id === 1).openTasks as number,
+      onBoard: board.tasks.some((t: any) => t.id === id),
+    };
+  };
+  expect((await counts()).project).toBe(beforeCount + 1);
+
+  // ゴミ箱へ移すと、ボードからも件数からも消える (片方だけ残らない)
+  await fetch(`${API}/api/tasks/${id}`, { method: "DELETE" });
+  const after = await counts();
+  expect(after.onBoard).toBe(false);
+  expect(after.project).toBe(beforeCount);
+});
+
 test("Doneから差し戻すと検収の印は消える (確認し直さずに戻せない)", async () => {
   // approveChecked が checked_at を「人が確かめた唯一の証拠」にしたので、
   // 差し戻しで印が残ると、確認し直さずにもう一度Doneへ通せてしまう

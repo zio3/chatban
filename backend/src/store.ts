@@ -462,8 +462,12 @@ export function projectSummaries(): ProjectSummary[] {
       // #117: MCPの接続先。プロジェクトはURLで固定する設計(#96)なので、
       // .mcp.json に貼る値をプロジェクトごとに出す。ポートを知っているのはサーバー側
       mcpUrl: `http://localhost:${process.env.PORT ?? 8787}/mcp/${p.id}`,
+      // ゴミ箱を数えない (ボードから消えているのに件数が減らない、を防ぐ)。
+      // 条件はボードの一覧と揃える — 母集団の条件を書き分けると必ずズレる
       openTasks: (
-        pdb.prepare("SELECT COUNT(*) AS c FROM tasks WHERE archived = 0 AND status != 'done'").get() as { c: number }
+        pdb
+          .prepare("SELECT COUNT(*) AS c FROM tasks WHERE archived = 0 AND status != 'done' AND trashed_at IS NULL")
+          .get() as { c: number }
       ).c,
       members: (pdb.prepare("SELECT name FROM members ORDER BY id").all() as { name: string }[]).map((m) => m.name),
     };

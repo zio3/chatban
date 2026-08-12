@@ -578,7 +578,12 @@ export function metrics() {
   };
 }
 
-/** 全ログExport (#83): 検証利用向けのフルダンプ。全テーブルをもれなく生のまま出す (期間指定は将来必要になったら) */
+/** 全ログExport (#83): 検証利用向けのフルダンプ。全テーブルを生のまま出す (期間指定は将来必要になったら)。
+ *
+ * **唯一の例外がセッション署名鍵で、伏字にしている** (下の exportableSettings)。
+ * ここに「もれなく生のまま」と書いてあると、渡す前に中身を確かめる人が
+ * 「何も伏せていない」と読む — Exportの安全性を判断する人が最初に読む場所なので、
+ * 例外があることはこの行で言う */
 export function exportAll() {
   const all = (table: string) => db().prepare(`SELECT * FROM ${table} ORDER BY id`).all();
   return {

@@ -196,7 +196,10 @@ export default function ProjectSettings() {
                   {p.active && p.id !== projectIdFromUrl() && (
                     <span
                       className="self-center text-[11px] text-slate-400"
-                      title="サーバーの既定プロジェクト。ここが起点になるので消せない (別のプロジェクトを既定にすれば消せる)"
+                      /* 「別のプロジェクトを既定にすれば消せる」とは書かない。既定を切り替える口 (activateProject) は
+                         APIにはあるがUIから呼べる場所が無く、案内どおりに操作しようとすると行き止まりになる
+                         (自動コードレビュー指摘)。存在しない手段を案内するのは、何も書かないより悪い */
+                      title="サーバーの既定プロジェクト。ヘッダーの選択やURLで別を開いても、既定はこのまま。ここが起点なので消せない"
                     >
                       既定
                     </span>

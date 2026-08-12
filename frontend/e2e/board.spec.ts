@@ -1033,6 +1033,17 @@ test("検収の印を付けられるのはReview列だけ (順序を飛ばして
   expect((await check(plain, false)).status).toBe(200);
 });
 
+test("全ログExportは人が読める形で返る (改行とインデント)", async () => {
+  // #83のExportは機械向けのAPIレスポンスではなく、人が開いて読むファイル
+  // (検証・記事の一次資料)。1行JSONだとエディタで開いた瞬間に読めない
+  const res = await fetch(`${API}/api/audit/export`);
+  expect(res.status).toBe(200);
+  const text = await res.text();
+  expect(text.split("\n").length).toBeGreaterThan(10); // 1行に潰れていない
+  expect(text).toContain('\n  "'); // トップレベルのキーが2スペース下がっている
+  expect(() => JSON.parse(text)).not.toThrow(); // 整形してもJSONとして壊れていない
+});
+
 test("Doneから差し戻すと検収の印は消える (確認し直さずに戻せない)", async () => {
   // approveChecked が checked_at を「人が確かめた唯一の証拠」にしたので、
   // 差し戻しで印が残ると、確認し直さずにもう一度Doneへ通せてしまう

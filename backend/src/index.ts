@@ -492,7 +492,10 @@ app.get("/api/suggestions", async (_req, res) => {
 app.get("/api/audit/export", (_req, res) => {
   const stamp = new Date().toISOString().slice(0, 19).replace(/[-:T]/g, "").slice(0, 14);
   res.setHeader("Content-Disposition", `attachment; filename="chatban-audit-${stamp}.json"`);
-  res.json(exportAll());
+  // #83: これは機械向けのAPIレスポンスではなく、人が開いて読むファイル (検証・記事の一次資料)。
+  // res.json() の1行JSONだと、エディタで開いた瞬間に折り返しの壁になって読めない。
+  // ここだけ整形して返す — 他のAPIレスポンスまで太らせない (zio依頼)
+  res.type("application/json").send(JSON.stringify(exportAll(), null, 2));
 });
 
 // プロジェクト (#86): SQLiteファイルごと分かれている。切り替えるとボード・チャット・

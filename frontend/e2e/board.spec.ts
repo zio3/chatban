@@ -1402,3 +1402,50 @@ test("日本語が \\uXXXX エスケープで届いてもデコードして保�
   const t2 = (await (await fetch(`${API}/api/tasks/${single.created[0].id}`)).json()) as any;
   expect(t2.title).toBe("\\u0041 は A のこと");
 });
+
+test("SQL窓口は許可リスト方式。載っていないものは名前も引けない (#168)", async () => {
+  // もとは隠す側を列挙していたので、遮断リストに書き忘れた経路が開いていた
+  // (pragma_table_list から settings を含む全テーブル名が読めた)。
+  // 許可リストなら、次にテーブルを足しても黙って開かない
+  const q = async (scope: "cost" | "audit", sql: string) => await mcp("query_log", { scope, sql });
+
+  // 機密そのもの
+  expect((await q("cost", "SELECT * FROM settings")).error).toContain("参照できません");
+  // sqlite_master 自身は sqlite_master に載らないので、実在名の照合だけでは捕まらない。
+  // 許可リスト化したとき実際にここが開き、このテストが拾った
+  expect((await q("cost", "SELECT name FROM sqlite_master")).error).toContain("参照できません");
+  // 仮想テーブルも sqlite_master に載らない。名前を数え上げる方式では「知らないものは開く」から
+  // 抜け出せず、実際 pragma_* を閉じた直後に dbstat が残っていた (外部レビュー指摘)。
+  // dbstat は全テーブル名とページ構成を返すので、塞いだはずの settings の存在漏れが残っていた。
+  // いまは EXPLAIN の VOpen で機構ごと閉じているので、名前を知らなくても捕まる
+  expect((await q("cost", "SELECT name FROM pragma_table_list")).error).toContain("仮想テーブル");
+  expect((await q("cost", "SELECT name, pageno FROM dbstat")).error).toContain("仮想テーブル");
+  expect((await q("audit", "SELECT name FROM dbstat")).error).toContain("仮想テーブル");
+  // 機密ではないが許可もしていないもの。「危なくないから開けておく」をやらない
+  expect((await q("cost", "SELECT * FROM sqlite_sequence")).error).toContain("参照できません");
+
+  // 開けているものは素通りする (閉めすぎて使えなくなっていないこと)
+  const cost = await q("cost", "SELECT purpose, COUNT(*) n FROM llm_calls GROUP BY 1");
+  expect(Array.isArray(cost.rows)).toBe(true);
+  const audit = await q("audit", "SELECT id, title FROM live_tasks LIMIT 1");
+  expect(Array.isArray(audit.rows)).toBe(true);
+  // WITH も通ること。EXPLAIN を1回挟むようにしたので、素直なSELECT以外が壊れていないか確かめる
+  const cte = await q("audit", "WITH x AS (SELECT id FROM live_tasks LIMIT 3) SELECT COUNT(*) c FROM x");
+  expect(Array.isArray(cte.rows)).toBe(true);
+
+  // scopeは別の接続。またげない (cost=全プロジェクト横断 / audit=接続中のプロジェクトだけ)
+  expect((await q("audit", "SELECT COUNT(*) FROM llm_calls")).error).toBeTruthy();
+  expect((await q("cost", "SELECT COUNT(*) FROM tasks")).error).toBeTruthy();
+});
+
+test("ツール説明に書いてあるテーブルは、実際に引けるものと一致する (#168)", async () => {
+  // 説明と実装のズレは #92 #108 #114 で3回踏んでいる。今度は許可リストが唯一の出所なので、
+  // 説明に載っているのに引けない / 引けるのに載っていない、が起きないことを確かめる
+  const listed = (await mcp("query_log", { scope: "audit", sql: "SELECT * FROM settings" })) as any;
+  expect(listed.error).toBeTruthy();
+
+  for (const t of ["live_tasks", "done_tasks", "tasks", "chat_messages", "summary_cards"]) {
+    const r = await mcp("query_log", { scope: "audit", sql: `SELECT * FROM ${t} LIMIT 1` });
+    expect(r.error, `${t} は説明に載っているのに引けない`).toBeFalsy();
+  }
+});

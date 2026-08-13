@@ -859,33 +859,106 @@ export function loadModelPrices() {
  * 守り: 書き込めない接続 / SELECT・WITH のみ / 文は1つ / 機密テーブルの遮断 / 行数上限。
  * プロンプトで「SELECTだけ」と言っても漏れるが、readonly接続は漏れない */
 
-/** SQLで開放しないもの。「機密以外は読み取り専用で開放する」方針なので、隠す側を列挙する —
- * 公開側を列挙すると、テーブルを足したときに閉じ忘れではなく「開き忘れ」で気づけるが、
- * 逆に隠す側を列挙すると足したテーブルは黙って開く。ここでは後者を選び、
- * 機密になりうるものだけを閉じる (APIキーはDBに入れていない。ファイルとenvのみ) */
-const PRIVATE_TABLES = ["settings", "sqlite_master", "sqlite_schema"];
+/** #168: SQLで開放するもの (許可リスト)。
+ *
+ * もとは隠す側を列挙していた。トレードオフは分かって選んでいた —
+ * 「公開側を列挙すると、テーブルを足したときに閉じ忘れではなく**開き忘れ**で気づけるが、
+ * 逆に隠す側を列挙すると足したテーブルは黙って開く」。後者を選んでいた。
+ *
+ * 実際に穴が開いた: `SELECT name FROM pragma_table_list` は遮断リストに載っていないので通り、
+ * settings を含む全テーブル名が読めた (中身は読めない — SQLiteは FROM にテーブル名の式を書けないので、
+ * 名前を組み立てて読むことはできない)。漏れるのは存在だけだが、
+ * 「閉じ忘れ」で漏れる方式である以上、次に足すテーブルでも同じことが起きる。
+ *
+ * 許可リストなら**新しいテーブルは黙って閉じる**。気づき方が「開き忘れ」に変わり、
+ * 失敗が安全側に倒れる。
+ *
+ * ここは QUERY_LOG_DESCRIPTION (ツール説明に書いてあるテーブル一覧) と同じ集合であるべきなので、
+ * 説明とコードがズレていないことを E2E で確かめている (入口ごとの書き分けは #92 #108 #114 で3回ズレた)。
+ *
+ * **ビューはテーブルと同じ扱い** (判定を type IN ('table','view') から作っている)。
+ * ただし**ビューを載せることは、そのビューが中で参照しているテーブルを載せることと同じ**。
+ * 名前の照合はSQLの文字列しか見ないし、EXPLAIN も展開後を見るので、定義の中身までは辿らない。
+ * いまの live_tasks / done_tasks はどちらも tasks しか見ておらず、その tasks も載っているので実害はない。
+ * 機密を参照するビューを「列を絞ってあるから安全」と足すと、そこから読めるようになる —
+ * ここは見える名前の一覧ではなく、**到達できる範囲の宣言**として読むこと */
+export const PUBLIC_TABLES: Record<"cost" | "audit", readonly string[]> = {
+  // 請求は口座単位なので全プロジェクト横断 (projects は名前を引くため)
+  cost: ["llm_calls", "model_prices", "projects"],
+  // 接続中のプロジェクトの記録だけ。live_tasks / done_tasks はビュー (どちらも tasks を見ている)
+  audit: [
+    "tasks",
+    "live_tasks",
+    "done_tasks",
+    "chat_messages",
+    "assignment_history",
+    "proposals",
+    "summary_cards",
+    "members",
+    "project_context",
+  ],
+};
 
 export function queryLlmCalls(sql: string, limit = 200) {
-  return runReadonly(adminReadonly(), sql, limit);
+  return runReadonly(adminReadonly(), sql, limit, "cost");
 }
 
 /** #106追補: 会話ログ・割り振り履歴などプロジェクト側の記録もSQLで引く。
  * キーワード検索では「8/9の午前に何を話していたか」のような時間軸での切り出しができない。
  * 会話は揮発させる方針(#72)なので常時プロンプトには載せず、聞かれたときだけ掘る */
 export function queryProjectData(sql: string, limit = 200) {
-  return runReadonly(projectReadonly(), sql, limit);
+  return runReadonly(projectReadonly(), sql, limit, "audit");
 }
+
+/** 仮想テーブルを見つけて弾いたときの例外。EXPLAIN 自体の失敗と区別するために型で持つ
+ * (メッセージで見分けると、文言を直した瞬間に握り潰しへ倒れる) */
+class VirtualTableError extends Error {}
 
 function runReadonly(
   conn: ReturnType<typeof adminReadonly>,
   sql: string,
-  limit: number
+  limit: number,
+  scope: "cost" | "audit"
 ): { rows: unknown[]; sql: string; truncated: boolean; note?: string } {
   const trimmed = sql.trim().replace(/;\s*$/, "");
   if (!/^(select|with)\b/i.test(trimmed)) throw new Error("SELECT か WITH で始まる読み取りクエリだけ実行できます");
   if (trimmed.includes(";")) throw new Error("複数の文は実行できません");
-  const hit = PRIVATE_TABLES.find((t) => new RegExp(`\\b${t}\\b`, "i").test(trimmed));
-  if (hit) throw new Error(`${hit} は参照できません (機密として閉じているテーブル)`);
+  const allowed = PUBLIC_TABLES[scope];
+  // #168: SQLをパースせず、「実在するオブジェクトの名前がSQLに現れたか」で判定する。
+  // 名前の抽出をやめたのは、サブクエリ・CTE・JOIN・別名を正しく拾うには本物のパーサが要るため。
+  // 実在名との突き合わせなら、書き方が何であれ「触れるのは許可したものだけ」が保てる
+  const forbidden = (
+    conn.prepare("SELECT name FROM sqlite_master WHERE type IN ('table','view')").all() as { name: string }[]
+  )
+    .map((r) => r.name)
+    .filter((n) => !allowed.includes(n));
+  const hit = forbidden.find((t) => new RegExp(`\\b${t}\\b`, "i").test(trimmed));
+  if (hit) throw new Error(`${hit} は参照できません (この窓口から引けるのは ${allowed.join(" / ")} だけです)`);
+  // 上の照合は「sqlite_master に載っているもの」から作るので、**sqlite_master 自身は載らない**。
+  // 旧実装は名前を直書きして閉じていたぶん、ここだけ許可リスト化で取りこぼした (E2Eが拾った)
+  if (/\bsqlite_\w+/i.test(trimmed))
+    throw new Error(
+      `sqlite_ で始まる内部の名前は参照できません (この窓口から引けるのは ${allowed.join(" / ")} だけです)`
+    );
+  // **仮想テーブルは名前で数え上げない。**sqlite_master に載らないので実在名の照合では捕まらず、
+  // 名前を並べる方式では「知らないものは開く」から抜け出せない。実際 pragma_* を閉じた直後に
+  // dbstat が残っていた (外部レビュー指摘) — dbstat は全テーブル名とページ構成を返すので、
+  // このPRが塞ごうとしていた settings の存在漏れがそのまま残っていた。
+  //
+  // EXPLAIN すると仮想テーブルへのアクセスは必ず VOpen になる (通常のテーブルは OpenRead)。
+  // 名前ではなく機構で塞ぐので、SQLiteに仮想テーブルが増えても効く。
+  // EXPLAIN は計画を組み立てるだけで問い合わせを実行しない
+  try {
+    const plan = conn.prepare(`EXPLAIN ${trimmed}`).all() as { opcode: string }[];
+    if (plan.some((r) => r.opcode === "VOpen"))
+      throw new VirtualTableError(
+        `仮想テーブル (dbstat / pragma_* など) は参照できません (この窓口から引けるのは ${allowed.join(" / ")} だけです)`
+      );
+  } catch (e) {
+    // 弾いた本人の例外はそのまま上げる。EXPLAIN 自体が失敗したときは握って先へ進める —
+    // 構文エラーなら下の prepare が同じ理由で落ち、そちらの方が直せる材料が多い
+    if (e instanceof VirtualTableError) throw e;
+  }
   const rows = conn.prepare(trimmed).all() as unknown[];
   return { rows: rows.slice(0, limit), sql: trimmed, truncated: rows.length > limit, ...silentTrap(trimmed) };
 }
@@ -923,7 +996,9 @@ export function queryLogHelp(scope: "cost" | "audit", message: string): Record<s
         name: string;
         type: string;
       }[]
-    ).filter((o) => !PRIVATE_TABLES.includes(o.name) && !o.name.startsWith("sqlite_"));
+    // #168: 引ける一覧は許可リストそのもの。ここで別の条件を書くと
+    // 「案内されたのに引けない」「引けるのに案内されない」がすぐ生まれる
+    ).filter((o) => PUBLIC_TABLES[scope].includes(o.name));
 
     if (/no such (table|column)/i.test(message)) {
       // 何がどこにあるかを、実DBの現物で返す

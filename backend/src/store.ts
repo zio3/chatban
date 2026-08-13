@@ -89,6 +89,9 @@ CREATE TABLE IF NOT EXISTS llm_calls (
   add("ALTER TABLE llm_calls ADD COLUMN price_in_per_m REAL");
   add("ALTER TABLE llm_calls ADD COLUMN price_out_per_m REAL");
   add("ALTER TABLE llm_calls ADD COLUMN estimated_usd REAL");
+  // #172: キャッシュに「書いた」ぶん。読み(cached_tokens)と単価が違う(書き込みは1.25倍)ので別に持つ。
+  // 保存しないと /api/metrics の再計算で書き込み分を読み扱いしてしまい、初回の概算が25%安く出る
+  add("ALTER TABLE llm_calls ADD COLUMN cache_creation_tokens INTEGER NOT NULL DEFAULT 0");
 }
 
 /** #106: コスト分析はLLMにSQLを書かせる。書き込めない接続を別に持つのが安全境界

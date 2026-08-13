@@ -24,6 +24,7 @@ import {
   updateTask,
   updateTasks,
 } from "./db.js";
+import { currentProjectId, suggestEnabled } from "./store.js";
 import { chatCompletion, getModel } from "./llm.js";
 import { log } from "./log.js";
 import type { TaskStatus, UiAction } from "./types.js";
@@ -685,6 +686,9 @@ const SUGGEST_TTL_MS = 5 * 60 * 1000;
 const suggestInflight = new Map<string, Promise<{ label: string; message: string }[]>>();
 
 export async function generateSuggestions(): Promise<{ label: string; message: string }[]> {
+  // #167: このプロジェクトで提案チップを切っているなら、LLMを呼ばずに空で返す。
+  // 表示だけ消す形にしなかったのは、切っている間は呼び出し自体を止めたいため (コストも止まる)
+  if (!suggestEnabled(currentProjectId())) return [];
   // 新規プロジェクト(ボードが空)では読むべき文脈が無い。LLMを呼ばずに空で返す
   // — UI側は「方針を伝える」導線だけを出す (#86)
   if (listTasks().length === 0 && listSummaryCards().length === 0) return [];

@@ -44,6 +44,8 @@ export interface Project {
   members: string[];
   /** #117: このプロジェクト用のMCP接続先 */
   mcpUrl: string;
+  /** #167: AI提案チップを出すか。動画撮影中は毎回違うチップが出るので切れるようにした */
+  suggestEnabled: boolean;
 }
 
 export const api = {
@@ -64,7 +66,10 @@ export const api = {
     }).then((r) => json<{ ok: boolean }>(r)),
   activateProject: (id: number) =>
     apiFetch(`/api/projects/${id}/activate`, { method: "POST" }).then((r) => json<{ projects: Project[] }>(r)),
-  updateProject: (id: number, patch: { name?: string; members?: string[]; archived?: boolean }) =>
+  updateProject: (
+    id: number,
+    patch: { name?: string; members?: string[]; archived?: boolean; suggestEnabled?: boolean }
+  ) =>
     apiFetch(`/api/projects/${id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },

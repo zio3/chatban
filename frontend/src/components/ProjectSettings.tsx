@@ -148,6 +148,26 @@ export default function ProjectSettings() {
                 >
                   {copied === p.id ? "✓ コピーしました" : `🔌 ${p.mcpUrl}`}
                 </button>
+                {/* #167: AI提案チップ(#75)のON/OFF。デモ動画を撮り直すたびに違うチップが出ると
+                    同じ画面をもう一度撮れないため。OFFの間はLLMを呼ばないのでコストも止まる。
+                    プロジェクトごとに持つので、撮影用を切っても開発用のタブは生きたまま (#97) */}
+                <button
+                  data-testid={`suggest-toggle-${p.id}`}
+                  disabled={busy}
+                  onClick={() => run(() => api.updateProject(p.id, { suggestEnabled: !p.suggestEnabled }))}
+                  title={
+                    p.suggestEnabled
+                      ? "AI提案チップを出さないようにする (動画撮影中など)"
+                      : "AI提案チップを出すようにする"
+                  }
+                  className={`rounded-md border px-2 py-0.5 text-[10px] disabled:opacity-30 ${
+                    p.suggestEnabled
+                      ? "border-slate-200 bg-slate-50 text-slate-500 hover:border-slate-400"
+                      : "border-amber-300 bg-amber-50 font-bold text-amber-700"
+                  }`}
+                >
+                  {p.suggestEnabled ? "💡 提案ON" : "💡 提案OFF"}
+                </button>
                 <span className="ml-auto flex gap-1.5">
                   {p.id !== projectIdFromUrl() && (
                     <button

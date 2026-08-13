@@ -37,6 +37,7 @@ import {
   reportOrphanFiles,
   setActiveProjectId,
   setProjectArchived,
+  setSuggestEnabled,
   setProjectMembers,
   trashProject,
   withProject,
@@ -594,7 +595,7 @@ app.patch("/api/projects/:id", (req, res) => {
   // 存在確認をしないと、更新自体は0件で静かに通ったあと broadcastBoard(id) が投げて500になる。
   // 設定を古いタブで開いたまま別タブで削除する、という普通の競合で踏む (自動レビュー指摘)
   if (!getProject(id)) return res.status(404).json({ error: `project #${req.params.id} not found` });
-  const { name, members, archived } = req.body ?? {};
+  const { name, members, archived, suggestEnabled: suggest } = req.body ?? {};
   // 何も書き始める前にまとめて確かめる (途中まで適用して500、を作らない)。
   // 既定プロジェクトの無効化はDB層が投げるので、ここで先に同じ判定を通す —
   // 名前を変えた後に投げると「500なのに名前だけ変わる」になる
@@ -608,6 +609,11 @@ app.patch("/api/projects/:id", (req, res) => {
   if (typeof name === "string" && name.trim()) renameProject(id, name.trim());
   if (Array.isArray(members)) setProjectMembers(id, members);
   if (typeof archived === "boolean") setProjectArchived(id, archived);
+  // #167: 提案チップのON/OFF。次の /api/suggestions から効く (再起動不要)
+  if (typeof suggest === "boolean") {
+    setSuggestEnabled(id, suggest);
+    log("settings", `suggest #${id} -> ${suggest ? "on" : "off"}`);
+  }
   io.emit("project:changed", { projects: projectSummaries() });
   broadcastBoard(id);
   res.json({ ok: true, projects: projectSummaries() });

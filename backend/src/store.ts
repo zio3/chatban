@@ -477,6 +477,8 @@ export interface ProjectSummary {
   members: string[];
   /** #117: このプロジェクト用のMCP接続先 (.mcp.json に貼る) */
   mcpUrl: string;
+  /** #167: AI提案チップを出すか。デモ動画の撮影中は毎回違うチップが出ると撮り直しになるため切れるようにした */
+  suggestEnabled: boolean;
 }
 
 export function projectSummaries(): ProjectSummary[] {
@@ -501,8 +503,40 @@ export function projectSummaries(): ProjectSummary[] {
           .get() as { c: number }
       ).c,
       members: (pdb.prepare("SELECT name FROM members ORDER BY id").all() as { name: string }[]).map((m) => m.name),
+      suggestEnabled: suggestEnabled(p.id),
     };
   });
+}
+
+/** #167: AI提案チップ(#75)を出すかどうか。プロジェクトごとに持つ。
+ *
+ * 動画を撮り直すたびに違うチップが出るので同じ画面をもう一度撮れない、という実務上の困りごとから。
+ * プロジェクト単位にしたのは、撮影用プロジェクトだけ切っておけば開発用のタブは生かしたままにできるため
+ * (タブごとに別プロジェクトを開ける #97)。
+ *
+ * 設定キーに projectId を含めるだけにして、テーブルは足していない。既定はON —
+ * 設定が無いプロジェクト(新規作成された直後など)を勝手にOFFにしない */
+// settings の読み書きは db.ts にも同じものがあるが、db.ts はこのファイルを import しているので
+// ここから呼ぶと循環参照になる。admin を直接使う
+const SUGGEST_KEY = (projectId: number) => `suggest.enabled.${projectId}`;
+
+export function suggestEnabled(projectId: number): boolean {
+  const r = admin.prepare("SELECT value FROM settings WHERE key = ?").get(SUGGEST_KEY(projectId)) as
+    | { value: string }
+    | undefined;
+  return r?.value !== "0";
+}
+
+export function setSuggestEnabled(projectId: number, enabled: boolean): void {
+  // OFFのときだけ書き、ONに戻したら消す。既定(ON)の行をDBに残さないので、
+  // settings を見たときに「意図して切っているプロジェクト」だけが並ぶ
+  if (enabled) admin.prepare("DELETE FROM settings WHERE key = ?").run(SUGGEST_KEY(projectId));
+  else
+    admin
+      .prepare(
+        "INSERT INTO settings (key, value, updated_at) VALUES (?, '0', datetime('now', 'localtime')) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at"
+      )
+      .run(SUGGEST_KEY(projectId));
 }
 
 /** 新規プロジェクト。メンバーはこのプロジェクトのDBに入る (プロジェクトごとの参加者) */

@@ -1449,3 +1449,56 @@ test("ツール説明に書いてあるテーブルは、実際に引けるも�
     expect(r.error, `${t} は説明に載っているのに引けない`).toBeFalsy();
   }
 });
+
+test("AI提案チップはプロジェクトごとにOFFにできる。OFFの間はLLMを呼ばない (#167)", async ({ page }) => {
+  // 動画を撮り直すたびに違うチップが出ると同じ画面をもう一度撮れない、という実務上の困りごとから。
+  // 撮影用プロジェクトだけ切れることが要件 (タブごとに別プロジェクトを開けるため #97)
+  const enabledOf = async (id: number) => {
+    const d = (await (await fetch(`${API}/api/projects`)).json()) as any;
+    return d.projects.find((p: any) => p.id === id)?.suggestEnabled;
+  };
+
+  // 巻き込まれない相手をこのテスト内で作る。他のテストが作ったプロジェクトに依存すると、
+  // 単体で流したときや実行順が変わったときに落ちる
+  const other = (await (
+    await fetch(`${API}/api/projects`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "E2E-提案OFFの巻き込まれ確認", members: [] }),
+    })
+  ).json()) as any;
+  const otherId = other.project.id as number;
+
+  // 既定はON。設定を持たないプロジェクトを勝手にOFFにしない
+  expect(await enabledOf(1)).toBe(true);
+  expect(await enabledOf(otherId)).toBe(true);
+
+  await fetch(`${API}/api/projects/1`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ suggestEnabled: false }),
+  });
+  expect(await enabledOf(1)).toBe(false);
+  // 切ったのは1だけ。他のプロジェクトは巻き込まれない
+  expect(await enabledOf(otherId)).toBe(true);
+
+  // OFFならLLMを呼ばない。**呼び出し回数で直接確かめる** —
+  // 所要時間で判定すると、上流が即座に失敗して空配列になった場合にも合格してしまう
+  const llmCalls = async () => {
+    const r = await mcp("query_log", { scope: "cost", sql: "SELECT COUNT(*) c FROM llm_calls" });
+    return (r.rows as any[])[0].c as number;
+  };
+  const before = await llmCalls();
+  const s = (await (await fetch(`${API}/api/suggestions`)).json()) as any;
+  expect(s.suggestions).toEqual([]);
+  expect(await llmCalls(), "OFFなのにLLMを呼んでいる").toBe(before);
+
+  // UIのトグルはラベルで状態が読める (押せるが何も起きないボタンにしない)
+  await page.goto("/");
+  await page.getByRole("button", { name: "⚙ 設定" }).click();
+  const toggle = page.getByTestId("suggest-toggle-1");
+  await expect(toggle).toHaveText("💡 提案OFF");
+  await toggle.click();
+  await expect(toggle).toHaveText("💡 提案ON");
+  expect(await enabledOf(1)).toBe(true);
+});

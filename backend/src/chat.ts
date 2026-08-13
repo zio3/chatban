@@ -685,10 +685,47 @@ const SUGGEST_TTL_MS = 5 * 60 * 1000;
 // プロジェクトAの生成中にBが要求したときAの結果がBへ返る (タブごとに別プロジェクト #97)
 const suggestInflight = new Map<string, Promise<{ label: string; message: string }[]>>();
 
+/** #162: いまチャットを処理中のプロジェクト。提案チップはこの間だけ譲る。
+ *
+ * 上流が遅いときに並走するとTTFTが目に見えて悪化する (実測: 単独12秒 → chat+chat+suggest の
+ * 3本並走で30〜55秒)。しかもチップは「会話が始まる前」にしか表示されない (log.length===0) ので、
+ * 送信した瞬間から画面に出る余地が無い — **表示されないものを作るために待たされていた**。
+ *
+ * プロジェクト単位で持つのは #119 と同じ理由。1本しか持たないと、
+ * Aのチャット中にBの提案まで止まる (タブごとに別プロジェクト #97) */
+const chatInflight = new Map<number, number>();
+
+export function isChatBusy(projectId: number): boolean {
+  return (chatInflight.get(projectId) ?? 0) > 0;
+}
+
+/** 進行中の提案生成。チャットが始まったら中断する。
+ *
+ * 開始時のフラグを見るだけでは**片方向にしか効かない** (外部レビュー指摘)。
+ * 実際の画面ではページ表示直後に /api/suggestions が走るので、
+ * 「suggest開始 → chat開始」が普通の順番で、そのままでは並走が残っていた。
+ *
+ * 結果を捨てるだけでは足りない — 上流の応答は待ち続けるので、
+ * 止めたかったTTFTの奪い合いがそのまま残る。**接続ごとやめる**必要がある。
+ *
+ * 同じプロジェクトで複数走りうる (suggestInflight のキーは systemPrompt なので、
+ * 内容が違えば並走する) ので Set で持つ */
+const suggestAborts = new Map<number, Set<AbortController>>();
+
+function abortSuggestsFor(projectId: number): void {
+  const set = suggestAborts.get(projectId);
+  if (!set?.size) return;
+  for (const ac of set) ac.abort();
+  set.clear();
+  log("chat", `提案の生成を中断しました (project #${projectId} でチャットが始まったため)`);
+}
+
 export async function generateSuggestions(): Promise<{ label: string; message: string }[]> {
   // #167: このプロジェクトで提案チップを切っているなら、LLMを呼ばずに空で返す。
   // 表示だけ消す形にしなかったのは、切っている間は呼び出し自体を止めたいため (コストも止まる)
   if (!suggestEnabled(currentProjectId())) return [];
+  // #162: 会話の処理中は譲る。この間はチップが表示されないので、生成しても捨てるだけになる
+  if (isChatBusy(currentProjectId())) return [];
   // 新規プロジェクト(ボードが空)では読むべき文脈が無い。LLMを呼ばずに空で返す
   // — UI側は「方針を伝える」導線だけを出す (#86)
   if (listTasks().length === 0 && listSummaryCards().length === 0) return [];
@@ -699,30 +736,52 @@ export async function generateSuggestions(): Promise<{ label: string; message: s
   // 同時到着 (StrictModeの二重実行はほぼ同時に来る) は1本にまとめる
   const running = suggestInflight.get(systemPrompt);
   if (running) return running;
-  const job = generateSuggestionsUncached(systemPrompt)
+  // チャットが始まったら中断できるようにしておく
+  const project = currentProjectId();
+  const ac = new AbortController();
+  const acs = suggestAborts.get(project) ?? new Set<AbortController>();
+  acs.add(ac);
+  suggestAborts.set(project, acs);
+  const job = generateSuggestionsUncached(systemPrompt, ac.signal)
     .then((value) => {
       suggestCache = { key: systemPrompt, value, at: Date.now() };
       return value;
     })
+    // 中断は失敗ではない (チャットに譲っただけ)。呼び出し側の catch まで投げず空で返す —
+    // /api/suggestions は失敗を空配列に倒すので結果は同じだが、ログにエラーを残さない
+    .catch((e) => {
+      if (ac.signal.aborted) return [];
+      throw e;
+    })
     .finally(() => {
       suggestInflight.delete(systemPrompt);
+      acs.delete(ac);
+      if (acs.size === 0) suggestAborts.delete(project);
     });
   suggestInflight.set(systemPrompt, job);
   return job;
 }
 
-async function generateSuggestionsUncached(systemPrompt: string): Promise<{ label: string; message: string }[]> {
-  const res = await chatCompletion("suggest", getModel("main"), {
-    messages: [
+async function generateSuggestionsUncached(
+  systemPrompt: string,
+  signal: AbortSignal
+): Promise<{ label: string; message: string }[]> {
+  const res = await chatCompletion(
+    "suggest",
+    getModel("main"),
+    {
+      messages: [
       { role: "system", content: systemPrompt },
       {
         role: "user",
         content:
           'ボードの現状を読んで、いまユーザーにとって価値のある操作を最大3つ提案して。ツールは呼ばない。出力はJSON配列のみ: [{"label":"絵文字+15字以内の短文","message":"チャットにそのまま投げる依頼文"}]。期限接近・依存解除・検収たまり・未割り当てなど文脈が根拠のものを優先。',
       },
-    ],
-    tools: toolsFor(memberLoads().length === 0),
-  });
+      ],
+      tools: toolsFor(memberLoads().length === 0),
+    },
+    { signal }
+  );
   const text = res.choices[0].message.content ?? "";
   const m = text.match(/\[[\s\S]*\]/);
   if (!m) return [];
@@ -747,6 +806,41 @@ export async function runChatTurn(
   attachments?: ChatAttachment[],
   view?: string,
   /** #126: 発言者がログイン済みか。自己申告と区別してプロンプトに書く */
+  speakerVerified?: boolean
+): Promise<ChatResult> {
+  const project = currentProjectId();
+  chatInflight.set(project, (chatInflight.get(project) ?? 0) + 1);
+  // 先に始まっていた提案生成は捨てる。フラグだけでは「chat→suggest」の順しか止められず、
+  // 実際の画面で普通に起きる「suggest→chat」の順で並走が残っていた (外部レビュー指摘)
+  abortSuggestsFor(project);
+  try {
+    return await runChatTurnInner(
+      userMessage,
+      history,
+      onEvent,
+      onProgress,
+      taskFocusId,
+      speaker,
+      attachments,
+      view,
+      speakerVerified
+    );
+  } finally {
+    const n = (chatInflight.get(project) ?? 1) - 1;
+    if (n > 0) chatInflight.set(project, n);
+    else chatInflight.delete(project);
+  }
+}
+
+async function runChatTurnInner(
+  userMessage: string,
+  history: { role: "user" | "assistant"; content: string }[],
+  onEvent: (kind: "board" | "proposals") => void,
+  onProgress?: (label: string) => void,
+  taskFocusId?: number,
+  speaker?: string,
+  attachments?: ChatAttachment[],
+  view?: string,
   speakerVerified?: boolean
 ): Promise<ChatResult> {
   const t0 = Date.now();

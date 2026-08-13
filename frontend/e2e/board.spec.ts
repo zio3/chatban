@@ -1,5 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import { io } from "socket.io-client";
+import fs from "node:fs";
+import path from "node:path";
 
 const API = "http://localhost:8799";
 
@@ -1501,4 +1503,84 @@ test("AI提案チップはプロジェクトごとにOFFにできる。OFFの間
   await toggle.click();
   await expect(toggle).toHaveText("💡 提案ON");
   expect(await enabledOf(1)).toBe(true);
+});
+
+test("チャットの処理中は提案チップを生成しない (#162)", async () => {
+  // 上流が遅いときに並走するとTTFTが悪化する (実測: 単独12秒 → 3本並走で30〜55秒)。
+  // しかもチップは会話が始まる前にしか出ないので、送信した瞬間から表示される余地が無い。
+  // ここではLLMを呼ばずに、抑止のフラグが立っている間だけ空になることを確かめる
+  const id = await createTask("チャット中の抑止を確かめる");
+
+  // 応答が返る前に叩きたいので、待たずに走らせる。E2E環境のLLMは失敗してよい
+  // (成否によらず runChatTurn には入るので、その間フラグは立つ)
+  const chatting = fetch(`${API}/api/tasks/${id}/chat`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ message: "状況は?", history: [] }),
+  }).catch(() => null);
+
+  // 立ち上がりを待ってから確認する
+  await new Promise((r) => setTimeout(r, 300));
+  const during = (await (await fetch(`${API}/api/suggestions`)).json()) as any;
+  expect(during.suggestions).toEqual([]);
+
+  await chatting;
+});
+
+test("先に始まっていた提案生成は、チャットが始まったら中断される (#162)", async () => {
+  // 開始時のフラグを見るだけでは片方向にしか効かない (外部レビュー指摘)。
+  // 実際の画面ではページ表示直後に /api/suggestions が走るので、
+  // 「suggest開始 → chat開始」のほうが普通の順番。こちらを止められないと意味がない。
+  //
+  // 結果を捨てるだけでは足りず、接続ごとやめる必要がある
+  // (捨てるだけだと上流の応答は待ち続けるので、止めたかったTTFTの奪い合いが残る)
+  // **空配列を中断の証拠にしない。**空配列は「LLMが空を返した」「上流が失敗した」
+  // 「JSONの解析に失敗した」「chatより先に完了した」でも返るので区別がつかない (外部レビュー指摘)。
+  // 中断そのものはサーバーのログに残るので、その行が増えたかで判定する
+  const abortLines = (): number => {
+    const today = new Date().toLocaleDateString("sv-SE"); // YYYY-MM-DD
+    const file = path.join("..", "backend", "logs", `chatban-${today}.log`);
+    if (!fs.existsSync(file)) return 0;
+    return fs.readFileSync(file, "utf-8").split("\n").filter((l) => l.includes("ABORTED")).length;
+  };
+
+  const id = await createTask("suggest先行の中断を確かめる");
+
+  // 狙いたいのは「suggestが走っている最中にchatが来る」状態。
+  // suggestが先に終わってしまうと中断する相手がいないので、その回は検証にならない
+  let observed = false;
+  for (let attempt = 0; attempt < 3 && !observed; attempt++) {
+    // ボードを変えて提案キャッシュを外す。同じ状態だとLLMを呼ばずに即返る
+    await createTask(`suggest先行の中断を確かめる (${attempt})`);
+    const before = abortLines();
+
+    // suggestを先に始める。待たない
+    const suggesting = fetch(`${API}/api/suggestions`)
+      .then((r) => r.json())
+      .catch(() => null);
+
+    // 走り出してからチャットを送る
+    await new Promise((r) => setTimeout(r, 300));
+    const chatting = fetch(`${API}/api/tasks/${id}/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message: "状況は?", history: [] }),
+    }).catch(() => null);
+
+    const s = (await suggesting) as any;
+    const chatRes = await chatting;
+    // 上流が落ちている日はsuggestが即失敗するので、狙いの並びが作れない。
+    // それは実装の回帰ではないので、赤くして本当の回帰を埋もれさせない
+    if (!chatRes || !(chatRes as Response).ok) {
+      test.skip(true, "上流が応答しないため中断の並びを作れなかった (実装の検証はできていない)");
+      return;
+    }
+    // 中断が実際に起きた回だけを合格とする。空配列だったかは見ない —
+    // 空配列は「LLMが空を返した」「上流が失敗した」「解析に失敗した」でも返る
+    if (abortLines() > before) {
+      observed = true;
+      expect(s?.suggestions, "中断したのに提案が返っている").toEqual([]);
+    }
+  }
+  expect(observed, "3回試しても中断のログが増えなかった (suggestが毎回chatより先に完了した?)").toBe(true);
 });

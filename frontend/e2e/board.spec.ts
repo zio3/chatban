@@ -1,5 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import { io } from "socket.io-client";
+import fs from "node:fs";
+import path from "node:path";
 
 const API = "http://localhost:8799";
 
@@ -1532,15 +1534,25 @@ test("先に始まっていた提案生成は、チャットが始まったら�
   //
   // 結果を捨てるだけでは足りず、接続ごとやめる必要がある
   // (捨てるだけだと上流の応答は待ち続けるので、止めたかったTTFTの奪い合いが残る)
+  // **空配列を中断の証拠にしない。**空配列は「LLMが空を返した」「上流が失敗した」
+  // 「JSONの解析に失敗した」「chatより先に完了した」でも返るので区別がつかない (外部レビュー指摘)。
+  // 中断そのものはサーバーのログに残るので、その行が増えたかで判定する
+  const abortLines = (): number => {
+    const today = new Date().toLocaleDateString("sv-SE"); // YYYY-MM-DD
+    const file = path.join("..", "backend", "logs", `chatban-${today}.log`);
+    if (!fs.existsSync(file)) return 0;
+    return fs.readFileSync(file, "utf-8").split("\n").filter((l) => l.includes("ABORTED")).length;
+  };
+
   const id = await createTask("suggest先行の中断を確かめる");
 
   // 狙いたいのは「suggestが走っている最中にchatが来る」状態。
-  // suggestが先に終わってしまうと中断する相手がいないので、その回は検証にならない。
-  // 何回か試して、狙いの並びになった回で確かめる (時間の見積もりに賭けない)
+  // suggestが先に終わってしまうと中断する相手がいないので、その回は検証にならない
   let observed = false;
   for (let attempt = 0; attempt < 3 && !observed; attempt++) {
     // ボードを変えて提案キャッシュを外す。同じ状態だとLLMを呼ばずに即返る
     await createTask(`suggest先行の中断を確かめる (${attempt})`);
+    const before = abortLines();
 
     // suggestを先に始める。待たない
     const suggesting = fetch(`${API}/api/suggestions`)
@@ -1555,10 +1567,20 @@ test("先に始まっていた提案生成は、チャットが始まったら�
       body: JSON.stringify({ message: "状況は?", history: [] }),
     }).catch(() => null);
 
-    // 中断されていれば、チャットの完了を待たずに空で返る
     const s = (await suggesting) as any;
-    if (Array.isArray(s?.suggestions) && s.suggestions.length === 0) observed = true;
-    await chatting;
+    const chatRes = await chatting;
+    // 上流が落ちている日はsuggestが即失敗するので、狙いの並びが作れない。
+    // それは実装の回帰ではないので、赤くして本当の回帰を埋もれさせない
+    if (!chatRes || !(chatRes as Response).ok) {
+      test.skip(true, "上流が応答しないため中断の並びを作れなかった (実装の検証はできていない)");
+      return;
+    }
+    // 中断が実際に起きた回だけを合格とする。空配列だったかは見ない —
+    // 空配列は「LLMが空を返した」「上流が失敗した」「解析に失敗した」でも返る
+    if (abortLines() > before) {
+      observed = true;
+      expect(s?.suggestions, "中断したのに提案が返っている").toEqual([]);
+    }
   }
-  expect(observed, "3回試しても中断が観測できなかった (suggestが毎回chatより先に完了した?)").toBe(true);
+  expect(observed, "3回試しても中断のログが増えなかった (suggestが毎回chatより先に完了した?)").toBe(true);
 });

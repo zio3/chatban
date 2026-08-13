@@ -106,3 +106,23 @@ test("キャッシュ作成の回も総入力に含める", () => {
   assert.equal(res.usage.prompt_tokens, 332 + 25083);
   assert.equal(res.usage.prompt_tokens_details!.cached_tokens, 0, "作成はまだ読みではない");
 });
+
+test("キャッシュ書き込みは読みと分けて返す (単価が違うので合算しない)", () => {
+  // 合算すると初回に払う25,000トークン分が読み単価で計算され、概算が25%安く出る
+  const res = toOpenAiShape(
+    { content: [], usage: { input_tokens: 332, output_tokens: 10, cache_creation_input_tokens: 25083 } },
+    "anthropic/claude-haiku-4.5"
+  );
+  assert.equal(res.usage.prompt_tokens_details!.cache_creation_tokens, 25083);
+  assert.equal(res.usage.prompt_tokens_details!.cached_tokens, 0, "書きは読みではない");
+  assert.equal(res.usage.prompt_tokens, 332 + 25083, "総入力には含める");
+});
+
+test("キャッシュ読みの回は書き込み分が0になる", () => {
+  const res = toOpenAiShape(
+    { content: [], usage: { input_tokens: 332, output_tokens: 10, cache_read_input_tokens: 25083 } },
+    "anthropic/claude-haiku-4.5"
+  );
+  assert.equal(res.usage.prompt_tokens_details!.cached_tokens, 25083);
+  assert.equal(res.usage.prompt_tokens_details!.cache_creation_tokens, 0);
+});

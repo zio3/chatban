@@ -17,6 +17,10 @@ import type OpenAI from "openai";
  *
  * 責務は「chatCompletion と同じ形の値を返すこと」だけ。呼び出し側 (chat.ts) は無改造で動く */
 
+/** 呼び出し側が timeoutMs を渡さなかったときの上限。OpenAI SDK の既定 (10分) に合わせる —
+ * 経路を変えただけで詰まり方が変わらないようにする */
+const DEFAULT_TIMEOUT_MS = 600_000;
+
 type OaMessage = OpenAI.Chat.Completions.ChatCompletionMessageParam;
 type OaTool = OpenAI.Chat.Completions.ChatCompletionTool;
 
@@ -114,7 +118,12 @@ export interface OpenAiShapedResponse {
     prompt_tokens: number;
     completion_tokens: number;
     total_tokens: number;
-    prompt_tokens_details?: { cached_tokens: number };
+    prompt_tokens_details?: {
+      cached_tokens: number;
+      /** キャッシュに**書いた**ぶん。読みと単価が違う (書き込みは標準入力の1.25倍) ので、
+       * 合算せずに分けて持つ。OpenAI形式には無い欄だが、落とすと初回の概算が安く出る */
+      cache_creation_tokens?: number;
+    };
   };
 }
 
@@ -138,9 +147,10 @@ export function toOpenAiShape(data: any, fallbackModel: string): OpenAiShapedRes
 
   const u = data.usage ?? {};
   const cached = u.cache_read_input_tokens ?? 0;
+  const cacheCreation = u.cache_creation_input_tokens ?? 0;
   // OpenAI の prompt_tokens は「キャッシュ分も含む総入力」。合わせないと、
   // コスト画面で入力トークンだけ極端に少なく見える (新規分しか出ない)
-  const promptTokens = (u.input_tokens ?? 0) + cached + (u.cache_creation_input_tokens ?? 0);
+  const promptTokens = (u.input_tokens ?? 0) + cached + cacheCreation;
 
   return {
     model: data.model ?? fallbackModel,
@@ -159,7 +169,7 @@ export function toOpenAiShape(data: any, fallbackModel: string): OpenAiShapedRes
       prompt_tokens: promptTokens,
       completion_tokens: u.output_tokens ?? 0,
       total_tokens: promptTokens + (u.output_tokens ?? 0),
-      prompt_tokens_details: { cached_tokens: cached },
+      prompt_tokens_details: { cached_tokens: cached, cache_creation_tokens: cacheCreation },
     },
   };
 }
@@ -189,8 +199,19 @@ export async function messagesCompletion(
   }
 
   const ctrl = new AbortController();
-  const timer = opts?.timeoutMs ? setTimeout(() => ctrl.abort(), opts.timeoutMs) : null;
-  opts?.signal?.addEventListener("abort", () => ctrl.abort(), { once: true });
+  // **省略時も必ずタイムアウトを掛ける。**OpenAI SDK 経路が詰まらないのはクライアントの既定(10分)が
+  // 効いているからで、素の fetch には何も掛からない。呼び出し側の大半 (chat / archive-decompose) は
+  // opts を渡さないので、既定が無いと「応答が返らないまま詰まるのを防ぐ」という chatCompletion の
+  // 約束がこの経路だけ守られない。
+  //
+  // 詰まると chatInflight が解放されず、そのプロジェクトの提案生成まで止まり続ける (#162) —
+  // 1本のリクエストが返らないだけでは済まない (外部レビュー指摘)
+  const timer = setTimeout(() => ctrl.abort(), opts?.timeoutMs ?? DEFAULT_TIMEOUT_MS);
+  // **すでに中断済みなら、その場でやめる。**addEventListener は「これから起きる abort」しか拾わないので、
+  // 呼ばれた時点で aborted な signal を渡されると誰も ctrl を止めず、fetch がそのまま走ってしまう。
+  // #162 が消したかった並走 (先に始まった suggest がチャットと重なる) がここだけ残っていた
+  if (opts?.signal?.aborted) ctrl.abort();
+  else opts?.signal?.addEventListener("abort", () => ctrl.abort(), { once: true });
   let res: Response;
   try {
     res = await fetch(`${baseURL.replace(/\/$/, "")}/messages`, {

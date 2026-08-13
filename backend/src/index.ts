@@ -507,7 +507,14 @@ app.get("/api/metrics", async (_req, res) => {
   const recent = await Promise.all(
     m.recent.map(async (r: any) => ({
       ...r,
-      estimatedUsd: await estimateCallCost(r.routed_model, r.model, r.prompt_tokens, r.completion_tokens, r.cached_tokens ?? 0).catch(
+      estimatedUsd: await estimateCallCost(
+        r.routed_model,
+        r.model,
+        r.prompt_tokens,
+        r.completion_tokens,
+        r.cached_tokens ?? 0,
+        r.cache_creation_tokens ?? 0
+      ).catch(
         () => null
       ),
     }))

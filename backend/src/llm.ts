@@ -101,6 +101,12 @@ export function priceOf(catalog: ModelCatalogEntry[], id: string | null): ModelC
 /** キャッシュ入力の割引率。カタログに欄がないので仮定値 (OpenAI系は概ね定価の10%) */
 export const CACHE_DISCOUNT = 0.1;
 
+/** キャッシュに**書く**ときの割増率。Anthropic の5分キャッシュは標準入力の1.25倍。
+ * 読みと同じ扱いにすると、初回に払う25,000トークン分の概算が25%安く出る (外部レビュー指摘)。
+ * OpenAI系は自動キャッシュで書き込みの追加料金が無いため、この係数は
+ * cache_creation_tokens を返す経路 (Anthropic Messages API) でしか効かない */
+export const CACHE_WRITE_MULTIPLIER = 1.25;
+
 /** 1呼び出しのコスト概算。routed_model の実単価 × 実測トークン。
  * 実測(2026-08-10)では主力モデルは請求と100%一致するが、gpt-5.4-pro のように
  * カタログ単価が実態とずれるモデルもあるため、あくまで概算として扱う (UIにも明記) */
@@ -109,7 +115,9 @@ export async function estimateCallCost(
   model: string,
   promptTokens: number,
   completionTokens: number,
-  cachedTokens: number
+  cachedTokens: number,
+  /** キャッシュに書いたぶん。読みより高いので別に受ける (省略時は0=書き込み無し) */
+  cacheCreationTokens = 0
 ): Promise<number | null> {
   const catalog = await fetchModelCatalog();
   // routed_model は provider 接頭辞なしで返ることがある ("gpt-5.4-mini-2026-03-17")
@@ -117,8 +125,27 @@ export async function estimateCallCost(
     id ? catalog.find((m) => m.id === id || m.id.split("/").pop() === id) : undefined;
   const e = find(routedModel) ?? find(model);
   if (!e || e.inputPerM == null || e.outputPerM == null) return null;
-  const fresh = Math.max(0, promptTokens - cachedTokens);
-  return (fresh * e.inputPerM + cachedTokens * e.inputPerM * CACHE_DISCOUNT + completionTokens * e.outputPerM) / 1e6;
+  return costOf(e.inputPerM, e.outputPerM, promptTokens, completionTokens, cachedTokens, cacheCreationTokens);
+}
+
+/** 入力を「新規 / キャッシュ読み / キャッシュ書き」の3つに割って単価を掛ける。
+ * 記録時 (llm.ts) と再計算時 (/api/metrics) で同じ式を使う — 片方だけ直すとズレる */
+export function costOf(
+  inputPerM: number,
+  outputPerM: number,
+  promptTokens: number,
+  completionTokens: number,
+  cachedTokens: number,
+  cacheCreationTokens = 0
+): number {
+  const fresh = Math.max(0, promptTokens - cachedTokens - cacheCreationTokens);
+  return (
+    (fresh * inputPerM +
+      cachedTokens * inputPerM * CACHE_DISCOUNT +
+      cacheCreationTokens * inputPerM * CACHE_WRITE_MULTIPLIER +
+      completionTokens * outputPerM) /
+    1e6
+  );
 }
 
 export type ModelSlot = "main" | "archive" | "cheap";
@@ -273,6 +300,8 @@ export async function chatCompletion(
   }
   const elapsedMs = Date.now() - t0;
   const cachedTokens = (res.usage as any)?.prompt_tokens_details?.cached_tokens ?? 0;
+  // キャッシュに書いたぶん。Messages API 経路だけが返す (OpenAI互換は自動キャッシュで書き込み料金が無い)
+  const cacheCreationTokens = (res.usage as any)?.prompt_tokens_details?.cache_creation_tokens ?? 0;
   log(
     "llm",
     `<- ${purpose} routed=${res.model} finish=${res.choices[0]?.finish_reason} tokens=${res.usage?.prompt_tokens}/${res.usage?.completion_tokens} cached=${cachedTokens} ${elapsedMs}ms`
@@ -288,8 +317,7 @@ export async function chatCompletion(
     if (e?.inputPerM != null && e.outputPerM != null) {
       priceInPerM = e.inputPerM;
       priceOutPerM = e.outputPerM;
-      const fresh = Math.max(0, promptTokens - cachedTokens);
-      estimatedUsd = (fresh * e.inputPerM + cachedTokens * e.inputPerM * CACHE_DISCOUNT + completionTokens * e.outputPerM) / 1e6;
+      estimatedUsd = costOf(e.inputPerM, e.outputPerM, promptTokens, completionTokens, cachedTokens, cacheCreationTokens);
     } else {
       log("llm", `単価が引けなかったので概算を記録できない: ${res.model ?? model}`);
     }
@@ -303,6 +331,7 @@ export async function chatCompletion(
     promptTokens,
     completionTokens,
     cachedTokens,
+    cacheCreationTokens,
     elapsedMs,
     priceInPerM,
     priceOutPerM,

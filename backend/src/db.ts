@@ -559,6 +559,8 @@ export function recordLlmCall(row: {
   promptTokens: number;
   completionTokens: number;
   cachedTokens?: number;
+  /** #172: キャッシュに書いたぶん。読みと単価が違うので分けて残す */
+  cacheCreationTokens?: number;
   elapsedMs: number;
   /** #106: 呼び出し時点の単価と概算額。あとで単価が改定されても過去の記録が変わらない */
   priceInPerM?: number | null;
@@ -566,7 +568,7 @@ export function recordLlmCall(row: {
   estimatedUsd?: number | null;
 }) {
   admin.prepare(
-    "INSERT INTO llm_calls (purpose, model, routed_model, prompt_tokens, completion_tokens, cached_tokens, elapsed_ms, project_id, price_in_per_m, price_out_per_m, estimated_usd) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+    "INSERT INTO llm_calls (purpose, model, routed_model, prompt_tokens, completion_tokens, cached_tokens, cache_creation_tokens, elapsed_ms, project_id, price_in_per_m, price_out_per_m, estimated_usd) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
   ).run(
     row.purpose,
     row.model,
@@ -574,6 +576,7 @@ export function recordLlmCall(row: {
     row.promptTokens,
     row.completionTokens,
     row.cachedTokens ?? 0,
+    row.cacheCreationTokens ?? 0,
     row.elapsedMs,
     currentProjectId(),
     row.priceInPerM ?? null,

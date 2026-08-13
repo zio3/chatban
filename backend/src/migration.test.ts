@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import Database from "better-sqlite3";
 import { createHash } from "node:crypto";
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -58,6 +58,8 @@ function makeLegacyDb(path: string, opts: { cachedTokens: boolean; llmCalls: num
       updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
     );
     CREATE TABLE members (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE);
+    CREATE TABLE proposals (id INTEGER PRIMARY KEY AUTOINCREMENT, task_id INTEGER NOT NULL, assignee TEXT NOT NULL, reason TEXT, status TEXT NOT NULL DEFAULT 'pending', created_at TEXT NOT NULL DEFAULT (datetime('now')));
+    CREATE TABLE assignment_history (id INTEGER PRIMARY KEY AUTOINCREMENT, task_title TEXT NOT NULL, assignee TEXT NOT NULL, note TEXT, created_at TEXT NOT NULL DEFAULT (datetime('now')));
     CREATE TABLE chat_messages (id INTEGER PRIMARY KEY AUTOINCREMENT, role TEXT NOT NULL, content TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT (datetime('now')));
     CREATE TABLE llm_calls (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -228,6 +230,86 @@ test("移行の途中で失敗しても、原本も管理DBも変わらない", 
       ? readdirSync(join(dataDir, "projects")).filter((f) => f.includes("migrating"))
       : [];
     assert.deepEqual(leftovers, [], "作業用コピーが残っている");
+  });
+});
+
+test("移動先が既にあって配置に失敗しても、管理DBに何も残らない (次回やり直せる)", () => {
+  // 管理DBのトランザクションを先にコミットしてから rename していたときは、
+  // ここでプロジェクト行だけが残り、次の起動は listProjects().length > 0 で移行を飛ばす。
+  // 「移行できないまま固定される」状態が作れてしまっていた (外部レビュー指摘)
+  withTempDir((dir) => {
+    const legacy = join(dir, "chatban.db");
+    makeLegacyDb(legacy, { cachedTokens: true, llmCalls: 2 });
+    const dataDir = join(dir, "data");
+    // 1件目のプロジェクトの置き場所を先に埋めておく
+    mkdirSync(join(dataDir, "projects"), { recursive: true });
+    writeFileSync(join(dataDir, "projects", "1-ChatBan開発.db"), "先客");
+
+    const before = sha256(legacy);
+    const r = runMigration(dataDir, legacy, dir);
+    assert.equal(r.ok, false, "配置できないので失敗するべき");
+
+    assert.ok(existsSync(legacy), "原本は残るべき");
+    assert.equal(sha256(legacy), before, "原本が変わっている");
+    assert.deepEqual(projectNames(dataDir), [], "プロジェクト行が残っている (次回の移行が飛ばされる)");
+    assert.equal(countLlmCalls(dataDir), 0);
+    assert.equal(countSettings(dataDir), 0);
+    // 先客は壊していない
+    assert.equal(readFileSync(join(dataDir, "projects", "1-ChatBan開発.db"), "utf-8"), "先客");
+
+    // 次の起動でやり直せる (先客をどけたら通る)
+    rmSync(join(dataDir, "projects", "1-ChatBan開発.db"));
+    const retry = runMigration(dataDir, legacy, dir);
+    assert.ok(retry.ok, `やり直せるべき: ${retry.output}`);
+    assert.deepEqual(projectNames(dataDir), ["ChatBan開発"]);
+    assert.equal(countLlmCalls(dataDir), 2);
+  });
+});
+
+test("初期コミット当時のスキーマのDBも取り込める", () => {
+  // 識別条件に chat_messages を入れていたとき、本物の初期版DBが「別物」と判定されていた
+  // (chat_messages は初期コミットには無く、後から足したテーブル。外部レビュー指摘)。
+  // 足りないテーブルは ensureProjectSchema が作るので、識別の条件にする必要がない
+  withTempDir((dir) => {
+    const legacy = join(dir, "chatban.db");
+    const db = new Database(legacy);
+    // 2026-08-09 の初期コミットにあったテーブルだけ
+    db.exec(`
+      CREATE TABLE tasks (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'todo',
+        assignee TEXT, reason TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
+      );
+      CREATE TABLE members (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE, skills TEXT);
+      CREATE TABLE proposals (id INTEGER PRIMARY KEY AUTOINCREMENT, task_id INTEGER NOT NULL, assignee TEXT NOT NULL, reason TEXT, status TEXT NOT NULL DEFAULT 'pending', created_at TEXT NOT NULL DEFAULT (datetime('now')));
+      CREATE TABLE assignment_history (id INTEGER PRIMARY KEY AUTOINCREMENT, task_title TEXT NOT NULL, assignee TEXT NOT NULL, note TEXT, created_at TEXT NOT NULL DEFAULT (datetime('now')));
+      CREATE TABLE llm_calls (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, purpose TEXT NOT NULL, model TEXT NOT NULL, routed_model TEXT,
+        prompt_tokens INTEGER NOT NULL DEFAULT 0, completion_tokens INTEGER NOT NULL DEFAULT 0,
+        elapsed_ms INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+    `);
+    db.prepare("INSERT INTO tasks (title) VALUES (?)").run("初期版から持ち越すタスク");
+    for (let i = 0; i < 7; i++) {
+      db.prepare("INSERT INTO llm_calls (purpose, model, prompt_tokens, completion_tokens, elapsed_ms) VALUES (?, ?, ?, ?, ?)").run("chat", "m", 10, 5, 100);
+    }
+    db.close();
+
+    const dataDir = join(dir, "data");
+    const r = runMigration(dataDir, legacy, dir);
+    assert.ok(r.ok, `初期版も取り込めるべき: ${r.output}`);
+    assert.deepEqual(projectNames(dataDir), ["ChatBan開発"], "chat_messages が無いだけで弾いてはいけない");
+    assert.equal(countLlmCalls(dataDir), 7, "cached_tokens も chat_messages も無いが記録は移るべき");
+
+    // 足りなかったテーブルは移行後に作られている
+    const moved = new Database(join(dataDir, "projects", "1-ChatBan開発.db"), { readonly: true });
+    const tables = new Set(
+      (moved.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as { name: string }[]).map((t) => t.name)
+    );
+    moved.close();
+    assert.ok(tables.has("chat_messages"), "ensureProjectSchema が作るべき");
+    assert.ok(tables.has("summary_cards"), "ensureProjectSchema が作るべき");
   });
 });
 

@@ -693,7 +693,14 @@ export function trashProject(id: number): void {
  * 本来は SQLite の application_id を打っておくのが堅実だが、
  * **すでに世に出ている旧DBには入っていない**ので識別には使えない。
  * 移行の入口はこの形で判定し、新しく作るDBに application_id を打つのは別の話 (将来) */
-const LEGACY_REQUIRED_TABLES = ["tasks", "members", "chat_messages"];
+// **初期コミット (2026-08-09) にあったテーブルだけを条件にする。**
+// chat_messages / project_context / summary_cards は後から足したものなので、
+// 必須にすると本物の初期版DBを「別物」と判定して取り込めなくなる (外部レビュー指摘)。
+// 足りないテーブルは ensureProjectSchema が作るので、識別の条件にする必要がない。
+//
+// 「ChatBanのDBだと分かる最小の組み合わせ」と「いま存在するテーブルの一覧」は別物。
+// 後者で判定すると、古い版を切り捨てる方向にしか動かない
+const LEGACY_REQUIRED_TABLES = ["tasks", "members", "proposals", "assignment_history"];
 // created_at / updated_at も要る。ensureProjectSchema は CREATE TABLE IF NOT EXISTS なので
 // 既存の tasks はそのまま使われ、これらが無いと後続のクエリが no such column で落ちる。
 // 「取り込んでから落ちる」より「取り込まない」ほうが安全 (原本が動かない)
@@ -789,6 +796,7 @@ export function migrateLegacyDbIfNeeded(): void {
 
   let projectId: number | undefined;
   let carried = 0;
+  let destPath = ""; // 置いた先。失敗時に catch から片付けるので外で持つ
   try {
     // スキーマを当てるのも読むのも、DROPするのも**コピーに対して**
     const wdb = new Database(work);
@@ -826,42 +834,68 @@ export function migrateLegacyDbIfNeeded(): void {
       wdb.close();
     }
 
-    // 管理DBへの書き込みは**まとめて1トランザクション**。
-    // プロジェクト行の作成もこの中に入れる — 外に出すと、後続で失敗したとき行だけが残り、
-    // 次の起動で listProjects().length > 0 により移行そのものが飛ばされる (指摘)
+    // 管理DBへの書き込みも**ファイルの配置も**、まとめて1つの失敗処理の下に置く。
+    //
+    // 以前は管理DBのトランザクションを先にコミットし、そのあとで rename していた。
+    // 移動先が既にあって rename が失敗すると、**プロジェクト行だけが残る** —
+    // 次の起動は listProjects().length > 0 で移行を飛ばすので、その状態が固定される
+    // (外部レビュー指摘)。better-sqlite3 のトランザクションは同期なので、
+    // ファイル操作を中に入れれば「両方成立するか、両方無かったことになるか」にできる
     projectId = admin.transaction(() => {
       const p = insertProject("ChatBan開発");
-      if (calls.rows.length > 0) {
-        const cols = [...calls.cols, "project_id"];
-        const ins = admin.prepare(
-          `INSERT INTO llm_calls (${cols.join(", ")}) VALUES (${cols.map(() => "?").join(", ")})`
+      const dest = projectFilePath(p);
+      // 先に置いてしまう。ここで失敗すれば insertProject ごと巻き戻る
+      if (existsSync(dest)) throw new Error(`移動先が既にあります: ${dest}`);
+      renameSync(work, dest);
+      destPath = dest;
+      try {
+        if (calls.rows.length > 0) {
+          const cols = [...calls.cols, "project_id"];
+          const ins = admin.prepare(
+            `INSERT INTO llm_calls (${cols.join(", ")}) VALUES (${cols.map(() => "?").join(", ")})`
+          );
+          for (const r of calls.rows) ins.run(...calls.cols.map((c) => r[c]), p.id);
+        }
+        const insS = admin.prepare(
+          "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value"
         );
-        for (const r of calls.rows) ins.run(...calls.cols.map((c) => r[c]), p.id);
+        for (const r of settings) insS.run(r.key, r.value);
+        setActiveProjectId(p.id);
+      } catch (inner) {
+        // DBは下の throw で巻き戻るが、ファイルは自分で戻す
+        try {
+          renameSync(dest, work);
+          destPath = "";
+        } catch {
+          /* 戻せなければ catch 側で消す */
+        }
+        throw inner;
       }
-      const insS = admin.prepare(
-        "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value"
-      );
-      for (const r of settings) insS.run(r.key, r.value);
       return p.id;
     })();
     carried = calls.rows.length;
 
-    // ここまで来たら置き場所へ移し、原本を消す。**成功して初めて原本に触る**
-    const dest = projectFilePath(getProject(projectId)!);
-    renameSync(work, dest);
-    unlinkSync(legacy);
-    for (const sfx of ["-wal", "-shm"]) {
-      if (existsSync(legacy + sfx)) unlinkSync(legacy + sfx);
+    // **旧DBの削除はベストエフォート。**ここまでで移行は成立しているので、
+    // 消せなかったことを失敗にはしない (消せずに失敗と言うと、成功した移行をやり直すことになる)。
+    // 残っても次の起動では listProjects().length > 0 で移行に入らないため、実害は「古い控えが残る」だけ
+    for (const f of [legacy, legacy + "-wal", legacy + "-shm"]) {
+      try {
+        if (existsSync(f)) unlinkSync(f);
+      } catch (e: any) {
+        log("project", `旧DB ${f} を消せませんでした (移行自体は成功。控えとして残ります): ${e?.message ?? e}`);
+      }
     }
-    setActiveProjectId(projectId);
     const dropped = calls.cols.length > 0 && calls.cols.length < 8 ? ` / この版に無い列: ${8 - calls.cols.length}個` : "";
-    log("project", `migrated legacy ${legacy} -> ${dest} (llm_calls ${carried}件を管理DBへ${dropped})`);
+    log("project", `migrated legacy ${legacy} -> ${destPath} (llm_calls ${carried}件を管理DBへ${dropped})`);
   } catch (e: any) {
-    // コピーを捨てるだけ。管理DBはトランザクションごと巻き戻り、**原本は一度も触っていない**
-    try {
-      if (existsSync(work)) unlinkSync(work);
-    } catch {
-      /* 消せなくても、下の throw で人間に見せるのが先 */
+    // 作業用のコピーを捨てる。管理DBはトランザクションごと巻き戻り、**原本は一度も触っていない**。
+    // rename 済みなら work は存在しないので、置いた先も見る
+    for (const f of [work, destPath]) {
+      try {
+        if (f && existsSync(f)) unlinkSync(f);
+      } catch {
+        /* 消せなくても、下の throw で人間に見せるのが先 */
+      }
     }
     log("project", `${legacy} の取り込みに失敗しました (原本はそのまま): ${e?.message ?? e}`);
     throw new Error(

@@ -5,6 +5,7 @@ import OpenAI from "openai";
 import { getSetting, loadModelPrices, recordLlmCall, saveModelPrices } from "./db.js";
 import { currentProjectId } from "./store.js";
 import { log } from "./log.js";
+import { messagesCompletion, usesMessagesApi } from "./messagesRoute.js";
 
 function loadApiKey(): string {
   if (process.env.ORCAROUTER_API_KEY) return process.env.ORCAROUTER_API_KEY;
@@ -15,10 +16,11 @@ function loadApiKey(): string {
   }
 }
 
-export const client = new OpenAI({
-  apiKey: loadApiKey(),
-  baseURL: process.env.ORCA_BASE_URL ?? "https://www.orcarouter.ai/v1",
-});
+/** 問い合わせ先。OpenAI互換 (/chat/completions) と Messages API (/messages) で共有する —
+ * OrcaRouter は同じ baseURL に両方を持っている (#172) */
+const BASE_URL = process.env.ORCA_BASE_URL ?? "https://www.orcarouter.ai/v1";
+
+export const client = new OpenAI({ apiKey: loadApiKey(), baseURL: BASE_URL });
 
 // #21: OrcaRouterの課金サマリーAPI (docs/operations/billing-and-usage)。
 // total_usageはセント表記。60秒キャッシュ (毎回外部に問い合わせない)
@@ -45,7 +47,9 @@ export async function fetchBillingUsage(): Promise<{ totalUsageUsd: number } | n
 
 // 用途別モデル戦略 (Day2の実測比較で決定。切り替えはモデルID1行 — ルーターの利点):
 //  - 対話(main): OpenAI系は自動プロンプトキャッシュがOrcaRouter経由でも効く(実測: 2回目以降の入力85-95%が0.1x課金)。
-//    Anthropicはcache_control明示方式でOpenAI互換経由では現状不発 → キャッシュの取れるgpt-5.4-mini固定
+//    Anthropicは cache_control 明示方式で、OpenAI互換経由では指定する場所が無い。
+//    #172 で Messages API (/v1/messages) 経由なら効くと分かった (cache_read 25,083 を実測) ので、
+//    anthropic/ のモデルはそちらへ流す。既定は実績のある gpt-5.4-mini のまま
 //  - 要約の要素分解(archive): 品質が肝 + 非同期でレイテンシ許容 → ルーティングに委任
 //  - 定型(cheap): タイトル生成など → コスト優先ルーティング
 // #88: 管理画面のモデル選択肢。OrcaRouterの /v1/models は単価・コンテキスト長・入力モダリティを返す。
@@ -243,14 +247,20 @@ export async function chatCompletion(
   const extra = params.tools?.length && NEEDS_REASONING_NONE.test(model) ? ({ reasoning_effort: "none" } as any) : {};
   let res;
   try {
-    const reqOpts = {
-      ...(opts?.timeoutMs ? { timeout: opts.timeoutMs } : {}),
-      ...(opts?.signal ? { signal: opts.signal } : {}),
-    };
-    res = await client.chat.completions.create(
-      { ...params, ...extra, model },
-      Object.keys(reqOpts).length > 0 ? reqOpts : undefined
-    );
+    if (usesMessagesApi(model)) {
+      // #172: Anthropic系は Messages API 形式で投げる。OpenAI互換だと cache_control を
+      // 置く場所が無く、25,000トークンの前置きを毎回フルで払うことになる
+      res = (await messagesCompletion(BASE_URL, loadApiKey(), model, params, opts)) as any;
+    } else {
+      const reqOpts = {
+        ...(opts?.timeoutMs ? { timeout: opts.timeoutMs } : {}),
+        ...(opts?.signal ? { signal: opts.signal } : {}),
+      };
+      res = await client.chat.completions.create(
+        { ...params, ...extra, model },
+        Object.keys(reqOpts).length > 0 ? reqOpts : undefined
+      );
+    }
   } catch (e: any) {
     // 中断は失敗ではない (#162: チャットが始まったので提案の生成を譲っただけ)。
     // FAILED として残すと、監査ログ上は上流のエラーと見分けが付かなくなる

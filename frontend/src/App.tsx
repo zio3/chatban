@@ -115,8 +115,29 @@ export default function App() {
     }
   }, []);
 
+  // #173: ログインが済んだ直後にやること。**ログイン前に張ったソケットは死んでいる** —
+  // 認証ありのサーバーでは io.use が unauthorized で弾き、socket.io-client は
+  // ハンドシェイク拒否だと購読ごと捨てて二度と繋ぎ直さない (socket.ts の注記)。
+  // Cookieが付いた状態で繋ぎ直し、その間に取りこぼしたぶんを読み直しで埋める。
+  // これをしないと「チャットは応答するのにカードが動かない」ままになる
+  const onLoggedIn = useCallback(async () => {
+    await loadAuth();
+    if (!socket.connected) socket.connect();
+    reload();
+    loadProjects();
+  }, [loadAuth, reload, loadProjects]);
+
   useEffect(() => {
     reload();
+    // 繋ぎ直した直後は、切れていた間の board:changed を取りこぼしている。読み直して追いつく
+    let everConnected = socket.connected;
+    const onConnect = () => {
+      if (everConnected) {
+        reload();
+        loadProjects();
+      }
+      everConnected = true;
+    };
     // #72: メインチャットはリロードで新規 (会話は作業記憶。重要事項はプロジェクト前提/タスク経緯メモに
     // 蒸留されて残り、生ログはDB保存済みで📜監査タブから見える)。タスクチャットは経緯ログなので復元維持
     const onBoard = (p: { tasks: Task[]; summaryCards?: SummaryCard[]; members?: Member[] }) => {
@@ -139,11 +160,13 @@ export default function App() {
         if (fallback) gotoProject(fallback.id);
       }
     };
+    socket.on("connect", onConnect);
     socket.on("board:changed", onBoard);
     socket.on("archive:working", onArchive);
     socket.on("project:changed", onProject);
     loadProjects();
     return () => {
+      socket.off("connect", onConnect);
       socket.off("board:changed", onBoard);
       socket.off("archive:working", onArchive);
       socket.off("project:changed", onProject);
@@ -352,7 +375,7 @@ export default function App() {
   // #113: enabled は「ログインを必須にするか」。既定オフ = ログインしなくても使えるが、
   // ログインしたい人はヘッダーからできる (デモで「Googleでログインしている」事実を見せる用)
   if (auth?.enabled && !auth.user)
-    return <LoginView clientId={auth.clientId} onLoggedIn={loadAuth} />;
+    return <LoginView clientId={auth.clientId} onLoggedIn={onLoggedIn} />;
 
   return (
     <div className="flex h-full bg-slate-100 text-slate-900">
@@ -401,34 +424,44 @@ export default function App() {
         </div>
         {/* #90: 担当フィルタは複数トグル (AさんBさんを並べて見る)。選択ゼロ=全員表示。
             なりきりの入口は撤去 (デモでは人フィルタが見えれば足りる)。speakerの配線は温存 */}
-        {/* #101: 担当者が1人も居ないプロジェクト(一人用)ではフィルタ行ごと出さない。
-            「未割り当て」だけ残っても、全部が未割り当てなので絞る意味がない */}
-        <div className={`flex flex-wrap items-center gap-1 text-sm ${filterNames.length === 0 ? "hidden" : ""}`}>
-          {filterNames.map((name) => (
-            <button
-              key={name}
-              onClick={() => toggleFilter(name)}
-              className={`rounded-full px-3 py-1 ${filter.has(name) ? "bg-slate-900 text-white" : "bg-slate-200 hover:bg-slate-300"}`}
-            >
-              {name}
-            </button>
-          ))}
-          {/* 未割り当ては「拾い手がいない」を見つける導線。担当なしのタスクが埋もれるのを防ぐ */}
-          <button
-            onClick={() => toggleFilter(UNASSIGNED)}
-            className={`rounded-full px-3 py-1 ${filter.has(UNASSIGNED) ? "bg-slate-900 text-white" : "bg-slate-200 hover:bg-slate-300"}`}
-          >
-            未割り当て
-          </button>
-          {/* フィルタが効いていることをチップの色だけに頼らない。何件隠れているかを数で出す
-              (#87/#88が「消えた」と誤解された事故の再発防止) */}
-          {filter.size > 0 && (
-            <span className="ml-2 flex items-center gap-1.5 rounded-full bg-amber-100 px-3 py-1 text-xs text-amber-800">
-              フィルタで{hiddenCount}件が非表示
-              <button onClick={() => setFilter(new Set())} className="font-bold hover:text-amber-950" title="フィルタ解除">
-                ✕
+        {/* #101: 担当者が1人も居ないプロジェクト(一人用)ではフィルタのチップを出さない。
+            「未割り当て」だけ残っても、全部が未割り当てなので絞る意味がない。
+            **隠すのはチップだけ。**以前は行ごと hidden にしていたので、担当者ゼロだと
+            右端のアカウント表示 (ログアウトボタン) まで巻き添えで消えていた */}
+        <div className="flex flex-wrap items-center gap-1 text-sm">
+          {filterNames.length > 0 && (
+            <>
+              {filterNames.map((name) => (
+                <button
+                  key={name}
+                  onClick={() => toggleFilter(name)}
+                  className={`rounded-full px-3 py-1 ${filter.has(name) ? "bg-slate-900 text-white" : "bg-slate-200 hover:bg-slate-300"}`}
+                >
+                  {name}
+                </button>
+              ))}
+              {/* 未割り当ては「拾い手がいない」を見つける導線。担当なしのタスクが埋もれるのを防ぐ */}
+              <button
+                onClick={() => toggleFilter(UNASSIGNED)}
+                className={`rounded-full px-3 py-1 ${filter.has(UNASSIGNED) ? "bg-slate-900 text-white" : "bg-slate-200 hover:bg-slate-300"}`}
+              >
+                未割り当て
               </button>
-            </span>
+              {/* フィルタが効いていることをチップの色だけに頼らない。何件隠れているかを数で出す
+                  (#87/#88が「消えた」と誤解された事故の再発防止) */}
+              {filter.size > 0 && (
+                <span className="ml-2 flex items-center gap-1.5 rounded-full bg-amber-100 px-3 py-1 text-xs text-amber-800">
+                  フィルタで{hiddenCount}件が非表示
+                  <button
+                    onClick={() => setFilter(new Set())}
+                    className="font-bold hover:text-amber-950"
+                    title="フィルタ解除"
+                  >
+                    ✕
+                  </button>
+                </span>
+              )}
+            </>
           )}
           {/* #113: ログインしていれば誰として入っているかを出す。していなければ入口だけ置く。
               どちらでも操作は同じ (ログインは任意) */}
@@ -468,7 +501,7 @@ export default function App() {
           clientId={auth.clientId}
           onLoggedIn={() => {
             setLoginOpen(false);
-            loadAuth();
+            onLoggedIn();
           }}
           onClose={() => setLoginOpen(false)}
         />

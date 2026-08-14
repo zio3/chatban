@@ -50,3 +50,18 @@ socket.on("connect_error", () => {
     socket.connect();
   }, retryDelayMs(attempt));
 });
+
+/** ログアウト時に呼ぶ。**Cookieを消してもソケットは繋がったまま**で、
+ * サーバーは `io.use` のハンドシェイク時にしか認証を見ない。切らないと
+ * ログアウト後も `board:changed` が届き続ける (Codexレビュー指摘)。
+ *
+ * 上の再試行タイマーも一緒に止める。残しておくと数秒後に勝手に繋ぎ直してしまい、
+ * 「切ったつもりが戻っている」という一番わかりにくい壊れ方をする */
+export function disconnectSocket(): void {
+  if (timer) {
+    clearTimeout(timer);
+    timer = null;
+  }
+  attempt = 0;
+  socket.disconnect();
+}

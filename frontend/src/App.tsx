@@ -12,7 +12,7 @@ import TrashView from "./components/TrashView";
 import TaskDetailPanel from "./components/TaskDetailPanel";
 import { useChatTurn } from "./hooks/useChatTurn";
 import type { Attachment } from "./hooks/useAttachments";
-import { socket } from "./socket";
+import { socket, disconnectSocket } from "./socket";
 import type { ChatEntry, Member, SummaryCard, Task } from "./types";
 
 interface Toast {
@@ -126,6 +126,16 @@ export default function App() {
     reload();
     loadProjects();
   }, [loadAuth, reload, loadProjects]);
+
+  // #173: ログアウト時。**Cookieを消してもソケットは繋がったまま** — サーバーは
+  // ハンドシェイク時にしか認証を見ないので、切らないとログアウト後も board:changed が
+  // 届き続ける (Codexレビュー指摘)。認証が必須の構成でだけ切る:
+  // ログイン任意の構成 (ローカル/既定) は未認証接続をそもそも許しているので、
+  // ここで切ってもふさげるものが無く、ライブ更新が止まるだけになる
+  const onLoggedOut = useCallback(async () => {
+    if (auth?.enabled) disconnectSocket();
+    await loadAuth();
+  }, [auth?.enabled, loadAuth]);
 
   useEffect(() => {
     reload();
@@ -479,7 +489,7 @@ export default function App() {
               </span>
               <button
                 data-testid="logout"
-                onClick={() => api.authLogout().then(loadAuth)}
+                onClick={() => api.authLogout().then(onLoggedOut)}
                 className="rounded-full bg-slate-200 px-2 py-0.5 text-[11px] hover:bg-slate-300"
               >
                 ログアウト

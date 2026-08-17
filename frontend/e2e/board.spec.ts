@@ -455,9 +455,11 @@ test("MCPの読み取りはSQL窓口1本。落とした一覧ツールは同じ�
   expect(names).toContain("query_log");
   expect(names).toContain("sync_board");
 
-  // 落としたぶんはSQLで引ける (接続の足場だけは get_project_context に残す)
+  // 落としたぶんはSQLで引ける (接続の足場だけは get_project_context に残す)。
+  // **作ったタスクに絞って引く** — 全件だと query_log の上限 (200行) で切られ、
+  // 積み重なったE2Eデータでは新しいものが範囲外に落ちる (実測: 387件で発生)
   const board = await mcp("query_log", {
-    sql: "SELECT id, status, title FROM tasks WHERE archived=0 AND trashed_at IS NULL",
+    sql: `SELECT id, status, title FROM tasks WHERE archived=0 AND trashed_at IS NULL AND id=${id}`,
   });
   expect(board.rows.some((r: any) => r.id === id)).toBe(true);
 
@@ -676,8 +678,11 @@ test("生きているタスクは live_tasks ビューで引ける (母集団の
   const trashed = await createTask("ゴミ箱行きのタスク");
   await mcp("delete_tasks", { ids: [trashed] });
 
+  // **この2件に絞って引く。**母集団を全件取ると query_log の上限 (200行) で切られ、
+  // 積み重なったE2Eデータでは新しく作ったほうが範囲外に落ちて落ちる (実測: 387件で発生)。
+  // 確かめたいのは「live_tasks にゴミ箱が混ざらない」ことなので、母集団の大きさは要らない
   const r = await mcp("query_log", {
-    sql: "SELECT id, title FROM live_tasks",
+    sql: `SELECT id, title FROM live_tasks WHERE id IN (${alive}, ${trashed})`,
   });
   const ids = (r.rows as any[]).map((x) => x.id);
   expect(ids).toContain(alive);
@@ -1636,6 +1641,10 @@ test("ゴミ箱に入れると検収の印が落ちる (古い確認のままDon
   // 復元後は未検収に戻っている (ゴミ箱と復元の間に人間の確認は一度も入っていない)
   expect(await checkedAt(), "古い検収の印が生き返っている").toBeFalsy();
 
+  // ゴミ箱にいる間は「検収済みだった」事実が残る (監査の材料を消さない)。
+  // ゴミ箱にある限り mayEnterDone は trashedAt を見て false なので、残っていても危険はない —
+  // **落とすのは復元のとき**。この形なら、変更前からゴミ箱にある行にも効く
+
   // 印が無いので確定も通らない。setChecked はRESTにしか無いので、AIはここから先へ進めない
   const res = await fetch(`${API}/api/tasks/approve`, {
     method: "POST",
@@ -1645,6 +1654,41 @@ test("ゴミ箱に入れると検収の印が落ちる (古い確認のままDon
   const after = await mcp("query_log", { scope: "audit", sql: `SELECT status FROM tasks WHERE id=${id}` });
   expect(res.ok).toBe(true); // 一括検収そのものは成功で返る (条件を満たす件だけ通す)
   expect(after.rows[0].status, "未検収なのにDoneへ入った").not.toBe("done");
+});
+
+test("期限は登録時にも保存される (弾くだけ足して保存を忘れない) (#153)", async () => {
+  // **「検証を足したら、通ったものが効くこと」まで確かめる。**
+  // 検証だけ足して createTask に渡し忘れ、正しい due が200のまま黙って捨てられていた
+  const res = await fetch(`${API}/api/tasks`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ title: "登録時に期限を入れるタスク", due: "2026-08-20" }),
+  });
+  expect(res.ok).toBe(true);
+  const created = await res.json();
+  expect(created.due, "正しい期限が黙って捨てられている").toBe("2026-08-20");
+
+  // 不正な形式は登録そのものを断る
+  const bad = await fetch(`${API}/api/tasks`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ title: "だめな期限", due: "2026-02-31" }),
+  });
+  expect(bad.status).toBe(400);
+
+  // 解除の "" は空文字を保存せず null に均す (画面では解除に見えるのに
+  // WHERE due IS NOT NULL のSQLに残る、という食い違いを作らない)
+  await fetch(`${API}/api/tasks/${created.id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ due: "" }),
+  });
+  const row = await mcp("query_log", {
+    scope: "audit",
+    // 別名に notNull は使えない (SQLite の予約語 NOTNULL とぶつかって構文エラーになる)
+    sql: `SELECT due, (due IS NOT NULL) AS has_due FROM tasks WHERE id=${created.id}`,
+  });
+  expect(row.rows[0].has_due, "解除したのに空文字が残っている").toBe(0);
 });
 
 test("期限の形式が違うとその指定だけ捨てて名指しで返す (#153)", async () => {

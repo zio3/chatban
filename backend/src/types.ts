@@ -8,7 +8,8 @@ export interface Task {
   context: string | null;
   /** 期限 YYYY-MM-DD (#44)。相対表現はチャットが今日の日付から解決して格納する */
   due: string | null;
-  /** 依存先タスクID (#41)。このタスクは blocked_by の全タスクが完了するまで着手できない想定 */
+  /** 依存先タスクID (#41)。「#AはBが終わってから」という**関係の覚え書き**で、
+   * コードは何も止めない (#152: mayEnterDone は依存を見ない。相互・循環も矛盾ではない) */
   blockedBy: number[] | null;
   /** 却下=やらない決定 (#65)。reason に却下理由を持ち、要約でも【却下】として蒸留される */
   /** #92: 現況の一言。カードに出る。Reviewでは検収の要点を書く (詳細はcontextへ) */

@@ -374,10 +374,20 @@ async function execTool(name: string, args: any, uiActions: UiAction[], events: 
       return { ok: true, ...r };
     }
     case "update_tasks": {
-      const { ok, status, updated, note, conflicts, notFound } = updateTasksAsAgent(args.updates ?? []);
+      const { ok, status, updated, note, conflicts, notFound, badDue } = updateTasksAsAgent(args.updates ?? []);
       events.add("board");
       // #112: 版が合わなかった経緯メモは適用していない。現在の全文を返すのでマージして再実行する
-      return { ok, status, updated, ...(conflicts ? { conflicts } : {}), ...(notFound ? { notFound } : {}), ...(note ? { note } : {}) };
+      // #153: badDue も返す。**列挙して返しているので、足し忘れると入口ごとにズレる** —
+      // このPRの中で2回踏んだ (MCP側で1回、こちらで1回。契約は「badDueで名指しで返す」と言っている)
+      return {
+        ok,
+        status,
+        updated,
+        ...(conflicts ? { conflicts } : {}),
+        ...(notFound ? { notFound } : {}),
+        ...(badDue ? { badDue } : {}),
+        ...(note ? { note } : {}),
+      };
     }
     case "delete_tasks": {
       // #102: 実データは消さずゴミ箱へ。誤解釈で消えても取り返しがつくようにする

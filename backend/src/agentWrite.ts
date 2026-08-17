@@ -163,9 +163,11 @@ export function updateTasksAsAgent(updates: AgentTaskUpdate[]): {
     const { status, coerced: didCoerce } = coerceStatus(u.status);
     if (didCoerce) coerced.push(u.id);
 
-    // #153: 形が違う due は捨てて名指しで返す ("" は解除として扱う。従来どおり)
+    // #153: 形が違う due は捨てて名指しで返す ("" は解除として扱う。従来どおり)。
+    // **報告に積むのは行が実際に適用されると分かってから** (下の contextStale の後)。
+    // 版が合わずに行ごと未適用のときに badDue も返すと、「他の項目は保存しました」と
+    // 「この行は一切適用していません」が同時に返って矛盾する (Codexレビュー指摘)
     const dueCheck = acceptableDue(u.due);
-    if (dueCheck.bad) badDue.push(u.id);
     const due = dueCheck.due;
     const blockedBy = u.blocked_by === undefined ? undefined : (u.blocked_by ?? null);
     const sameDeps =
@@ -204,6 +206,9 @@ export function updateTasksAsAgent(updates: AgentTaskUpdate[]): {
     // 版が合わなければ、その行は何も適用しない (contextだけ弾いて他を通すと、
     // updated に載ったのを見て「書けた」と読まれる。成功と失敗は排他にする #120)
     if (contextStale) return null;
+
+    // ここまで来た行は適用される。期限を捨てたことを報告に積むのはこの位置 (#153)
+    if (dueCheck.bad) badDue.push(u.id);
 
     return {
       id: u.id,

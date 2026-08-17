@@ -252,21 +252,33 @@ export function trashTask(id: number): boolean {
         // 開くと404になる — 検収済み成果の監査元が壊れる (自動レビュー指摘)。
         // ボードから見えないタスクをチャット/MCPがIDで名指しできてしまうのが入口だった
         //
-        // #161: **検収の印もここで落とす。**trashed_at を付け外しするだけだったので、
-        // 「検収済み → ゴミ箱 → 復元」で **古い checked_at が生き返り**、人間の確認を
-        // 一度も挟まずに mayEnterDone が再び true になった。delete_tasks / restore_tasks は
-        // AIが呼べるMCPツールなので、REST専用にしてある setChecked を経路として迂回できていた
-        // (「プロンプトは漏れるが、経路が無いことは漏れない」に反する)。
-        // updateTasks が backToWork / leavingDone で印を消しているのと同じ理屈 —
-        // 状態が変われば前の確認は根拠にならない。ゴミ箱行きだけが抜けていた
-        "UPDATE tasks SET trashed_at = datetime('now', 'localtime'), checked_at = NULL WHERE id = ? AND trashed_at IS NULL AND archived = 0"
+        // #161: 検収の印はここでは触らない。落とすのは復元のとき (restoreTask を見る)
+        "UPDATE tasks SET trashed_at = datetime('now', 'localtime') WHERE id = ? AND trashed_at IS NULL AND archived = 0"
       )
       .run(id).changes > 0
   );
 }
 
+/** #161: **戻すときに検収の印を落とす。**
+ *
+ * trashed_at を付け外しするだけだったので、「検収済み → ゴミ箱 → 復元」で
+ * **古い checked_at が生き返り**、人間の確認を一度も挟まずに mayEnterDone が再び true になった。
+ * delete_tasks / restore_tasks は **AIが呼べるMCPツール**なので、REST専用にしてある setChecked を
+ * 経路として迂回できていた (「プロンプトは漏れるが、経路が無いことは漏れない」に反する)。
+ * updateTasks が backToWork / leavingDone で印を消しているのと同じ理屈 —
+ * 状態が変われば前の確認は根拠にならない。
+ *
+ * **落とすのは trash 時ではなく restore 時。**理由が2つある (Codexレビュー指摘):
+ *   1. ゴミ箱の中にいる間は「検収済みだった」という事実が残る (監査の材料を消さない)。
+ *      ゴミ箱にある限り mayEnterDone は trashedAt を見て false なので、残っていても危険はない
+ *   2. **この変更より前からゴミ箱にある行にも効く。**trash 時に消す形だと、既にゴミ箱で
+ *      眠っている checked_at 非NULLの行は復元で古い印が復活したままになる (移行が必要になる)
+ *
+ * 条件に trashed_at IS NOT NULL を付けているので、ゴミ箱に無いものを restore しても印は消えない */
 export function restoreTask(id: number): Task | undefined {
-  db().prepare("UPDATE tasks SET trashed_at = NULL WHERE id = ?").run(id);
+  db()
+    .prepare("UPDATE tasks SET trashed_at = NULL, checked_at = NULL WHERE id = ? AND trashed_at IS NOT NULL")
+    .run(id);
   return getTask(id);
 }
 

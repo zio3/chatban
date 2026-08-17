@@ -7,7 +7,7 @@ export interface Task {
   context: string | null;
   /** 期限 YYYY-MM-DD (#44) */
   due: string | null;
-  /** 依存先タスクID (#41)。全完了まで着手不可の想定 */
+  /** 依存先タスクID (#41)。**関係の覚え書きで、着手やDoneを止めるものではない** (#152) */
   blockedBy: number[] | null;
   /** 却下=やらない決定 (#65) */
   /** #92: 現況の一言。カードに出る。Reviewでは検収の要点を書く (詳細はcontextへ) */

@@ -212,7 +212,13 @@ app.post("/api/tasks", (req, res) => {
   if (!title) return res.status(400).json({ error: "title required" });
   const ng = badStatus(status) ?? badDue(req.body?.due);
   if (ng) return res.status(400).json({ error: ng });
-  const task = createTask(title, status ?? "todo");
+  const created = createTask(title, status ?? "todo");
+  // #153: **検証だけ足して保存を忘れていた** (Codexレビュー指摘)。この口は title と status しか
+  // 見ていないので、正しい形式の due を渡しても 200 のまま黙って捨てていた —
+  // 「弾く」を足すときは「通ったものが効く」までを対で確かめる。
+  // 不正な値は上で400にしているので、ここへ来るのは実在する日付か解除だけ
+  const due = normalizeDue(req.body?.due);
+  const task = due === undefined ? created : (updateTask(created.id, { due }) ?? created);
   broadcastBoard();
   // 黙って別の列に入れない。指定と結果が違うことは必ず言う (#123と同じ形)
   res.json({
@@ -245,6 +251,16 @@ function badStatus(status: unknown): string | null {
 function badDue(due: unknown): string | null {
   if (due === undefined || due === null || due === "" || isDueDate(due)) return null;
   return `${DUE_FORMAT_RULE} (受け取った値: ${JSON.stringify(due)})`;
+}
+
+/** 解除の "" を null に均す。**均さずにDBへ渡すと空文字が保存され**、画面では解除に見えるのに
+ * `WHERE due IS NOT NULL` のSQLには残る (Codexレビュー指摘) — 見えているものと引けるものが食い違う。
+ * エージェント経路 (agentWrite) は同じ正規化を持っていたので、RESTだけ抜けていた形。
+ * undefined は「指定なし」なのでそのまま返す (patch に載せない印) */
+function normalizeDue(due: unknown): string | null | undefined {
+  if (due === undefined) return undefined;
+  if (due === null || due === "") return null;
+  return due as string;
 }
 
 // status:"done" を投げられたが動かさなかったときに添える。黙って無視すると
@@ -280,7 +296,9 @@ app.get("/api/tasks/:id", (req, res) => {
 app.patch("/api/tasks/:id", (req, res) => {
   const ng = badStatus(req.body?.status) ?? badDue(req.body?.due);
   if (ng) return res.status(400).json({ error: ng });
-  const task = updateTask(Number(req.params.id), req.body ?? {});
+  const body = req.body ?? {};
+  // #153: 解除の "" は null に均してから渡す (空文字を保存しない)
+  const task = updateTask(Number(req.params.id), "due" in body ? { ...body, due: normalizeDue(body.due) } : body);
   if (!task) return res.status(404).json({ error: "not found" });
   broadcastBoard();
   res.json({

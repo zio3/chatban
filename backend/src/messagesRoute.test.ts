@@ -95,7 +95,7 @@ test("レスポンスは OpenAI の形に戻る (chat.ts を無改造で通す�
   assert.equal(res.choices[0].finish_reason, "tool_calls");
   // prompt_tokens は「キャッシュ分も含む総入力」。新規分だけだと入力が極端に少なく見える
   assert.equal(res.usage.prompt_tokens, 332 + 25083);
-  assert.equal(res.usage.prompt_tokens_details!.cached_tokens, 25083, "コスト記録が生きる");
+  assert.equal(res.usage.prompt_tokens_details!.cached_tokens, 25083, "キャッシュが効いたことがログに出る");
 });
 
 test("キャッシュ作成の回も総入力に含める", () => {
@@ -107,8 +107,9 @@ test("キャッシュ作成の回も総入力に含める", () => {
   assert.equal(res.usage.prompt_tokens_details!.cached_tokens, 0, "作成はまだ読みではない");
 });
 
-test("キャッシュ書き込みは読みと分けて返す (単価が違うので合算しない)", () => {
-  // 合算すると初回に払う25,000トークン分が読み単価で計算され、概算が25%安く出る
+test("キャッシュ書き込みは読みと分けて返す (読みと書きは別物なので合算しない)", () => {
+  // #181 で単価計算は撤去したが、分けて返すこと自体は残す — 合算すると
+  // 「初回に25,000トークン書いた」のか「毎回25,000トークン読めている」のか区別が付かなくなる
   const res = toOpenAiShape(
     { content: [], usage: { input_tokens: 332, output_tokens: 10, cache_creation_input_tokens: 25083 } },
     "anthropic/claude-haiku-4.5"

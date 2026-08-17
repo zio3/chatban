@@ -153,7 +153,7 @@ export default function Chat({
               <button
                 onPointerDown={(e) => e.stopPropagation()}
                 onClick={onReset}
-                title="会話をリセットして最初の提案に戻る (記録は監査ログに残ります)"
+                title="会話をリセットして最初の提案に戻る (会話ログはDBに残ります)"
                 className="absolute right-3 cursor-pointer rounded-full bg-white px-2 py-0.5 text-[11px] text-slate-500 shadow-sm hover:bg-slate-100 hover:text-slate-700"
               >
                 🆕 新しい会話
@@ -244,30 +244,14 @@ export default function Chat({
                         ))}
                       </div>
                     )}
-                    {e.usage &&
-                      (e.usage.calls?.length ? (
-                        // クリックでルーティング詳細 (実際に使われたモデル・キャッシュヒット) を展開 (#31)
-                        <details className="mt-1 text-[10px] text-slate-400">
-                          <summary className="cursor-pointer select-none hover:text-slate-600">
-                            {(e.usage.elapsedMs / 1000).toFixed(1)}s · {e.usage.promptTokens + e.usage.completionTokens}
-                            tk · {e.usage.rounds}round
-                          </summary>
-                          <div className="mt-1 space-y-0.5 rounded bg-slate-200/60 px-1.5 py-1 font-mono">
-                            {e.usage.calls.map((c, j) => (
-                              <p key={j}>
-                                {j + 1}. {c.model} · in {c.promptTokens}tk
-                                {c.cachedTokens > 0 && ` (cache ${c.cachedTokens})`} · out {c.completionTokens}tk ·{" "}
-                                {(c.elapsedMs / 1000).toFixed(1)}s
-                              </p>
-                            ))}
-                          </div>
-                        </details>
-                      ) : (
-                        <p className="mt-1 text-[10px] text-slate-400">
-                          {(e.usage.elapsedMs / 1000).toFixed(1)}s · {e.usage.promptTokens + e.usage.completionTokens}tk ·{" "}
-                          {e.usage.rounds}round
-                        </p>
-                      ))}
+                    {/* #31 → #181: ここはクリックでルーティング詳細 (使われたモデル・トークン・
+                        キャッシュヒット) を展開できた。計測系ごと撤去したので、残すのは
+                        「速いか遅いか」だけ。内訳が要るときは backend/logs/ を読む */}
+                    {e.usage && (
+                      <p className="mt-1 text-[10px] text-slate-400">
+                        {(e.usage.elapsedMs / 1000).toFixed(1)}s · {e.usage.rounds}round
+                      </p>
+                    )}
                   </div>
                 </div>
               ))}

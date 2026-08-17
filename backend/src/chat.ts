@@ -10,7 +10,7 @@ import {
   getTask,
   listSummaryCards,
   listTasks,
-  queryLlmCalls,
+  PUBLIC_TABLES,
   queryLogHelp,
   queryProjectData,
   reorderTasks,
@@ -34,13 +34,12 @@ export interface ChatResult {
   reply: string;
   trace: ToolTrace[];
   uiActions: UiAction[];
+  /** #181: 1ターンの体感を返す。**トークン数・キャッシュヒット・ルーティング先は含めない**
+   * (#31 のルーティング詳細は計測系ごと撤去した)。残したのは「速いか遅いか」で、
+   * それは応答のフィードバックであって計測ではない。内訳を見たいときは backend/logs/ を読む */
   usage: {
-    promptTokens: number;
-    completionTokens: number;
     rounds: number;
     elapsedMs: number;
-    /* LLM往復ごとのルーティング詳細 (#31): 実際に使われたモデル・トークン・キャッシュヒット */
-    calls: { model: string; promptTokens: number; completionTokens: number; cachedTokens: number; elapsedMs: number }[];
   };
 }
 
@@ -62,11 +61,12 @@ export const REORDERABLE_STATUSES = ["todo", "inprogress", "review"] as const;
 export const QUERY_LOG_DESCRIPTION = [
   "記録にSQLで問い合わせる(読み取り専用)。集計軸・期間・条件は自由に決めてよい。",
   "DBは SQLite。方言はSQLiteに合わせる — 日付は date()/datetime()/strftime() と修飾子('start of month', '-2 months' など)を使い、date_trunc/INTERVAL/NOW() のような他DBの関数は無い。真偽値は 0/1。文字列連結は || 。日時はISO 8601風の文字列で入っている",
-  "2つのscopeは分離ポリシーが違う。cost=全プロジェクト横断 (LLMの請求は口座単位なので、プロジェクトで割ると総額が出せない。project_id 列で絞り込みは可能) / audit=接続中のプロジェクトのみ (別プロジェクトのタスクや会話は見えない)",
-  "scope='cost': llm_calls — id, purpose(chat/suggest/archive-decompose/archive-title), model, routed_model, prompt_tokens, completion_tokens, cached_tokens, cache_creation_tokens, elapsed_ms, project_id, price_in_per_m, price_out_per_m, estimated_usd, created_at",
-  "cached_tokens=キャッシュから読んだ入力 / cache_creation_tokens=キャッシュに書いた入力。単価が違う(読みは定価の約10%、書きは1.25倍)ので合算しない。prompt_tokens はどちらも含んだ総入力",
-  "scope='audit': このプロジェクトの記録。chat_messages(id, role, content, trace, usage, task_id, created_at。role='user' が持ち主の発言、'assistant' がこのアシスタント) / summary_cards(id, title, elements, task_ids, frozen, created_at)",
-  "scope='audit' の tasks(id, title, status, summary, context, context_version, due, blocked_by, rejected, checked_at, done_at, trashed_at, sort, archived, summary_card_id, created_at, updated_at)",
+  "見えるのは**接続中のプロジェクトの記録だけ**。別プロジェクトのタスクや会話は見えない",
+  // #181: この行は PUBLIC_TABLES から生成する。説明に手で書くと、テーブルを増減したときに
+  // 説明・コード・テストの3箇所を人間が揃える前提になり、実際にズレた (project_context の漏れ)
+  `引けるもの: ${PUBLIC_TABLES.join(" / ")}`,
+  "chat_messages(id, role, content, trace, usage, task_id, created_at。role='user' が持ち主の発言、'assistant' がこのアシスタント。usage は所要時間とラウンド数だけ — トークン計測は #181 で撤去した) / summary_cards(id, title, elements, task_ids, frozen, created_at) / project_context(id, text, version, updated_at。全文は get_project_context のほうが読みやすい)",
+  "tasks(id, title, status, summary, context, context_version, due, blocked_by, rejected, checked_at, done_at, trashed_at, sort, archived, summary_card_id, created_at, updated_at)",
   "checked_at = 人が実物で確かめた日時 (nullなら未検収)。status とは別物で、done は列が動いたこと・checked_at は検収が進んだこと。片方からもう片方を推測しない。この窓口は読み取り専用で、checked_at を書く手段はどこにも無い (印を付けられるのは人間だけ)",
   "会話で「#112」と呼ぶタスクは tasks.id = 112 のこと(主キー)。番号はプロジェクトごとに1から振られる。特定の1件を見るときは WHERE id=<番号> で引く",
   "日付の列を取り違えない。created_at=登録日 / updated_at=最終更新(その後の編集でも動く) / done_at=Doneへ確定した日 / checked_at=人が確かめた日。完了の集計には done_at を使う(created_at だと登録日を数えてしまう)。summary_cards.created_at も完了日ではない — 日次まとめで統合されると最初のカードの日付を引き継ぐ",
@@ -84,14 +84,12 @@ export const QUERY_LOG_DESCRIPTION = [
   "例(Doneの要約カード): SELECT id, title, task_ids, frozen FROM summary_cards ORDER BY id DESC",
   "例(検収待ちで、まだ人が確かめていないもの): SELECT id, title, summary FROM live_tasks WHERE status='review' AND checked_at IS NULL",
   "例(1件の経緯メモ全文): SELECT context, context_version FROM tasks WHERE id=112",
-  "例: SELECT routed_model, COUNT(*) n, ROUND(SUM(estimated_usd),4) usd FROM llm_calls GROUP BY 1 ORDER BY usd DESC LIMIT 10",
-  "例: SELECT ROUND(SUM(estimated_usd),4) usd FROM llm_calls WHERE date(created_at)=date('now','localtime')",
   "例(いつ何を言われたか): SELECT created_at, substr(content,1,120) c FROM chat_messages WHERE role='user' ORDER BY id DESC LIMIT 30",
   "例: SELECT created_at, role, substr(content,1,120) FROM chat_messages WHERE date(created_at)='2026-08-09' ORDER BY id LIMIT 30",
   "例: SELECT substr(created_at,1,13) h, COUNT(*) n FROM chat_messages GROUP BY 1 ORDER BY 1",
   "会話ログは常時プロンプトに載せていないので、過去の話を聞かれたらここを掘る。",
   "「いつ何を頼まれたか」はここで辿れる。発言者の記録は持たない (#180: 個人利用なので、user は常に持ち主)。",
-  "estimated_usd は呼び出し時点の単価で打刻した概算。全体の実額は請求APIの値(画面上部)が正",
+  "LLM呼び出しの記録 (トークン・単価・レイテンシ) はここには無い (#181で撤去)。速度やキャッシュの効きを見たいときは backend/logs/ のログを読む",
 ].join("\n");
 
 /** #115/#116: 列の意味と完了の条件はプロジェクトごとに違う。
@@ -302,10 +300,9 @@ export const tools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
       parameters: {
         type: "object",
         properties: {
-          scope: { type: "string", enum: ["cost", "audit"], description: "cost=LLM呼び出し記録 / audit=会話・タスク" },
           sql: { type: "string", description: "SELECT または WITH で始まる1文" },
         },
-        required: ["scope", "sql"],
+        required: ["sql"],
       },
     },
   },
@@ -405,13 +402,13 @@ async function execTool(name: string, args: any, uiActions: UiAction[], events: 
       };
     }
     case "query_log": {
-      const scope = args.scope === "audit" ? "audit" : "cost";
+      // #181: scope は廃止 (cost 側の llm_calls を撤去したので窓口が1つになった)
       try {
-        return scope === "audit" ? queryProjectData(args.sql ?? "") : queryLlmCalls(args.sql ?? "");
+        return queryProjectData(args.sql ?? "");
       } catch (e: any) {
         // 失敗したら、直せるだけの材料を一緒に返す (説明を厚くする代わりの事後注入)
         const error = e?.message ?? String(e);
-        return { ok: false, error, ...queryLogHelp(scope, error) };
+        return { ok: false, error, ...queryLogHelp(error) };
       }
     }
     case "compact_archive": {
@@ -460,12 +457,12 @@ export function buildSystemPrompt(taskFocus?: ReturnType<typeof getTask>, view?:
     "- 特定タスクの経緯・決定事項・補足(「#22は◯◯方式でいくことにした」等)は update_task_context でそのタスクの経緯メモに記録する。",
     "- summary は「いまどうなっているか」。進捗・完了報告は summary に一言で書き、詳細な根拠は経緯メモ(context)に書く。",
     "- 「ログ整頓して」は compact_archive を使う。完了タスクのアーカイブは自動なので手動操作は不要。",
-    "- 過去の判断や経緯・過去の会話を聞かれたら(「なんで◯◯にしたんだっけ」「あんな話してたっけ」)、索引のタイトルだけで答えず search_tasks で本文と会話ログを引く。言い換え・英日表記を自分で並べて渡し、空振りしたら語を変えて引き直す。検索結果のsnippetは断片なので、理由を答える前に query_log で経緯メモの全文を読む。時期や条件で絞りたいとき(「8/9の午前に何を話していたか」等)は query_log(scope=audit) を使う。",
+    "- 過去の判断や経緯・過去の会話を聞かれたら(「なんで◯◯にしたんだっけ」「あんな話してたっけ」)、索引のタイトルだけで答えず search_tasks で本文と会話ログを引く。言い換え・英日表記を自分で並べて渡し、空振りしたら語を変えて引き直す。検索結果のsnippetは断片なので、理由を答える前に query_log で経緯メモの全文を読む。時期や条件で絞りたいとき(「8/9の午前に何を話していたか」等)は query_log を使う。",
     "- 削除と却下は文脈で使い分ける: 誤登録・重複・ダミー(「消して」「間違えた」)は delete_tasks (ゴミ箱行きで復元可。返答で復元方法を説明する必要はない)。やらない決定(「見送り」「却下」「やらないことにした」)は削除せず update_tasks で status=review + rejected=true にし、reason に却下の根拠を書いて「却下としてReviewに置きました。検収で確定します」と返す (検収後、決定として要約アーカイブに残る)。",
     "- 「消して」がタスクそのものを指すのか、タイトルや文言の一部の修正を指すのか曖昧なときは、操作せず確認する (実例:「#95だけ発言者の話が入っていて不自然なので消せますか?」はタイトルの修正依頼だったが、タスクごと削除してしまった)。",
     "- ボードから退場するもの(完了・却下)は必ずReviewを通り、人間の検収チェックで確定する。チャットからdoneへ直行する経路は存在しない。",
     "- 着手したが前提が足りず進められないときは、勝手に却下にも完了にもしない。summary に「前提不足で保留 (◯◯が必要)」と現況を書き、必要な情報を人に尋ねる。status をどこに置くかはプロジェクトの前提情報の定義に従う (列の意味はプロジェクトごとに違う)。",
-    "- 検収の印(checked_at)は人が実物で確かめた記録で、AIには書く手段が無い。「確認しておきました」と自分で付けることはできないし、付いたことにして話さない。誰が何を確かめたかを聞かれたら query_log(scope=audit) の tasks.checked_at を読む。",
+    "- 検収の印(checked_at)は人が実物で確かめた記録で、AIには書く手段が無い。「確認しておきました」と自分で付けることはできないし、付いたことにして話さない。誰が何を確かめたかを聞かれたら query_log で tasks.checked_at を読む。",
     "- 「後回し」「今はやらない」は却下ではない。status は変えず (done にするとアーカイブに吸い込まれる)、reorder_tasks でその列の下へ落とす。「今やりたい」は逆に上へ。",
     "- 「金曜まで」「明日まで」等の期限表現は今日の日付から YYYY-MM-DD に解決して due に入れる。期限が近い/過ぎたタスクはレポートや割り振り提案で優先的に言及する。",
     "- 画像やPDFが添付されたら内容を読み取って会話・操作に活かす。重要な情報(バグの症状、決定事項、資料の要点)はタスクの context や前提情報に文字で蒸留して記録する。ファイル原本はどこにも保存されないため、後から参照が必要な内容は必ず文字にして残す。",
@@ -528,16 +525,7 @@ const VIEW_HINTS: Record<string, string> = {
     "## いま見ている画面: 📋前提情報",
     "チームの前提情報を見ている。「ここに◯◯を足して」等は update_project_context で反映する。",
   ].join("\n"),
-  metrics: [
-    "",
-    "## いま見ている画面: 📊コスト",
-    "AI利用のコストを見ている。「これ高い?」「何にかかってる?」等は query_log(scope=cost) でSQLを書いて実データを集計してから答える。回数が多いモデルと金額が大きいモデルは一致しないので、金額で見ること。全体の実額は請求APIの値(画面上部)が正で、estimated_usd は概算。",
-  ].join("\n"),
-  audit: [
-    "",
-    "## いま見ている画面: 📜監査",
-    "会話・LLM呼び出し・割り振り履歴のログを見ている。「直近何やってた?」は query_log で updated_at の新しい順に引き、「あの日どんな話をしていたか」「いつ何を決めたか」は query_log(scope=audit) で会話ログを掘る。",
-  ].join("\n"),
+  // #181: 📊コスト と 📜監査 のヒントはここにあった。両タブごと撤去した
   trash: [
     "",
     "## いま見ている画面: 🗑ゴミ箱",
@@ -627,15 +615,34 @@ function abortSuggestsFor(projectId: number): void {
   log("chat", `提案の生成を中断しました (project #${projectId} でチャットが始まったため)`);
 }
 
+/** 提案チップの生成を**呼ばずに諦める**条件。null なら呼ぶ。
+ *
+ * #181: ここを純粋関数に切り出したのは、**この判定**をユニットで固定するため
+ * (「OFFのとき実際に呼び出しが0回」までは固定していない — 判定と呼び出しの結線は未検証)。
+ * それまでは E2E が `llm_calls` の件数差で確かめていたが、計測系の撤去でテーブルが無くなり、
+ * 代わりに共有ログの行数を数える形にしたら**開発サーバーの書き込みで誤判定しうる**状態になった
+ * (自動レビュー指摘)。判断を関数にすればDBもログも要らない (#91 #57 と同じ形)。
+ *
+ * 順番に意味がある: OFF が最優先 (切っている間はコストも止めたい #167)、次に会話中は譲る (#162)、
+ * 最後に空ボード (読むべき文脈が無い #86) */
+export function suggestSkipReason(state: {
+  enabled: boolean;
+  chatBusy: boolean;
+  emptyBoard: boolean;
+}): "off" | "chat-busy" | "empty-board" | null {
+  if (!state.enabled) return "off";
+  if (state.chatBusy) return "chat-busy";
+  if (state.emptyBoard) return "empty-board";
+  return null;
+}
+
 export async function generateSuggestions(): Promise<{ label: string; message: string }[]> {
-  // #167: このプロジェクトで提案チップを切っているなら、LLMを呼ばずに空で返す。
-  // 表示だけ消す形にしなかったのは、切っている間は呼び出し自体を止めたいため (コストも止まる)
-  if (!suggestEnabled(currentProjectId())) return [];
-  // #162: 会話の処理中は譲る。この間はチップが表示されないので、生成しても捨てるだけになる
-  if (isChatBusy(currentProjectId())) return [];
-  // 新規プロジェクト(ボードが空)では読むべき文脈が無い。LLMを呼ばずに空で返す
-  // — UI側は「方針を伝える」導線だけを出す (#86)
-  if (listTasks().length === 0 && listSummaryCards().length === 0) return [];
+  const skip = suggestSkipReason({
+    enabled: suggestEnabled(currentProjectId()),
+    chatBusy: isChatBusy(currentProjectId()),
+    emptyBoard: listTasks().length === 0 && listSummaryCards().length === 0,
+  });
+  if (skip) return [];
   const systemPrompt = buildSystemPrompt();
   if (suggestCache && suggestCache.key === systemPrompt && Date.now() - suggestCache.at < SUGGEST_TTL_MS) {
     return suggestCache.value;
@@ -765,22 +772,12 @@ async function runChatTurnInner(
   ];
   const trace: ToolTrace[] = [];
   const uiActions: UiAction[] = [];
-  const usage: ChatResult["usage"] = { promptTokens: 0, completionTokens: 0, rounds: 0, elapsedMs: 0, calls: [] };
+  const usage: ChatResult["usage"] = { rounds: 0, elapsedMs: 0 };
   let reply = "";
 
   for (let round = 0; round < 8; round++) {
-    const c0 = Date.now();
     const res = await chatCompletion("chat", getModel("main"), { messages, tools });
     usage.rounds++;
-    usage.promptTokens += res.usage?.prompt_tokens ?? 0;
-    usage.completionTokens += res.usage?.completion_tokens ?? 0;
-    usage.calls.push({
-      model: res.model ?? getModel("main"),
-      promptTokens: res.usage?.prompt_tokens ?? 0,
-      completionTokens: res.usage?.completion_tokens ?? 0,
-      cachedTokens: (res.usage as any)?.prompt_tokens_details?.cached_tokens ?? 0,
-      elapsedMs: Date.now() - c0,
-    });
     const msg = res.choices[0].message;
     messages.push(msg);
     if (msg.tool_calls?.length) {

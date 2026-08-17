@@ -9,7 +9,7 @@
 ┌─ ブラウザ (React SPA) ─────────────────────────────────────┐
 │  /p/<projectId> が表示中のプロジェクトを持つ (#97)          │
 │  Board(かんばん4列) / Chat(常設) / TaskDetailPanel(タスクチャット) │
-│  📋前提 / 📊コスト / 📜監査 / 🗑ゴミ箱 / ⚙設定               │
+│  📋前提 / 🗑ゴミ箱 / ⚙設定                                   │
 └──────┬────────────────────────────┬────────────────────────┘
        │ /api (REST)                │ /socket.io
        │ X-ChatBan-Project ヘッダ    │ ?project=<id> でroom参加
@@ -50,7 +50,7 @@
 
 ```
 backend/data/
-  chatban-admin.db          projects / settings / llm_calls(+project_id)
+  chatban-admin.db          projects / settings
   projects/<id>-<名前>.db   tasks / summary_cards / chat_messages / project_context
   trash/                    削除したプロジェクトの退避先 (実体は消さない)
 ```
@@ -64,7 +64,7 @@ backend/data/
 - 複製・削除・受け渡しがファイル操作で済む (デモ用に作って捨てるのが楽)
 - 実録データと他案件が物理的に別ファイルになり、公開時の混入リスクを管理しやすい
 
-`llm_calls` だけ管理DBに置く。コストは口座単位で見るのが正しく、プロジェクト別内訳も出せる。
+管理DBには `llm_calls` (LLM呼び出しの記録) と `model_prices` (料金表) も置いていたが、#181 で撤去した。
 スキーマは `ensureProjectSchema()` がDBを開くたびに流すので、新規作成と既存の移行が同じ経路を通る。
 
 ### 「いまどのプロジェクトか」は接続が決める
@@ -87,17 +87,18 @@ Socket.IOの配信もプロジェクト単位のroomへ送る。
 | 用途 | モデル | 理由 |
 |---|---|---|
 | 対話 (chat / suggest) | `openai/gpt-5.4-mini-2026-03-17` 固定 | 応答速度が生命線 + 自動キャッシュが実額に効く |
-| 要約の要素分解 (archive-decompose) | `orcarouter/auto` | 品質が肝・非同期でレイテンシ許容(60〜80秒)→ルーティング委任 |
-| 定型 (archive-title) | `orcarouter/fusion-mini` | コスト優先ルーティング。20秒でタイムアウトさせる |
+| 要約の要素分解 (archive-decompose) | `openai/gpt-5.6-luna` | 実測で `orcarouter/auto` の40〜80秒が4〜12秒に。遅さの正体は思考トークン |
+| 定型 (archive-title) | `openai/gpt-5.6-luna` | 短いラベル生成に思考は要らない。20秒でタイムアウトさせる |
 
-- **⚙設定タブから実行時に切り替えられる** (#88)。`getModel(slot)` が呼び出しごとにDBを引くので再起動不要
+- **供給元は env だけ** (`ORCA_MODEL_MAIN` / `ORCA_MODEL_ARCHIVE` / `ORCA_MODEL_CHEAP`)。変更したら再起動。
+  #88 の「⚙設定タブから実行時に切り替え」は #181 で撤去した — 選択肢の供給元が
+  単価つきカタログ(182件)だったので、計測系の撤去で空になる
 - 対話モデルは**日付つきスナップショットIDで固定する**。キャッシュはモデルごとに別物なので、
-  エイリアスや `orcarouter/auto` だとキャッシュが乗らない
-- 埋め込みモデルも同じ理由で固定が必要(モデルが変わるとベクトル空間が変わり、既存インデックスが無意味になる)。
-  `orcarouter/auto` が embeddings を対象外にしているのは制限ではなく正しい設計
-- env `ORCA_MODEL_MAIN` / `ORCA_MODEL_ARCHIVE` / `ORCA_MODEL_CHEAP` で既定値を上書き可
+  エイリアスやルーティング委任だとキャッシュが乗らない
 - APIキー: env `ORCAROUTER_API_KEY` または `~\.orcarouter\apikey.txt` (1行)。**値をログ・チャットに出さない**
-- 全LLM呼び出しは `llm_calls` に記録 (purpose/model/routed_model/tokens/cached/elapsed/project_id)
+- 呼び出しの記録は `backend/logs/` のログ1行 (`tokens=8208/23 cached=3200 1555ms`)。
+  `llm_calls` テーブルへの打刻は #181 で撤去した。**副産物として、単価を引くための
+  カタログ取得が呼び出し経路から消えた** (起動直後は外部APIを待っていた)
 
 ## プロンプト設計 (コスト工学、詳細は cost-engineering-log.md)
 
@@ -230,8 +231,9 @@ DateTimeOffset に相当する型が無く (TEXT/INTEGER/REAL/BLOB/NULL のみ)�
 - E2E: `cd frontend; npm run test:e2e` (8799/5199, `e2e-data/`, AUTO_ARCHIVE=0)。
   実行前に `e2e/clean-db.mjs` がデータを消す (残すとタスクが積み上がりD&Dの座標がずれる)
 - ログ: `backend/logs/chatban-YYYY-MM-DD.log` (リクエスト/LLM往復/ツール実行/切断/再ベースライン)
-- 分析スクリプト: `scripts/cost-estimate.mjs` (自前コスト概算 vs 公式請求) /
-  `scripts/billing-probe.mjs` (カタログ単価が実額と一致するかの検証)
+- コスト分析スクリプト (`cost-estimate` / `cost-report` / `before-after` / `billing-probe` /
+  `backfill-costs` / `list-models`) は #181 で削除した。`llm_calls` とカタログAPIに依存していたので、
+  残すと**動かないスクリプトが残る** (#179 で実際にそれを2本残して壊した)
 - DB直接編集は禁止 (REST/MCP経由 — Socket.IO配信と履歴記録が飛ぶため)
 - リポジトリ: **8/15提出直前までPrivate**。コミット毎push=スナップショット運用
 

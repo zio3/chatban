@@ -50,13 +50,12 @@ export interface ChatResponse {
   reply: string;
   trace: ToolTrace[];
   uiActions: UiAction[];
+  /** #181: 1ターンの体感 (速いか遅いか) だけ。トークン数・キャッシュヒット・ルーティング先は
+   * 計測系ごと撤去した。**過去ログにはトークン等が入った古い形が残っている** —
+   * 表示は rounds と elapsedMs しか読まないので、余分な項目は無視される */
   usage: {
-    promptTokens: number;
-    completionTokens: number;
     rounds: number;
     elapsedMs: number;
-    /** LLM往復ごとのルーティング詳細 (#31)。過去ログには無い場合がある */
-    calls?: { model: string; promptTokens: number; completionTokens: number; cachedTokens: number; elapsedMs: number }[];
   };
 }
 

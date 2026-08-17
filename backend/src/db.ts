@@ -1,6 +1,6 @@
 import { hooks } from "./hooks.js";
 import { log } from "./log.js";
-import { admin, adminReadonly, currentProjectId, db, projectReadonly } from "./store.js";
+import { admin, currentProjectId, db, projectReadonly } from "./store.js";
 import { decodeUnicodeEscapes } from "./text.js";
 import type { Task, TaskStatus } from "./types.js";
 
@@ -439,143 +439,18 @@ export function listChatMessages(limit = 50, taskId?: number): {
   }));
 }
 
-export function recordLlmCall(row: {
-  purpose: string;
-  model: string;
-  routedModel: string | null;
-  promptTokens: number;
-  completionTokens: number;
-  cachedTokens?: number;
-  /** #172: キャッシュに書いたぶん。読みと単価が違うので分けて残す */
-  cacheCreationTokens?: number;
-  elapsedMs: number;
-  /** #106: 呼び出し時点の単価と概算額。あとで単価が改定されても過去の記録が変わらない */
-  priceInPerM?: number | null;
-  priceOutPerM?: number | null;
-  estimatedUsd?: number | null;
-}) {
-  admin.prepare(
-    "INSERT INTO llm_calls (purpose, model, routed_model, prompt_tokens, completion_tokens, cached_tokens, cache_creation_tokens, elapsed_ms, project_id, price_in_per_m, price_out_per_m, estimated_usd) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-  ).run(
-    row.purpose,
-    row.model,
-    row.routedModel,
-    row.promptTokens,
-    row.completionTokens,
-    row.cachedTokens ?? 0,
-    row.cacheCreationTokens ?? 0,
-    row.elapsedMs,
-    currentProjectId(),
-    row.priceInPerM ?? null,
-    row.priceOutPerM ?? null,
-    row.estimatedUsd ?? null
-  );
-}
-
-export function metrics() {
-  const total = admin
-    .prepare(
-      "SELECT COUNT(*) AS calls, COALESCE(SUM(prompt_tokens),0) AS pt, COALESCE(SUM(completion_tokens),0) AS ct, COALESCE(SUM(cached_tokens),0) AS cached, COALESCE(AVG(elapsed_ms),0) AS avgMs FROM llm_calls"
-    )
-    .get() as any;
-  const byModel = admin
-    .prepare(
-      "SELECT model, COUNT(*) AS calls, SUM(prompt_tokens) AS pt, SUM(completion_tokens) AS ct, SUM(cached_tokens) AS cached, CAST(AVG(elapsed_ms) AS INTEGER) AS avgMs FROM llm_calls GROUP BY model ORDER BY calls DESC"
-    )
-    .all();
-  // 用途別: 「対話は固定・要約は品質ルーティング・定型はコスト優先」の使い分けが数字で見える (#21)
-  const byPurpose = admin
-    .prepare(
-      "SELECT purpose, COUNT(*) AS calls, SUM(prompt_tokens) AS pt, SUM(completion_tokens) AS ct, SUM(cached_tokens) AS cached, CAST(AVG(elapsed_ms) AS INTEGER) AS avgMs, COUNT(DISTINCT routed_model) AS models FROM llm_calls GROUP BY purpose ORDER BY calls DESC"
-    )
-    .all();
-  const recent = admin.prepare("SELECT * FROM llm_calls ORDER BY id DESC LIMIT 50").all();
-  return {
-    totalCalls: total.calls,
-    promptTokens: total.pt,
-    completionTokens: total.ct,
-    cachedTokens: total.cached,
-    avgElapsedMs: Math.round(total.avgMs),
-    byModel,
-    byPurpose,
-    recent,
-  };
-}
-
-/** 全ログExport (#83): 検証利用向けのフルダンプ。全テーブルを生のまま出す (期間指定は将来必要になったら)。
- *
- * **いま伏字にしているものは無い。**かつての唯一の例外はセッション署名鍵だったが、
- * #180 で認証ごと廃止して設定からも消えた。伏字の仕組みは下の exportableSettings に
- * 残してあるので、秘密を持つ設定を足すときはそこに1行足す。
- * ここに「もれなく生のまま」とだけ書くと、渡す前に中身を確かめる人が
- * 「伏せる仕組みは無い」と読む — Exportの安全性を判断する人が最初に読む場所なので、
- * 「いまは伏せる対象が無い」と「伏せる仕組みは在る」を分けて書く */
-export function exportAll() {
-  const all = (table: string) => db().prepare(`SELECT * FROM ${table} ORDER BY id`).all();
-  return {
-    exportedAt: new Date().toLocaleString("ja-JP"),
-    tasks: all("tasks"), // アーカイブ済み含む全件
-    summaryCards: all("summary_cards"),
-    chatMessages: all("chat_messages"), // trace/usage含む生データ
-    llmCalls: admin.prepare("SELECT * FROM llm_calls WHERE project_id = ? ORDER BY id").all(currentProjectId()),
-    projectContext: db().prepare("SELECT * FROM project_context WHERE id = 1").get() ?? null,
-    settings: exportableSettings(), // #88: どのモデルで動いていたかの記録
-  };
-}
-
-/** Export に載せてよい設定だけを返す。
- *
- * かつて settings をそのまま全行出したせいで、**セッション署名鍵 (auth.sessionSecret) が
- * 平文で入っていた** (自動レビュー指摘)。#180 で認証を廃止し、秘密を持つ設定は無くなったので
- * 伏字リストは空にしてある。**関数と伏字の仕組みは残す** — Export は「検証のために人へ渡す
- * ファイル」「記事の一次資料」なので、秘密を持つ設定を足すときはここに1行足せば済む形にしておく。
- *
- * 伏せるものを列挙する向きにしてあるのは意図的。載せてよいものを決める向きにすると、
- * 新しい設定が増えたときに黙って漏れる側へ倒れる。**除外ではなく伏字**なのは、
- * 「その設定が存在すること」自体は記録として意味があるため (#88 と同じ目的)。
- *
- * 「64桁hexが素で載っていないこと」はユニットテスト側の番人が見ている (chat.test.ts) */
-const REDACTED_SETTINGS = new Set<string>();
-export function exportableSettings(): { key: string; value: string }[] {
-  return (admin.prepare("SELECT * FROM settings ORDER BY key").all() as { key: string; value: string }[]).map((r) =>
-    REDACTED_SETTINGS.has(r.key) ? { ...r, value: "***" } : r
-  );
-}
-
-/** オーディットログ (#33): 会話・LLM呼び出し・割り振り履歴の時系列閲覧用 */
-export function auditLog() {
-  const chat = (
-    db().prepare("SELECT id, role, content, task_id, created_at FROM chat_messages ORDER BY id DESC LIMIT 100").all() as any[]
-  ).map((r) => ({
-    id: r.id,
-    role: r.role,
-    content: String(r.content).slice(0, 200),
-    taskId: r.task_id ?? null,
-    createdAt: r.created_at,
-  }));
-  // LLM呼び出しは管理DB。監査は「このプロジェクトで何が起きたか」を見る画面なので絞る (#86)
-  const llm = (
-    admin
-      .prepare(
-        "SELECT id, purpose, model, routed_model, prompt_tokens, completion_tokens, cached_tokens, elapsed_ms, created_at FROM llm_calls WHERE project_id = ? ORDER BY id DESC LIMIT 100"
-      )
-      .all(currentProjectId()) as any[]
-  ).map((r) => ({
-    id: r.id,
-    purpose: r.purpose,
-    model: r.model,
-    routedModel: r.routed_model,
-    promptTokens: r.prompt_tokens,
-    completionTokens: r.completion_tokens,
-    cachedTokens: r.cached_tokens,
-    elapsedMs: r.elapsed_ms,
-    createdAt: r.created_at,
-  }));
-  return { chat, llm };
-}
+// #181: 計測系と監査ログを撤去した。ここにあったもの:
+//  - recordLlmCall() — 呼び出しごとに llm_calls へトークン・単価・概算額を打刻
+//  - metrics() — 📊コストタブの集計 (総計 / モデル別 / 用途別 / 直近50件)
+//  - exportAll() / exportableSettings() — 📜監査タブの「全ログExport」
+//  - auditLog() — 監査タブの時系列 (会話100件 + LLM呼び出し100件)
+//
+// **「AIが何をしたかの説明責任」はチームだから要ったもの。**個人利用では、デバッグは
+// backend/logs/chatban-YYYY-MM-DD.log で足りる (リクエスト・LLM往復・ツール実行・切断が全部残る)。
+// 会話ログ (chat_messages) は残っているので、「いつ何を頼んだか」は query_log で引ける
 
 /** #93: 「直近なにをしてた?」に実データで答えるための活動ログ。
- * 監査タブの生ログ全部ではなく、経緯を語るのに要る分だけを絞って返す
+ * 生ログ全部ではなく、経緯を語るのに要る分だけを絞って返す
  * (ツールの戻り値がそのままプロンプトに乗るので、量がコストに直結する)。
  * 会話ログは含めない — 進行中の会話は履歴として既にモデルの手元にあるため */
 export function recentActivity(limit = 15) {
@@ -701,34 +576,8 @@ export function searchTasks(terms: string[], limit = 10) {
   return { hits: scored.slice(0, limit), chatHits, searched: words };
 }
 
-// #106: 料金表をDBに保存する。呼び出しごとに単価を打刻するので、外部APIが落ちていても
-// 「単価が引けず概算から漏れる」行が出ないようにしたい (以前は5件が黙って除外されていた)
-export function saveModelPrices(
-  entries: { id: string; inputPerM: number | null; outputPerM: number | null; contextLength: number | null; inputModalities: string[] }[]
-): void {
-  const stmt = admin.prepare(
-    `INSERT INTO model_prices (id, input_per_m, output_per_m, context_length, input_modalities, fetched_at)
-     VALUES (?, ?, ?, ?, ?, datetime('now','localtime'))
-     ON CONFLICT(id) DO UPDATE SET input_per_m = excluded.input_per_m, output_per_m = excluded.output_per_m,
-       context_length = excluded.context_length, input_modalities = excluded.input_modalities, fetched_at = excluded.fetched_at`
-  );
-  admin.transaction(() => {
-    for (const e of entries) {
-      stmt.run(e.id, e.inputPerM, e.outputPerM, e.contextLength, JSON.stringify(e.inputModalities));
-    }
-  })();
-}
-
-export function loadModelPrices() {
-  return (admin.prepare("SELECT * FROM model_prices").all() as any[]).map((r) => ({
-    id: r.id as string,
-    name: null,
-    inputPerM: r.input_per_m as number | null,
-    outputPerM: r.output_per_m as number | null,
-    contextLength: r.context_length as number | null,
-    inputModalities: r.input_modalities ? JSON.parse(r.input_modalities) : [],
-  }));
-}
+// #106 → #181: 料金表 (model_prices) の保存・読み出しもここにあった。単価を打刻するために
+// カタログをDBへ持っていたが、打刻ごと撤去したので置き場も要らない (テーブルはDROPする)
 
 /** #106: 記録の集計はLLMにSQLを書かせ、コードは安全性だけ守る (#91の並べ替え・#103の検索と同じ形)。
  * 集計軸を先に決め打ちすると、そこから外れた問い(「今日の午後だけ」「8/9の午前に何を話したか」)に答えられない。
@@ -749,8 +598,11 @@ export function loadModelPrices() {
  * 許可リストなら**新しいテーブルは黙って閉じる**。気づき方が「開き忘れ」に変わり、
  * 失敗が安全側に倒れる。
  *
- * ここは QUERY_LOG_DESCRIPTION (ツール説明に書いてあるテーブル一覧) と同じ集合であるべきなので、
- * 説明とコードがズレていないことを E2E で確かめている (入口ごとの書き分けは #92 #108 #114 で3回ズレた)。
+ * **ツール説明の一覧はここから生成する** (chat.ts の QUERY_LOG_DESCRIPTION が
+ * `引けるもの: ...` の行をこの配列から組み立てる)。以前は説明に手で書いていて、
+ * E2Eも手で書いた一覧と突き合わせていたため、**3箇所を人間が揃える前提**になっていた
+ * (実際 project_context が説明とE2Eから漏れた。自動レビュー指摘)。
+ * 出所を1つにすれば、増やしても減らしても説明が勝手に追いつく。
  *
  * **ビューはテーブルと同じ扱い** (判定を type IN ('table','view') から作っている)。
  * ただし**ビューを載せることは、そのビューが中で参照しているテーブルを載せることと同じ**。
@@ -758,29 +610,23 @@ export function loadModelPrices() {
  * いまの live_tasks / done_tasks はどちらも tasks しか見ておらず、その tasks も載っているので実害はない。
  * 機密を参照するビューを「列を絞ってあるから安全」と足すと、そこから読めるようになる —
  * ここは見える名前の一覧ではなく、**到達できる範囲の宣言**として読むこと */
-export const PUBLIC_TABLES: Record<"cost" | "audit", readonly string[]> = {
-  // 請求は口座単位なので全プロジェクト横断 (projects は名前を引くため)
-  cost: ["llm_calls", "model_prices", "projects"],
-  // 接続中のプロジェクトの記録だけ。live_tasks / done_tasks はビュー (どちらも tasks を見ている)
-  audit: [
-    "tasks",
-    "live_tasks",
-    "done_tasks",
-    "chat_messages",
-    "summary_cards",
-    "project_context",
-  ],
-};
+// #181: scope が2つ (cost / audit) だったが、cost 側の llm_calls / model_prices を撤去したので
+// **窓口は1つになった。**接続中のプロジェクトの記録だけを引く。
+// live_tasks / done_tasks はビュー (どちらも tasks を見ている)
+export const PUBLIC_TABLES: readonly string[] = [
+  "tasks",
+  "live_tasks",
+  "done_tasks",
+  "chat_messages",
+  "summary_cards",
+  "project_context",
+];
 
-export function queryLlmCalls(sql: string, limit = 200) {
-  return runReadonly(adminReadonly(), sql, limit, "cost");
-}
-
-/** #106追補: 会話ログ・割り振り履歴などプロジェクト側の記録もSQLで引く。
+/** #106追補: 会話ログなどプロジェクト側の記録をSQLで引く。
  * キーワード検索では「8/9の午前に何を話していたか」のような時間軸での切り出しができない。
  * 会話は揮発させる方針(#72)なので常時プロンプトには載せず、聞かれたときだけ掘る */
 export function queryProjectData(sql: string, limit = 200) {
-  return runReadonly(projectReadonly(), sql, limit, "audit");
+  return runReadonly(projectReadonly(), sql, limit);
 }
 
 /** 仮想テーブルを見つけて弾いたときの例外。EXPLAIN 自体の失敗と区別するために型で持つ
@@ -788,15 +634,14 @@ export function queryProjectData(sql: string, limit = 200) {
 class VirtualTableError extends Error {}
 
 function runReadonly(
-  conn: ReturnType<typeof adminReadonly>,
+  conn: ReturnType<typeof projectReadonly>,
   sql: string,
-  limit: number,
-  scope: "cost" | "audit"
+  limit: number
 ): { rows: unknown[]; sql: string; truncated: boolean; note?: string } {
   const trimmed = sql.trim().replace(/;\s*$/, "");
   if (!/^(select|with)\b/i.test(trimmed)) throw new Error("SELECT か WITH で始まる読み取りクエリだけ実行できます");
   if (trimmed.includes(";")) throw new Error("複数の文は実行できません");
-  const allowed = PUBLIC_TABLES[scope];
+  const allowed = PUBLIC_TABLES;
   // #168: SQLをパースせず、「実在するオブジェクトの名前がSQLに現れたか」で判定する。
   // 名前の抽出をやめたのは、サブクエリ・CTE・JOIN・別名を正しく拾うには本物のパーサが要るため。
   // 実在名との突き合わせなら、書き方が何であれ「触れるのは許可したものだけ」が保てる
@@ -860,8 +705,8 @@ function silentTrap(sql: string): { note?: string } {
  * ツール説明を厚くする代わりに、間違えたときにその場で渡す。説明を読ませ続けるより
  * 安く、しかも「いま必要な情報」だけで済む。列やテーブルの一覧は実DBから引くので、
  * スキーマを変えても説明とズレない (契約と実装のズレは何度も踏んでいる) */
-export function queryLogHelp(scope: "cost" | "audit", message: string): Record<string, unknown> {
-  const conn = scope === "audit" ? projectReadonly() : adminReadonly();
+export function queryLogHelp(message: string): Record<string, unknown> {
+  const conn = projectReadonly();
   const help: Record<string, unknown> = {};
   try {
     const objects = (
@@ -871,7 +716,7 @@ export function queryLogHelp(scope: "cost" | "audit", message: string): Record<s
       }[]
     // #168: 引ける一覧は許可リストそのもの。ここで別の条件を書くと
     // 「案内されたのに引けない」「引けるのに案内されない」がすぐ生まれる
-    ).filter((o) => PUBLIC_TABLES[scope].includes(o.name));
+    ).filter((o) => PUBLIC_TABLES.includes(o.name));
 
     if (/no such (table|column)/i.test(message)) {
       // 何がどこにあるかを、実DBの現物で返す
@@ -883,10 +728,8 @@ export function queryLogHelp(scope: "cost" | "audit", message: string): Record<s
             .join(", "),
         ])
       );
-      if (scope === "audit") {
-        help.hint =
-          "生きているタスクは live_tasks、完了したものは done_tasks を使うと、条件を書かなくて済みます。ゴミ箱やアーカイブを見たいときだけ tasks を直に引いてください";
-      }
+      help.hint =
+        "生きているタスクは live_tasks、完了したものは done_tasks を使うと、条件を書かなくて済みます。ゴミ箱やアーカイブを見たいときだけ tasks を直に引いてください";
     } else if (/no such function/i.test(message)) {
       help.dialect = {
         note: "SQLite には date_trunc / INTERVAL / NOW() / DATEADD がありません",

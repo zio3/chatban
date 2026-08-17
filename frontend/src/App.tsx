@@ -1,11 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, apiFetch, type Project } from "./api";
 import { ensureProjectInUrl, gotoProject, projectIdFromUrl } from "./project";
-import AuditView from "./components/AuditView";
 import Board, { type MovePayload } from "./components/Board";
 import Chat, { type Suggestion } from "./components/Chat";
 import ContextView from "./components/ContextView";
-import MetricsView from "./components/MetricsView";
 import SettingsView from "./components/SettingsView";
 import TrashView from "./components/TrashView";
 import TaskDetailPanel from "./components/TaskDetailPanel";
@@ -31,7 +29,7 @@ export default function App() {
   const [detailTaskId, setDetailTaskId] = useState<number | null>(null);
   const [archiveWorking, setArchiveWorking] = useState(false);
   // #21/#33: ボード以外の閲覧ビューへの遷移 (簡易タブ)
-  const [view, setView] = useState<"board" | "context" | "metrics" | "audit" | "settings" | "trash">("board");
+  const [view, setView] = useState<"board" | "context" | "settings" | "trash">("board");
 
   // #93: チャットは常設なので、いま見ている画面をメタ情報としてLLMへ渡す (発言者と同じ扱い)
   const viewRef = useRef(view);
@@ -103,7 +101,7 @@ export default function App() {
       everConnected = true;
     };
     // #72: メインチャットはリロードで新規 (会話は作業記憶。重要事項はプロジェクト前提/タスク経緯メモに
-    // 蒸留されて残り、生ログはDB保存済みで📜監査タブから見える)。タスクチャットは経緯ログなので復元維持
+    // 蒸留されて残り、生ログはDBに保存済みで query_log から引ける)。タスクチャットは経緯ログなので復元維持
     const onBoard = (p: { tasks: Task[]; summaryCards?: SummaryCard[] }) => {
       setTasks(p.tasks);
       if (p.summaryCards) setSummaryCards(p.summaryCards);
@@ -265,10 +263,9 @@ export default function App() {
   const suggestions: Suggestion[] = [];
   const VIEW_SUGGESTIONS: Partial<Record<typeof view, Suggestion[]>> = {
     context: [{ label: "📋 前提情報に追記したい", message: "前提情報に追記したいことがある。いまの内容を踏まえて相談したい" }],
-    metrics: [{ label: "💰 何にお金がかかってる?", message: "AI利用のコストは何にかかっている? 節約する余地はある?" }],
-    audit: [{ label: "🕘 直近なにをしてた?", message: "直近の作業を時系列で簡潔にまとめて" }],
+    // #181: 📊コスト と 📜監査 のチップはタブごと撤去。「直近なにをしてた?」はボード側にある
     trash: [{ label: "↩ 消したものを戻したい", message: "ゴミ箱に入れたタスクを戻したい" }],
-    settings: [{ label: "🤖 モデルの選び方を教えて", message: "用途別モデルはどう選ぶのがいい? いまの設定の意図も教えて" }],
+    settings: [{ label: "📁 プロジェクトを整理したい", message: "プロジェクトの整理について相談したい (無効化・リネーム・削除)" }],
   };
   // 新規プロジェクト(まだ何も無い)では、レポートも割り振りも中身が無い。
   // 最初にやるべきは方針を伝えること — 前提情報はAIの振る舞いを決める介入チャネル (#81) なので、
@@ -345,8 +342,7 @@ export default function App() {
               [
                 { key: "board", label: "ボード" },
                 { key: "context", label: "📋 前提" },
-                { key: "metrics", label: "📊 コスト" },
-                { key: "audit", label: "📜 監査" },
+                // #181: 📊コスト と 📜監査 のタブはここにあった (計測系と監査ログごと撤去)
                 { key: "trash", label: "🗑 ゴミ箱" },
                 { key: "settings", label: "⚙ 設定" },
               ] as const
@@ -366,8 +362,6 @@ export default function App() {
       </header>
       <main className="min-h-0 flex-1 overflow-auto p-3">
         {view === "context" && <ContextView />}
-        {view === "metrics" && <MetricsView />}
-        {view === "audit" && <AuditView />}
         {view === "settings" && <SettingsView />}
         {view === "trash" && <TrashView />}
         {view === "board" && loading && (

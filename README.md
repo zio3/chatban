@@ -85,6 +85,23 @@ AIに何をさせないか (権限境界) と、割り切った部分は [docs/s
 
 前提: Node.js 20+ と、**いずれか1つ**のLLM接続先(OpenAI / Anthropic / OrcaRouter / ローカルLLM)。
 
+### AI CLI に任せる場合
+
+Claude Code や Codex CLI を使っているなら、clone したディレクトリで頼むのが一番早いです。下の手順を人間が読んで実行するのと同じことを代わりにやってくれます。
+
+```
+このリポジトリを動かせるようにして。README の「起動方法」の通りに、
+依存を入れて backend/config.json を作って、疎通確認まで通してほしい。
+LLMの接続先は <OpenAI / Anthropic / Ollama> を使う。
+```
+
+- **キーは自分で置いてから頼む**のがおすすめです。`~/.openai/apikey.txt` のようなファイルに書いて、`config.json` には `apiKeyFile` でそのパスだけ書かせれば、キーの値がエージェントとの会話に出ません
+- ボードをエージェントから直接操作したいなら、続けて「`.mcp.json` に chatban を足して」と言えば繋がります(→ [MCP連携](#mcp連携-ドッグフーディング))。MCPは無くてもボードとチャットだけで道具として成立するので、後回しでも構いません
+
+**これが唯一の入口ではありません。**AI CLI を持っていなくても下の手順で入ります。専用のインストーラーと人間向けの案内は別途用意する予定です。
+
+### 手順
+
 ```powershell
 # 1. 依存関係
 cd backend; npm install; cd ../frontend; npm install; cd ..
@@ -103,7 +120,19 @@ cd backend; npm run dev    # http://localhost:8787
 cd frontend; npm run dev   # http://localhost:5173 (こちらを開く。/api と /socket.io は8787へproxy)
 ```
 
+macOS / Linux では 2 が `cp backend/examples/config.openai.json backend/config.json`、4 は `start-dev.ps1` を使わず手動起動の2行になります(あのスクリプトはWindows前提で、DBバックアップとヘルスチェックを兼ねているだけです)。
+
 データは `backend/data/` に置かれます(プロジェクトごとに1つのSQLiteファイル)。初回起動時に「マイプロジェクト」が1つ作られます。
+
+### 詰まったとき
+
+| 症状 | 原因 |
+|---|---|
+| 画面は開くが、チャットだけ失敗する | `backend/config.json` が無い。設定はLLMを使う操作で初めて要求されるので、起動そのものは通ります |
+| 起動時に設定の不備を名指しで怒られる | `apiStyle` の綴り違い、`models` の3つのどれかが空、`baseURL` がhttp://の外部宛(キーが平文で飛ぶので弾いています)。メッセージの通りに直します |
+| `model_not_found` | モデルIDの書き方が宛先と合っていません。直接APIは接頭辞なし (`gpt-5.4-mini-2026-03-17`)、OrcaRouter経由は `provider/model` 形式 |
+| `EADDRINUSE` | 8787 か 5173 が空いていません。`PORT` を変えるか、残っているプロセスを**ツリーごと**止めます(Listenしているプロセスだけ落とすと `tsx watch` の親が残って再発します) |
+| Ollama構成で接続できない | `ollama serve` が動いているか、`ollama list` にそのモデルがあるかを確認します |
 
 ### 接続先とモデル
 

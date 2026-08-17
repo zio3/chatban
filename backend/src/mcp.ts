@@ -37,7 +37,8 @@ import {
 } from "./db.js";
 import { boardDelta, formatBoardUpdate } from "./boardState.js";
 import { archiveState } from "./hooks.js";
-import { contextReference, contextTemplateHint, currentProjectId, getProject } from "./store.js";
+import { contextReference, contextTemplateHint } from "./contextTemplate.js";
+import { currentProjectId, getProject } from "./store.js";
 import type { TaskStatus } from "./types.js";
 
 // 値の一覧はチャット側と共有する。入口ごとに書き分けると必ずズレる (#92 #108 #114 #125 #126)

@@ -1406,7 +1406,11 @@ test("ツール説明に書いてあるテーブルは、実際に引けるも�
   const listed = (await mcp("query_log", { sql: "SELECT * FROM settings" })) as any;
   expect(listed.error).toBeTruthy();
 
-  for (const t of ["live_tasks", "done_tasks", "tasks", "chat_messages", "summary_cards"]) {
+  // **許可リストの全項目を挙げる。**1つでも漏らすと、そのテーブルが説明から落ちても気づけない
+  // (実際 project_context がここと説明から漏れていた。自動レビュー指摘)。
+  // このテストが見るのは「説明に載っている → 引ける」の一方向で、逆方向 (引けるのに説明に無い) は
+  // 見ていない — E2Eからは許可リストを読めないため。増やすときは両方に足すこと
+  for (const t of ["live_tasks", "done_tasks", "tasks", "chat_messages", "summary_cards", "project_context"]) {
     const r = await mcp("query_log", { sql: `SELECT * FROM ${t} LIMIT 1` });
     expect(r.error, `${t} は説明に載っているのに引けない`).toBeFalsy();
   }
@@ -1444,22 +1448,13 @@ test("AI提案チップはプロジェクトごとにOFFにできる。OFFの間
   // 切ったのは1だけ。他のプロジェクトは巻き込まれない
   expect(await enabledOf(otherId)).toBe(true);
 
-  // OFFならLLMを呼ばない。**呼んだ回数で直接確かめる** —
-  // 所要時間で判定すると、上流が即座に失敗して空配列になった場合にも合格してしまう。
-  //
-  // #181 まではこれを llm_calls テーブルで数えていたが、計測系ごと撤去したのでログで数える
-  // (chatCompletion が呼ばれると `[llm] -> suggest` の行が必ず出る)。
-  // 中断の検証 (下のテスト) が既に同じ方式なので、数え方をそちらと揃えた
-  const suggestCalls = (): number => {
-    const today = new Date().toLocaleDateString("sv-SE"); // YYYY-MM-DD
-    const file = path.join("..", "backend", "logs", `chatban-${today}.log`);
-    if (!fs.existsSync(file)) return 0;
-    return fs.readFileSync(file, "utf-8").split("\n").filter((l) => l.includes("-> suggest")).length;
-  };
-  const before = suggestCalls();
+  // OFFなら空で返る。**「LLMを呼んでいないこと」はここでは確かめない** —
+  // #181 まで使っていた llm_calls の件数差はテーブルごと撤去され、共有ログの行数で数える形は
+  // 開発サーバーの書き込みで誤判定しうる (自動レビュー指摘)。
+  // 呼ばないことの保証は `suggestSkipReason` のユニットテストが持っている (backend/src/chat.test.ts)。
+  // ここはOFFが**この経路まで効いていること** (設定→API応答) を見る
   const s = (await (await fetch(`${API}/api/suggestions`, { method: "POST" })).json()) as any;
   expect(s.suggestions).toEqual([]);
-  expect(suggestCalls(), "OFFなのにLLMを呼んでいる").toBe(before);
 
   // UIのトグルはラベルで状態が読める (押せるが何も起きないボタンにしない)
   await page.goto("/");

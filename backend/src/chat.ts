@@ -33,13 +33,12 @@ export interface ChatResult {
   reply: string;
   trace: ToolTrace[];
   uiActions: UiAction[];
+  /** #181: 1ターンの体感を返す。**トークン数・キャッシュヒット・ルーティング先は含めない**
+   * (#31 のルーティング詳細は計測系ごと撤去した)。残したのは「速いか遅いか」で、
+   * それは応答のフィードバックであって計測ではない。内訳を見たいときは backend/logs/ を読む */
   usage: {
-    promptTokens: number;
-    completionTokens: number;
     rounds: number;
     elapsedMs: number;
-    /* LLM往復ごとのルーティング詳細 (#31): 実際に使われたモデル・トークン・キャッシュヒット */
-    calls: { model: string; promptTokens: number; completionTokens: number; cachedTokens: number; elapsedMs: number }[];
   };
 }
 
@@ -62,7 +61,7 @@ export const QUERY_LOG_DESCRIPTION = [
   "記録にSQLで問い合わせる(読み取り専用)。集計軸・期間・条件は自由に決めてよい。",
   "DBは SQLite。方言はSQLiteに合わせる — 日付は date()/datetime()/strftime() と修飾子('start of month', '-2 months' など)を使い、date_trunc/INTERVAL/NOW() のような他DBの関数は無い。真偽値は 0/1。文字列連結は || 。日時はISO 8601風の文字列で入っている",
   "見えるのは**接続中のプロジェクトの記録だけ**。別プロジェクトのタスクや会話は見えない",
-  "chat_messages(id, role, content, trace, usage, task_id, created_at。role='user' が持ち主の発言、'assistant' がこのアシスタント) / summary_cards(id, title, elements, task_ids, frozen, created_at)",
+  "chat_messages(id, role, content, trace, usage, task_id, created_at。role='user' が持ち主の発言、'assistant' がこのアシスタント。usage は所要時間とラウンド数だけ — トークン計測は #181 で撤去した) / summary_cards(id, title, elements, task_ids, frozen, created_at) / project_context(id, text, version, updated_at。全文は get_project_context のほうが読みやすい)",
   "tasks(id, title, status, summary, context, context_version, due, blocked_by, rejected, checked_at, done_at, trashed_at, sort, archived, summary_card_id, created_at, updated_at)",
   "checked_at = 人が実物で確かめた日時 (nullなら未検収)。status とは別物で、done は列が動いたこと・checked_at は検収が進んだこと。片方からもう片方を推測しない。この窓口は読み取り専用で、checked_at を書く手段はどこにも無い (印を付けられるのは人間だけ)",
   "会話で「#112」と呼ぶタスクは tasks.id = 112 のこと(主キー)。番号はプロジェクトごとに1から振られる。特定の1件を見るときは WHERE id=<番号> で引く",
@@ -612,15 +611,33 @@ function abortSuggestsFor(projectId: number): void {
   log("chat", `提案の生成を中断しました (project #${projectId} でチャットが始まったため)`);
 }
 
+/** 提案チップの生成を**呼ばずに諦める**条件。null なら呼ぶ。
+ *
+ * #181: ここを純粋関数に切り出したのは、「OFFのときLLMを呼ばない」をユニットで固定するため。
+ * それまでは E2E が `llm_calls` の件数差で確かめていたが、計測系の撤去でテーブルが無くなり、
+ * 代わりに共有ログの行数を数える形にしたら**開発サーバーの書き込みで誤判定しうる**状態になった
+ * (自動レビュー指摘)。判断を関数にすればDBもログも要らない (#91 #57 と同じ形)。
+ *
+ * 順番に意味がある: OFF が最優先 (切っている間はコストも止めたい #167)、次に会話中は譲る (#162)、
+ * 最後に空ボード (読むべき文脈が無い #86) */
+export function suggestSkipReason(state: {
+  enabled: boolean;
+  chatBusy: boolean;
+  emptyBoard: boolean;
+}): "off" | "chat-busy" | "empty-board" | null {
+  if (!state.enabled) return "off";
+  if (state.chatBusy) return "chat-busy";
+  if (state.emptyBoard) return "empty-board";
+  return null;
+}
+
 export async function generateSuggestions(): Promise<{ label: string; message: string }[]> {
-  // #167: このプロジェクトで提案チップを切っているなら、LLMを呼ばずに空で返す。
-  // 表示だけ消す形にしなかったのは、切っている間は呼び出し自体を止めたいため (コストも止まる)
-  if (!suggestEnabled(currentProjectId())) return [];
-  // #162: 会話の処理中は譲る。この間はチップが表示されないので、生成しても捨てるだけになる
-  if (isChatBusy(currentProjectId())) return [];
-  // 新規プロジェクト(ボードが空)では読むべき文脈が無い。LLMを呼ばずに空で返す
-  // — UI側は「方針を伝える」導線だけを出す (#86)
-  if (listTasks().length === 0 && listSummaryCards().length === 0) return [];
+  const skip = suggestSkipReason({
+    enabled: suggestEnabled(currentProjectId()),
+    chatBusy: isChatBusy(currentProjectId()),
+    emptyBoard: listTasks().length === 0 && listSummaryCards().length === 0,
+  });
+  if (skip) return [];
   const systemPrompt = buildSystemPrompt();
   if (suggestCache && suggestCache.key === systemPrompt && Date.now() - suggestCache.at < SUGGEST_TTL_MS) {
     return suggestCache.value;
@@ -750,22 +767,12 @@ async function runChatTurnInner(
   ];
   const trace: ToolTrace[] = [];
   const uiActions: UiAction[] = [];
-  const usage: ChatResult["usage"] = { promptTokens: 0, completionTokens: 0, rounds: 0, elapsedMs: 0, calls: [] };
+  const usage: ChatResult["usage"] = { rounds: 0, elapsedMs: 0 };
   let reply = "";
 
   for (let round = 0; round < 8; round++) {
-    const c0 = Date.now();
     const res = await chatCompletion("chat", getModel("main"), { messages, tools });
     usage.rounds++;
-    usage.promptTokens += res.usage?.prompt_tokens ?? 0;
-    usage.completionTokens += res.usage?.completion_tokens ?? 0;
-    usage.calls.push({
-      model: res.model ?? getModel("main"),
-      promptTokens: res.usage?.prompt_tokens ?? 0,
-      completionTokens: res.usage?.completion_tokens ?? 0,
-      cachedTokens: (res.usage as any)?.prompt_tokens_details?.cached_tokens ?? 0,
-      elapsedMs: Date.now() - c0,
-    });
     const msg = res.choices[0].message;
     messages.push(msg);
     if (msg.tool_calls?.length) {

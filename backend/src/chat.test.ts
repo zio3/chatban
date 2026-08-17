@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { extractChoices } from "./chat.js";
+import { extractChoices, suggestSkipReason } from "./chat.js";
 import { differs } from "./archive.js";
 import { readFileSync } from "node:fs";
 import { tools } from "./chat.js";
@@ -173,6 +173,26 @@ test("知らない値は列として認めない", () => {
   assert.equal(isTaskStatus(undefined), false);
   assert.equal(isTaskStatus(null), false);
   assert.equal(isTaskStatus(3), false);
+});
+
+// 提案チップを「呼ばずに諦める」条件。#167 でOFFにできるようにしたとき、
+// **表示だけ消すのではなく呼び出し自体を止める**のが要件だった (切っている間はコストも止まる)。
+// #181 まではE2Eが llm_calls の件数差で確かめていたが、計測系の撤去でテーブルが無くなった。
+// 共有ログの行数で数える形は開発サーバーの書き込みで誤判定しうるので、判断を純粋関数に切り出した
+
+test("OFFなら呼ばない (最優先)", () => {
+  assert.equal(suggestSkipReason({ enabled: false, chatBusy: false, emptyBoard: false }), "off");
+  // 他の条件が「呼んでよい」と言っていてもOFFが勝つ
+  assert.equal(suggestSkipReason({ enabled: false, chatBusy: true, emptyBoard: true }), "off");
+});
+
+test("会話中は譲る。空ボードでは読む文脈が無いので呼ばない", () => {
+  assert.equal(suggestSkipReason({ enabled: true, chatBusy: true, emptyBoard: false }), "chat-busy");
+  assert.equal(suggestSkipReason({ enabled: true, chatBusy: false, emptyBoard: true }), "empty-board");
+});
+
+test("ONで、会話中でもなく、ボードに中身があるときだけ呼ぶ", () => {
+  assert.equal(suggestSkipReason({ enabled: true, chatBusy: false, emptyBoard: false }), null);
 });
 
 // #180 で「Exportに認証の設定と64桁hexが載っていないこと」を見る番人を2本置いていたが、

@@ -16,11 +16,13 @@ import { CONTEXT_TEMPLATE } from "./contextTemplate.js";
 //  - 実録データと他案件が物理的に別ファイルになり、公開時の混入リスクを管理しやすい
 //
 // 置き場所:
-//   data/chatban-admin.db          projects / settings / llm_calls (コストは口座単位なので横断)
+//   data/chatban-admin.db          projects / settings
 //   data/projects/<id>-<slug>.db   tasks / summary_cards / chat_messages / project_context
 //
 // #179: members / proposals / assignment_history と tasks.assignee / assign_reason は
 // 作るのをやめ、既存DBからも削除する (下の ensureProjectSchema 末尾)
+// #181: 管理DBにあった llm_calls (LLM呼び出しの記録) と model_prices (料金表) も同様に落とす
+// (下の ensureAdminSchema 末尾)。LLM呼び出しの記録は backend/logs/ の1行だけになった
 
 const DATA_DIR = process.env.CHATBAN_DATA_DIR ?? "data";
 const ADMIN_PATH = join(DATA_DIR, "chatban-admin.db");

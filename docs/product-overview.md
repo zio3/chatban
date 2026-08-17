@@ -212,7 +212,7 @@ ChatBanは転記工程そのものを消す。**話した場所がそのまま�
 | 外部連携 | MCP (Streamable HTTP) | Claude Code等からボードを直接操作 |
 | テスト | Playwright E2E | 専用ポート/DBで開発サーバーと共存 |
 
-LLM呼び出しは `backend/logs/chatban-YYYY-MM-DD.log` に1行ずつ残る(`tokens=8208/23 cached=3200 1555ms`)。かつては `llm_calls` テーブルへの打刻と📜監査タブからの全ログExportがあったが、#181 で撤去した。会話・タスク・要約カードは `query_log` (読み取り専用SQL) で引ける。
+LLM呼び出しは `backend/logs/chatban-YYYY-MM-DD.log` に1行ずつ残る(`tokens=8208/23 cached=3200 1555ms`)。かつては `llm_calls` テーブルへの打刻と📜監査タブからの全ログExportがあったが、#181 で撤去した。画面に残るのは各返答の下の `1.5s · 2round`(応答のフィードバック)だけで、トークン数・キャッシュヒット・ルーティング先の表示は落とした。会話・タスク・要約カードは `query_log` (読み取り専用SQL) で引ける。
 
 ---
 

@@ -1,8 +1,8 @@
-import { getProjectContext, listSummaryCards, listTasks } from "./db.js";
+import { getProjectContextRow, listSummaryCards, listTasks } from "./db.js";
 import { currentProjectId } from "./store.js";
 import { log } from "./log.js";
 
-// #150: MCP経由のエージェント向けに「ボードの状況スナップショット + 状況ID」を配る。
+// #150/#187: MCP経由のエージェント向けに「ボードの写し + 同期トークン」を配る。
 //
 // 直したい事故はこれ: エージェントは自分が最後に読んだ一覧を現在の状態だと思い込み、
 // 食い違うとボードのほうを疑う。実際 2026-08-15 に「live_tasks に review が出ないバグがある」と
@@ -16,7 +16,7 @@ import { log } from "./log.js";
 // promptState と分けているのは用途が違うため: あちらはプロンプトのプレフィックスをバイト単位で
 // 安定させるための表示テキスト、こちらはMCPの応答に載せる「何がどう変わったか」。
 
-/** 状況IDを保つ上限時間。これを過ぎたスナップショットは捨て、全件返しにフォールバックする */
+/** 同期トークンが有効な上限時間。これを過ぎたスナップショットは捨て、全件返しにフォールバックする */
 const TTL_MS = 60 * 60 * 1000;
 /** 1プロジェクトあたりの保持数。エージェントが何本も繋いでいても足りる程度の上限 */
 const MAX_SNAPSHOTS = 32;
@@ -43,16 +43,29 @@ export interface TaskFacts {
 }
 
 export interface BoardSnapshot {
-  stateId: string;
+  syncToken: string;
   takenAt: number;
   tasks: Map<number, TaskFacts>;
   cards: Map<number, string>;
-  projectContext: string;
+  /** 前提情報は**本文を持たない (#187)**。応答に載せるのも版だけで、
+   * 中身が要るなら get_project_context を呼ばせる。
+   * 3,000字級の本文がボードを取るたびに乗るのを止めるのが目的 (#186 と同じ問題) */
+  projectContextVersion: number;
 }
 
-// プロセス起動ごとに変わる接頭辞。再起動で連番が振り直されるため、これが無いと
-// **前のプロセスが配った状況IDが偶然一致して、無関係なスナップショットからの差分を返す**
-const RUN = Math.random().toString(36).slice(2, 8);
+// 同期トークンの時刻部分。**再起動をまたいだ偶然の一致を防ぐのが目的** —
+// 連番はプロセス起動ごとに振り直されるので、これが無いと前のプロセスが配ったトークンが
+// たまたま一致し、無関係なスナップショットからの差分を返してしまう。
+// 乱数でも防げるが (以前はそうしていた)、秒までの時刻なら**いつのものかが読んで分かる**。
+// backend/logs と突き合わせられるほうが、失効の調査で効く
+function stamp(at: Date): string {
+  const p = (n: number) => String(n).padStart(2, "0");
+  return (
+    `${at.getFullYear()}${p(at.getMonth() + 1)}${p(at.getDate())}` +
+    `T${p(at.getHours())}${p(at.getMinutes())}${p(at.getSeconds())}`
+  );
+}
+
 let counter = 0;
 
 const snapshots = new Map<number, BoardSnapshot[]>();
@@ -74,7 +87,7 @@ function cardLabel(index: string): string {
 }
 
 /** いまのボードを写し取る。DBに触るのはここだけで、差分計算(diffBoards)は純粋関数にしてある */
-export function captureBoard(): Omit<BoardSnapshot, "stateId" | "takenAt"> {
+export function captureBoard(): Omit<BoardSnapshot, "syncToken" | "takenAt"> {
   const tasks = new Map<number, TaskFacts>(
     listTasks().map((t) => [
       t.id,
@@ -95,7 +108,7 @@ export function captureBoard(): Omit<BoardSnapshot, "stateId" | "takenAt"> {
   const cards = new Map<number, string>(
     listSummaryCards().map((c) => [c.id, cardIndex(c.title, c.elements.map((e) => e.text))])
   );
-  return { tasks, cards, projectContext: getProjectContext() ?? "" };
+  return { tasks, cards, projectContextVersion: getProjectContextRow().version };
 }
 
 /** 列ごとの「並んでいるIDの列」。sort の数値ではなくこの並びを比べる。
@@ -169,8 +182,8 @@ function fieldChanges(prev: TaskFacts, cur: TaskFacts): string[] {
  * 古い一覧が残ったまま差分を渡されると自力でマージを迫られる。IDだけを指す差分にしない。
  */
 export function diffBoards(
-  prev: Pick<BoardSnapshot, "tasks" | "cards" | "projectContext">,
-  cur: Pick<BoardSnapshot, "tasks" | "cards" | "projectContext">
+  prev: Pick<BoardSnapshot, "tasks" | "cards" | "projectContextVersion">,
+  cur: Pick<BoardSnapshot, "tasks" | "cards" | "projectContextVersion">
 ): string[] {
   const changes: string[] = [];
   const curLists = columnLists(cur.tasks);
@@ -245,17 +258,21 @@ export function diffBoards(
     if (!cur.cards.has(id)) changes.push(`- 要約カード#${id} が統合され消滅した (${cardLabel(idx)})`);
   }
 
-  if (prev.projectContext !== cur.projectContext) changes.push("プロジェクトの前提情報が更新された");
+  // 版で比べる。本文を持っていないので中身の差は出せないが、そもそも出すつもりが無い
+  // (差分に3,000字が乗る)。「変わった」とだけ言って get_project_context を呼ばせる
+  if (prev.projectContextVersion !== cur.projectContextVersion)
+    changes.push(`プロジェクトの前提情報が更新された (v${cur.projectContextVersion})`);
 
   return changes;
 }
 
-/** いまのボードを写し取り、状況IDを払い出して保持する */
+/** いまのボードを写し取り、同期トークンを払い出して保持する */
 export function takeSnapshot(): BoardSnapshot {
   const projectId = currentProjectId();
+  const now = Date.now();
   const snap: BoardSnapshot = {
-    stateId: `p${projectId}-${RUN}-${++counter}`,
-    takenAt: Date.now(),
+    syncToken: `p${projectId}-${stamp(new Date(now))}-${++counter}`,
+    takenAt: now,
     ...captureBoard(),
   };
   const list = snapshots.get(projectId) ?? [];
@@ -266,27 +283,31 @@ export function takeSnapshot(): BoardSnapshot {
   return snap;
 }
 
-/** 状況IDからスナップショットを引く。無ければ null (呼び出し側は全件返しにフォールバックする) */
-export function findSnapshot(stateId: string): BoardSnapshot | null {
+/** 同期トークンからスナップショットを引く。無ければ null (呼び出し側は全件返しにフォールバックする) */
+export function findSnapshot(syncToken: string): BoardSnapshot | null {
   const list = snapshots.get(currentProjectId()) ?? [];
-  const found = list.find((s) => s.stateId === stateId);
+  const found = list.find((s) => s.syncToken === syncToken);
   if (!found) return null;
   if (Date.now() - found.takenAt > TTL_MS) return null;
   return found;
 }
 
-/** テスト用。プロセス内に溜まった状況IDを捨てる */
+/** テスト用。プロセス内に溜まったスナップショットを捨てる */
 export function resetSnapshots(): void {
   snapshots.clear();
 }
 
 export interface BoardDelta {
-  stateId: string;
-  /** 差分を返したときだけ入る。渡された状況ID */
+  syncToken: string;
+  /** 差分を返したときだけ入る。渡された同期トークン */
   since?: string;
   changes?: string[];
   full?: boolean;
   note?: string;
+  /** 前提情報の版。**全件でも差分でも必ず載せる (#187)** —
+   * 本文を返さなくなったぶん、「自分が読んだときから変わっていないか」を
+   * これ1つで確かめられるようにしておく */
+  projectContextVersion: number;
 }
 
 /**
@@ -305,35 +326,43 @@ export interface BoardDelta {
  * 古い一覧を見ている可能性があります」等の**警告**) と同じキーにすると、spread の順で警告が消える。
  */
 export function formatBoardUpdate(d: BoardDelta, since?: string): Record<string, unknown> {
-  if (!d.full) return { stateId: d.stateId, ...(d.changes?.length ? { changesSince: d.changes } : {}) };
-  if (!since) return { stateId: d.stateId };
-  // 差分を返せなかったとき、**新しい状況IDを渡さない。**
-  // 渡すとエージェントはそれを次の since に使い、「変化なし」が返って
+  if (!d.full)
+    return {
+      syncToken: d.syncToken,
+      projectContextVersion: d.projectContextVersion,
+      ...(d.changes?.length ? { boardChanges: d.changes } : {}),
+    };
+  if (!since) return { syncToken: d.syncToken, projectContextVersion: d.projectContextVersion };
+  // 差分を返せなかったとき、**新しい同期トークンを渡さない。**
+  // 渡すとエージェントはそれを次の sync_token に使い、「変化なし」が返って
   // 全件を一度も見ないまま古い認識のまま進む
-  return { boardNote: `${d.note ?? "差分を返せなかった"}。since を付けずに get_board を呼び、全体を取り直すこと` };
+  return {
+    boardNote: `${d.note ?? "差分を返せなかった"}。sync_token を付けずに sync_board を呼び、全体を取り直すこと`,
+  };
 }
 
 export function boardDelta(since?: string): BoardDelta {
   const snap = takeSnapshot();
   const base = since ? findSnapshot(since) : null;
+  const head = { syncToken: snap.syncToken, projectContextVersion: snap.projectContextVersion };
 
-  if (!since) return { stateId: snap.stateId, full: true };
+  if (!since) return { ...head, full: true };
   if (!base) {
     return {
-      stateId: snap.stateId,
+      ...head,
       full: true,
-      note: `状況ID ${since} は保持期間(60分)を過ぎたか、このプロジェクトのものではないため、最新の全件を返した`,
+      note: `同期トークン ${since} は保持期間(60分)を過ぎたか、このプロジェクトのものではないため、最新の全件を返した`,
     };
   }
 
   const changes = diffBoards(base, snap);
   if (changes.length > MAX_CHANGES) {
-    log("board", `diff ${since} -> ${snap.stateId}: ${changes.length}件で上限超過、全件に切り替え`);
+    log("board", `diff ${since} -> ${snap.syncToken}: ${changes.length}件で上限超過、全件に切り替え`);
     return {
-      stateId: snap.stateId,
+      ...head,
       full: true,
       note: `前回から${changes.length}件変わっており差分が大きいため、最新の全件を返した`,
     };
   }
-  return { stateId: snap.stateId, since, changes };
+  return { ...head, since, changes };
 }

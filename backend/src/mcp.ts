@@ -22,7 +22,6 @@ import {
   createTask,
   restoreTask,
   trashTask,
-  getProjectContext,
   getProjectContextRow,
   getTask,
   listMembers,
@@ -61,19 +60,19 @@ function text(data: unknown) {
 // 差分を専用の道具だけにすると「取りに行こうと思ったとき」しか更新されないが、
 // **間違えているときは取りに行こうと思っていない** (思い込んでいるからこそ間違えている)。
 // エージェントは作業中に必ず何かを書くので、そこに相乗りさせれば追加の往復ゼロで最新が届く。
-const SINCE_ON_WRITE = z
+const SYNC_TOKEN_ON_WRITE = z
   .string()
   .optional()
   .describe(
-    "直前に受け取った状況ID。渡すと、その状況IDの時点から**いま書き込んだ結果まで**の変化が changesSince に返る。" +
+    "直前に受け取った同期トークン (syncToken)。渡すと、その時点から**いま書き込んだ結果まで**の変化が boardChanges に返る。" +
       "他所からの更新 (人間の検収・UIでの並べ替え・別のエージェント) も含むので、自分が見ていない間に何が動いたかが分かる。" +
       "**いま自分が書き換えたぶんも含まれる**ので、updated / created と重なる行がある"
   );
 
-/** 書き込み応答に載せるボードの動き。全件が要るほど変わっていたら get_board へ誘導する (応答を重くしない)。
+/** 書き込み応答に載せるボードの動き。全件が要るほど変わっていたら sync_board へ誘導する (応答を重くしない)。
  * 組み立て自体は formatBoardUpdate (純粋関数) にあり、そちらでキーの取り違えを試験している */
-function boardUpdate(since?: string) {
-  return formatBoardUpdate(boardDelta(since), since);
+function boardUpdate(syncToken?: string) {
+  return formatBoardUpdate(boardDelta(syncToken), syncToken);
 }
 
 /** #108: 更新結果は要点だけ返す。以前は context を含む全フィールドが返っており、
@@ -131,10 +130,10 @@ export function buildMcpServer(onEvent: (kind: "board" | "proposals") => void): 
             blocked_by: z.array(z.number().int()).optional().describe(BLOCKED_BY_DESCRIPTION),
           })
         ),
-        since: SINCE_ON_WRITE,
+        sync_token: SYNC_TOKEN_ON_WRITE,
       },
     },
-    async ({ tasks, since }) => {
+    async ({ tasks, sync_token }) => {
       // #114: 書き込みは agentWrite に集約。以前はMCP側にガードが無く、
       // done指定がそのまま通って「AIが自主的にDoneへ移動」する事故が起きた
       const r = createTasksAsAgent(tasks as any);
@@ -143,7 +142,7 @@ export function buildMcpServer(onEvent: (kind: "board" | "proposals") => void): 
         ok: true,
         created: (r.created as any[]).map((t: any) => brief(t, isPersonal)),
         ...(r.note ? { note: r.note } : {}),
-        ...boardUpdate(since),
+        ...boardUpdate(sync_token),
       });
     }
   );
@@ -180,10 +179,10 @@ export function buildMcpServer(onEvent: (kind: "board" | "proposals") => void): 
             rejected: flexBool.describe(REJECTED_DESCRIPTION),
           })
         ),
-        since: SINCE_ON_WRITE,
+        sync_token: SYNC_TOKEN_ON_WRITE,
       },
     },
-    async ({ updates, since }) => {
+    async ({ updates, sync_token }) => {
       const { ok, status, updated, note, conflicts, notFound } = updateTasksAsAgent(updates as any);
       onEvent("board");
       return text({
@@ -196,7 +195,7 @@ export function buildMcpServer(onEvent: (kind: "board" | "proposals") => void): 
         ...(conflicts ? { conflicts } : {}),
         ...(notFound ? { notFound } : {}),
         ...(note ? { note } : {}),
-        ...boardUpdate(since),
+        ...boardUpdate(sync_token),
       });
     }
   );
@@ -344,35 +343,40 @@ export function buildMcpServer(onEvent: (kind: "board" | "proposals") => void): 
   );
 
   server.registerTool(
-    "get_board",
+    "sync_board",
     {
       description:
-        "ボードの現在の状況と**状況ID**を返す。作業を始める前に一度呼ぶ。" +
-        "状況IDを since に渡すと、そのとき以降に変わったぶんだけが返る (#4 は todo -> inprogress のような形)。" +
+        "手持ちのボードの認識を最新に合わせる。**作業を始める前に一度呼ぶ。**" +
+        "sync_token を渡すと、そのとき以降に変わったぶんだけが返る (#4 は todo -> inprogress のような形)。省略すると全件返る。" +
         "**自分が最後に読んだ一覧は古くなっている**ので、間が空いたときや他所の変更が入りうるときは、記憶で判断せずこれを呼ぶこと。" +
-        "since が保持期間(60分)を過ぎていても失敗しない — 黙って最新の全件と新しい状況IDが返るので、そのまま使い直せばよい。",
+        "sync_token が保持期間(60分)を過ぎていても失敗しない — 黙って最新の全件と新しい同期トークンが返るので、そのまま使い直せばよい。" +
+        "プロジェクトの前提情報は**版 (projectContextVersion) だけ**返る。中身は get_project_context で取る (最初の1回と、版が変わったときだけでよい)。",
       inputSchema: {
-        since: z
+        sync_token: z
           .string()
           .optional()
-          .describe("前回この道具が返した状況ID。省略すると全件返る"),
+          .describe("前回この道具が返した同期トークン (syncToken)。省略すると全件返る"),
       },
     },
-    async ({ since }) => {
-      const d = boardDelta(since);
+    async ({ sync_token }) => {
+      const d = boardDelta(sync_token);
       if (!d.full) {
         return text({
-          stateId: d.stateId,
+          syncToken: d.syncToken,
           since: d.since,
-          changes: d.changes,
-          ...(d.changes && d.changes.length === 0 ? { note: "前回の状況IDから変化なし" } : {}),
+          projectContextVersion: d.projectContextVersion,
+          // 空配列は返さない (書き込み応答の formatBoardUpdate と同じ扱い)。
+          // 「[] と note が両方載っている」は読む側に一瞬考えさせるだけで、何も足さない
+          ...(d.changes?.length ? { boardChanges: d.changes } : { note: "前回の同期トークンから変化なし" }),
         });
       }
       return text({
-        stateId: d.stateId,
+        syncToken: d.syncToken,
         ...(d.note ? { note: d.note } : {}),
         project: currentProject(),
-        projectContext: getProjectContext() ?? "",
+        // #187: 前提情報は**本文を載せず版だけ**。3,000字級の本文がボードを取るたびに乗っていた。
+        // 中身が要るとき (最初の1回・版が変わったとき) だけ get_project_context を呼べばよい
+        projectContextVersion: d.projectContextVersion,
         // checked は brief に無いのでここで足す。**人が検収したかどうかは全件応答からも
         // 読めないといけない** — 差分だけ直しても、取り直したときに分からなければ同じ事故が起きる
         tasks: listTasks().map((t) => ({ ...brief(t, isPersonal)!, checked: !!t.checkedAt })),

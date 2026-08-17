@@ -3,10 +3,56 @@ import { test } from "node:test";
 import { extractChoices } from "./chat.js";
 import { differs } from "./archive.js";
 import { readFileSync } from "node:fs";
-import { isAllowed, pickSpeaker, readCookie } from "./auth.js";
 import { tools } from "./chat.js";
 import { DONE_GATE_RULE, exportableSettings, isTaskStatus, mayEnterDone } from "./db.js";
 import { AGENT_STATUS_VALUES } from "./chat.js";
+import { isAllowedOrigin, isBrowserCrossSite } from "./origin.js";
+
+// #180: 認証を廃止したので、境界は「待ち受けを閉じる」と「知らないページを断る」だけ。
+// **cors() の許可リストは境界にならない** — 許可しない Origin には ACAO を付けないだけで
+// リクエストはハンドラまで届き、状態も変わる (Codexレビュー実測: POST が 200)。
+// ブラウザが遮るのはレスポンスを読むことだけなので、書き込みは通る。
+// 判定はRESTとSocket.IOで共有する (入口ごとに書き分けると必ずズレる)
+
+const ORIGINS = ["http://localhost:5173", "http://localhost:5199"];
+
+test("許可リストに載っているページからは通す", () => {
+  assert.equal(isAllowedOrigin("http://localhost:5173", ORIGINS), true);
+});
+
+test("知らないページからは断る", () => {
+  assert.equal(isAllowedOrigin("https://evil.example", ORIGINS), false);
+  // ポート違い・スキーム違いは別オリジン。前方一致で緩めない
+  assert.equal(isAllowedOrigin("http://localhost:5174", ORIGINS), false);
+  assert.equal(isAllowedOrigin("https://localhost:5173", ORIGINS), false);
+  assert.equal(isAllowedOrigin("http://localhost:5173.evil.example", ORIGINS), false);
+});
+
+// Origin だけ見ていると、**Origin が付かないブラウザ要求**が素通りする。
+// `<img src="http://localhost:8787/api/suggestions">` のような subresource GET がそれで、
+// 実際そこは有料のLLM呼び出しを起こしていた (自動レビュー指摘)。
+// Sec-Fetch-Site はブラウザが自分で付けるのでページ側から偽装できない
+
+test("他所のページからの要求は Sec-Fetch-Site で断る (Originが無くても)", () => {
+  assert.equal(isBrowserCrossSite("cross-site"), true);
+});
+
+test("自分のページとブラウザ以外は通す", () => {
+  assert.equal(isBrowserCrossSite("same-origin"), false);
+  assert.equal(isBrowserCrossSite("same-site"), false);
+  assert.equal(isBrowserCrossSite("none"), false); // アドレス欄に打った / ブックマーク
+  assert.equal(isBrowserCrossSite(undefined), false); // curl・スクリプト・MCP は送らない
+});
+
+test("Originが無い呼び出しは通す (curl・スクリプト・MCP)", () => {
+  // 状態を変える cross-origin の fetch/フォーム送信と WebSocket は必ず Origin を伴う。
+  // ただしトップレベルのGETナビゲーションには付かないので、**課金・外部アクセスを伴う処理を
+  // GETに置かない**ことが前提の判断 (origin.ts の注記)。
+  // 塞ぐと Claude Code から /mcp に繋がらなくなる
+  assert.equal(isAllowedOrigin(undefined, ORIGINS), true);
+  assert.equal(isAllowedOrigin("", ORIGINS), true);
+  assert.equal(isAllowedOrigin(null, ORIGINS), true);
+});
 
 // 返信ボタンの記法 [[選択肢]] の取り出し。
 // ここはLLMを介さずに固定できる唯一の部分なので (発火するかどうかはモデル次第でも、
@@ -71,65 +117,9 @@ test("同じ件数でも中身が違えば捨てる", () => {
   assert.equal(differs([1, 3], [1, 2]), true);
 });
 
-// #126: 発言者はシステムが決める。以前はメインチャットだけがセッションを見ていて、
-// タスクチャットはリクエストの speaker を素通ししていたため、ログイン中でも
-// 任意の名前を名乗れた。判断を1か所 (pickSpeaker) に寄せたので、ここで押さえる。
-
-const me = { email: "sato@example.com", name: "佐藤", picture: null } as any;
-
-test("ログイン済みなら自己申告より本人を優先する", () => {
-  assert.deepEqual(pickSpeaker(me, "田中"), { name: "佐藤", email: "sato@example.com" });
-});
-
-test("ログインしていなければ自己申告を使うが、emailは付けない (未検証の印)", () => {
-  assert.deepEqual(pickSpeaker(null, "田中"), { name: "田中", email: null });
-});
-
-test("名乗りが無ければ発言者なし", () => {
-  assert.deepEqual(pickSpeaker(null, undefined), { name: null, email: null });
-  assert.deepEqual(pickSpeaker(null, ""), { name: null, email: null });
-  assert.deepEqual(pickSpeaker(null, { name: "偽" }), { name: null, email: null });
-});
-
-// #113: セッションCookieは最大30日有効なので、許可リストから外した相手が
-// 最長1か月そのまま入れてしまう (自動レビュー指摘)。リクエストごとに突き合わせる。
-
-test("リストに載っていれば通す (大文字小文字は区別しない)", () => {
-  assert.equal(isAllowed("Sato@Example.com", ["sato@example.com"]), true);
-});
-
-test("外された相手は通さない (セッションが生きていても)", () => {
-  assert.equal(isAllowed("sato@example.com", ["tanaka@example.com"]), false);
-});
-
-test("一度も設定していなければ通す (null) — ここで閉じると設定タブごと詰む", () => {
-  assert.equal(isAllowed("sato@example.com", null), true);
-});
-
-// 「まだ設定していない」と「管理者が全員を外した」を同じ空リスト扱いにしていたため、
-// 権限を全部消す操作が逆に認証を開けっぱなしにしていた (自動レビュー指摘)。
-// 一番強い禁止操作が一番緩い結果を生むのは、どう考えても逆
-test("明示的に空にしたら誰も通さない (全員外す = 誰も通すなという意思表示)", () => {
-  assert.equal(isAllowed("sato@example.com", []), false);
-});
-
-// 認証onのSocket.IOハンドシェイクは、認証を通らない相手の生Cookieを最初に触る場所。
-// decodeURIComponent が URIError を投げると socket.io は捕まえず uncaughtException になり、
-// Cookieを1回送られるだけでプロセスが落ちた (実測。自動レビュー指摘)。
-
-test("壊れたパーセントエンコードは投げずに「無い」を返す", () => {
-  assert.equal(readCookie("chatban_session=%E0%A4%A", "chatban_session"), null);
-});
-
-test("正常な値はデコードして返す", () => {
-  assert.equal(readCookie("chatban_session=a%2Eb", "chatban_session"), "a.b");
-});
-
-test("他のCookieに混ざっていても取れる。無ければnull", () => {
-  assert.equal(readCookie("x=1; chatban_session=tok; y=2", "chatban_session"), "tok");
-  assert.equal(readCookie("x=1; y=2", "chatban_session"), null);
-  assert.equal(readCookie(undefined, "chatban_session"), null);
-});
+// #126 → #180: 発言者を決める pickSpeaker のテストがここにあった。
+// 個人利用に特化して「誰が言ったか」を持たなくなったので、判断そのものが無くなった
+// (話しかけてくるのは常に持ち主ひとり。実測でも null 554件 / "zio" 100件だった)。
 
 // Doneへ入れる条件。PR #1 では検収API (approveChecked) だけが持っていたため、
 // PATCH /api/tasks/:id に status:"done" を投げれば素通りしていた (自動レビュー指摘)。
@@ -187,21 +177,34 @@ test("知らない値は列として認めない", () => {
 
 // Export は「検証のために人へ渡すファイル」「記事の一次資料」。settings を全行そのまま
 // 出していたため、セッション署名鍵が平文で入っていた (自動レビュー指摘)。
-// 鍵があれば任意のメールアドレスでCookieを偽造でき、許可リストも同じファイルにある。
+// #180 で認証ごと廃止し、いま settings に秘密は無い。
+//
+// **このテストが見ているのは2点だけ** — 認証の設定が消えていること、64桁hex (旧署名鍵の形) が
+// 素で出ていないこと。**「あらゆる秘密を伏せる」ことも「伏字の仕組みが働く」ことも保証していない**
+// (`REDACTED_SETTINGS` は空なので、伏字の分岐はいまどのキーにも当たらない)。
+// 主張をテストの実力より強く書くと、通っているのに守られていない状態になる (自動レビュー指摘)。
+// 秘密を持つ設定を足すときは、`REDACTED_SETTINGS` への追加と、その伏字を確かめるテストを一緒に足す
 
-test("Exportに署名鍵の実物を載せない", () => {
+test("認証の設定はExportに残っていない (#180の削除漏れの番人)", () => {
   const rows = exportableSettings();
-  const secret = rows.find((r) => r.key === "auth.sessionSecret");
-  // 環境によっては未発行 (一度もログインしていない) ので、有るときだけ確かめる
-  if (secret) assert.equal(secret.value, "***");
-  for (const r of rows) assert.ok(!/^[0-9a-f]{64}$/.test(r.value), `${r.key} に64桁hexが素で載っている`);
+  assert.deepEqual(
+    rows.filter((r) => r.key.startsWith("auth.")),
+    [],
+    "認証は #180 で廃止した。auth.* が残っているなら設定の削除が漏れている"
+  );
 });
 
-test("伏せるのは鍵だけ。設定が存在したことは記録として残す", () => {
-  const rows = exportableSettings();
-  // モデル設定などは値ごと残る (#88: どのモデルで動いていたかを追うため)
-  for (const r of rows) assert.ok(typeof r.key === "string" && r.key.length > 0);
+test("旧セッション署名鍵の形 (64桁hex) が素で出ていない", () => {
+  for (const r of exportableSettings()) {
+    assert.ok(!/^[0-9a-f]{64}$/.test(r.value), `${r.key} に64桁hexが素で載っている`);
+  }
 });
+
+// 3本目に「設定が存在したことは記録として残る (#88: どのモデルで動いていたかを追うため)」という
+// テストがあったが**消した。**rows をループして key が非空かを見るだけで、**rows が空でも通る** —
+// 「既存の設定がExportに残る」ことを何も保証していなかった (自動レビュー指摘)。
+// exportableSettings は管理DBを直接読むので、意味のある形にするには設定を注入できるようにする必要がある。
+// **保証できないテストを名前で保証しているように見せるほうが、無いより悪い** (通っているのに守られていない)
 
 // 公開しているツールに実装があるか。restore_tasks はツール定義とゴミ箱画面のプロンプトに
 // 出しているのに実行の分岐が無く、呼ばれると unknown tool が返っていた (自動レビュー指摘)。

@@ -12,7 +12,8 @@ AIはレコメンドのみ、確定は人間承認 (human-in-the-loop)。提出�
 backend/   Express + Socket.IO + better-sqlite3 (port 8787)
            OpenAI SDK (base_url=OrcaRouter) の tool use ループ — src/chat.ts
            MCPサーバー (Streamable HTTP) — src/mcp.ts → POST /mcp
-           全LLM呼び出しを llm_calls テーブルに記録 — GET /api/metrics
+           全LLM呼び出しを llm_calls テーブルに記録 — POST /api/metrics
+           (外部の請求APIを叩き単価をDBへ書くのでPOST。副作用のある口はGETに置かない #180)
 frontend/  Vite + React + TS + Tailwind v4 + dnd-kit (port 5173、/api と /socket.io は8787へproxy)
 ```
 
@@ -47,7 +48,7 @@ cd backend; npx tsc --noEmit           # 型チェック (frontendも同様)
 - **2つの欄を使い分ける (#92)**: `summary`=AIとユーザーに極力短く状況や次の判断を促す1行(カードに出る。Reviewなら `実装完了 (commit xxx)` のように確認先を添える) / `context`=経緯と検収エビデンスの詳細。**contextは末尾に「## 経過」を作っておく** — 前半を固定して経過だけ伸ばせば `context_append` で1行ずつ足せる(節で細かく構造化すると追記が節の外に付き、毎回全文を書き直すことになる)。かつて `reason`(なぜこの担当か)という欄があり、MCP側のツール契約に説明が無かったため用途不明の文字列欄に見え、進捗を書き込んで汚した。**ツール契約のdescriptionはエージェントにとってのUIラベル**であり、入口(チャット/MCP)で契約がズレると入口ごとに違う汚れ方をする
 - **タスク1件 = 1コミット**。コミットメッセージは `#<taskId> <要約>` 形式
 - **コードの変更はブランチを切ってPRにする**。1PR = 1件、main直コミットはしない。PR本文に「何が問題だったか / どう直したか / 検証(実測値・テスト件数)」を書く — ボードの `context` と同じ役割をPR側でも果たす。「人間前提だと無理でもAIならやれるスケジュール」(zio) が前提。**例外は障害級だけ** (デモ録画中に画面が壊れた等)。チャット直・main直で直してよい (「作業の切り分けルール」と同じ線)
-- テストは頼まれなくても積極的に書く。実装がたまったら `test:e2e` を流す。**テストを書くために設計を直すのは歓迎、テストのために設計を歪めるのはしない** — 判断部分を純粋関数に切り出す (`pickSpeaker` / `isAllowed` / `differs`) と、DBもexpressも要らないユニットテストになる
+- テストは頼まれなくても積極的に書く。実装がたまったら `test:e2e` を流す。**テストを書くために設計を直すのは歓迎、テストのために設計を歪めるのはしない** — 判断部分を純粋関数に切り出す (`mayEnterDone` / `isTaskStatus` / `differs`) と、DBもexpressも要らないユニットテストになる
 - 登録も更新も並べ替えもその場で確定して報告する (#128で承認UIは廃止)。判断材料が足りないときだけチャットで案を出して聞く
 - デバッグは `backend/logs/chatban-YYYY-MM-DD.log` (リクエスト/LLM往復/ツール実行/切断が全部残る)
 

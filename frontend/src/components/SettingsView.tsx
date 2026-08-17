@@ -1,6 +1,5 @@
 import { apiFetch } from "../api";
 import { useEffect, useMemo, useState } from "react";
-import AuthSettings from "./AuthSettings";
 import ProjectSettings from "./ProjectSettings";
 
 // #88: 管理画面。用途別モデルを実行時に切り替える (再起動不要)。
@@ -51,7 +50,8 @@ export default function SettingsView() {
 
   useEffect(() => {
     load().catch((e) => setError(String(e)));
-    apiFetch("/api/models")
+    // POST なのは副作用があるから (外部カタログを引き、model_prices を更新する。#180)
+    apiFetch("/api/models", { method: "POST" })
       .then((r) => r.json())
       .then((d) => setModels(d.models ?? []))
       .catch(() => setModels([]));
@@ -91,7 +91,7 @@ export default function SettingsView() {
   return (
     <div className="mx-auto max-w-4xl space-y-5 p-6">
       <ProjectSettings />
-      <AuthSettings />
+      {/* #180: ここにログイン設定 (GoogleクライアントID・許可リスト) があった。認証ごと廃止 */}
 
       <div>
         <h2 className="text-base font-bold">モデル設定</h2>

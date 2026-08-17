@@ -1025,11 +1025,11 @@ test("全ログExportは人が読める形で返る (改行とインデント)",
   expect(text).toContain('\n  "'); // トップレベルのキーが2スペース下がっている
   expect(() => JSON.parse(text)).not.toThrow(); // 整形してもJSONとして壊れていない
 
-  // Exportは人に渡すファイル。セッション署名鍵が平文で入っていると、
-  // 渡した先で任意のメールアドレスのCookieを偽造できる
+  // Exportは人に渡すファイル。かつてセッション署名鍵が平文で入っており、渡した先で
+  // 任意のメールアドレスのCookieを偽造できた。#180 で認証ごと廃止したので鍵は存在しないが、
+  // **番人は残す** (秘密を持つ設定が増えたときに落ちる側にしておく)
   const dump = JSON.parse(text) as { settings: { key: string; value: string }[] };
-  const secret = dump.settings.find((r) => r.key === "auth.sessionSecret");
-  if (secret) expect(secret.value).toBe("***");
+  expect(dump.settings.some((r) => r.key.startsWith("auth."))).toBe(false);
   expect(text).not.toMatch(/"[0-9a-f]{64}"/); // 64桁hexが素で出ていない
 });
 
@@ -1057,6 +1057,68 @@ test("存在しないプロジェクトを指定したSocketは、既定プロ�
   await createTask("E2E: 実在プロジェクト指定の対照");
   await expect.poll(() => got.length).toBeGreaterThan(0);
   ok.close();
+});
+
+// #180: 認証を廃止したので、残る境界は「待ち受け 127.0.0.1」と「知らないページを断る」だけ。
+// cors() の許可リストは境界にならない — 許可しない Origin には ACAO を付けないだけで、
+// リクエストはハンドラまで届いて状態が変わる (Codexレビューの実測で 200 + 状態変更)。
+// ブラウザが遮るのはレスポンスを読むことだけ。ここは実際に断れているかを見る
+
+test("知らないページからのRESTは403で断る (認証が無い以上ここが最後の砦 #180)", async () => {
+  const res = await fetch(`${API}/api/projects/1/activate`, {
+    method: "POST",
+    headers: { Origin: "https://evil.example" },
+  });
+  expect(res.status).toBe(403);
+
+  // 対照: 許可しているページからは通る (塞ぎすぎていない)
+  const ok = await fetch(`${API}/api/board`, { headers: { Origin: "http://localhost:5199" } });
+  expect(ok.status).toBe(200);
+  // 対照: Origin の無い呼び出し (curl・MCP・スクリプト) も通る
+  const noOrigin = await fetch(`${API}/api/board`);
+  expect(noOrigin.status).toBe(200);
+});
+
+test("Originの付かないブラウザGET (<img>相当) も断る。有料の呼び出しを撃たせない (#180)", async () => {
+  // 悪意あるページは <img src="http://localhost:8787/api/..."> で GET を撃てる。
+  // この要求に Origin は付かないので Origin 判定では止まらない。
+  // 止めるのは Sec-Fetch-Site (ブラウザが自分で付けるのでページ側から偽装できない)
+  const res = await fetch(`${API}/api/board`, {
+    headers: { "Sec-Fetch-Site": "cross-site", "Sec-Fetch-Mode": "no-cors", "Sec-Fetch-Dest": "image" },
+  });
+  expect(res.status).toBe(403);
+
+  // 対照: 自分のページからの要求は通る
+  const ok = await fetch(`${API}/api/board`, {
+    headers: { Origin: "http://localhost:5199", "Sec-Fetch-Site": "same-origin" },
+  });
+  expect(ok.status).toBe(200);
+});
+
+test("お金が動く口・外部を叩く口はGETに置かない (#180)", async () => {
+  // GET のままだと、悪意あるページが <img src> で撃つだけで課金と記録を増やせる。
+  // 3本まとめて見るのは、1本だけ固定すると他の2本が黙って戻せてしまうため
+  for (const path of ["/api/suggestions", "/api/models", "/api/metrics"]) {
+    const res = await fetch(`${API}${path}`);
+    expect(res.status, `${path} がGETで叩ける`).toBe(404);
+  }
+  // **このテストが保証するのは「GETのルートが存在しないこと」だけ。**POST側が機能することは
+  // ここでは確かめない。対照を置かないのは、3本とも外部API (LLM・モデルカタログ・請求) への
+  // 通信が走るためで、うち課金が発生するのは suggestions (有料のLLM呼び出し)。
+  // E2Eは「LLM呼び出しなし」が原則 (自動レビュー指摘)
+});
+
+test("知らないページからのSocket接続はハンドシェイクで断る (#180)", async () => {
+  // WebSocketのハンドシェイクは CORS の対象外なので、cors 設定では止まらない。
+  // 止めるのは allowRequest。ここが開いていると board:changed を外部ページに配信してしまう
+  const evil = io(API, { transports: ["websocket"], extraHeaders: { Origin: "https://evil.example" } });
+  const outcome = await new Promise<string>((resolve) => {
+    evil.on("connect", () => resolve("connected"));
+    evil.on("connect_error", () => resolve("rejected"));
+    setTimeout(() => resolve("timeout"), 3000);
+  });
+  evil.close();
+  expect(outcome).toBe("rejected");
 });
 
 test("ゴミ箱のタスクはプロジェクトの未完了件数に数えない", async () => {
@@ -1404,7 +1466,7 @@ test("AI提案チップはプロジェクトごとにOFFにできる。OFFの間
     return (r.rows as any[])[0].c as number;
   };
   const before = await llmCalls();
-  const s = (await (await fetch(`${API}/api/suggestions`)).json()) as any;
+  const s = (await (await fetch(`${API}/api/suggestions`, { method: "POST" })).json()) as any;
   expect(s.suggestions).toEqual([]);
   expect(await llmCalls(), "OFFなのにLLMを呼んでいる").toBe(before);
 
@@ -1434,7 +1496,7 @@ test("チャットの処理中は提案チップを生成しない (#162)", asyn
 
   // 立ち上がりを待ってから確認する
   await new Promise((r) => setTimeout(r, 300));
-  const during = (await (await fetch(`${API}/api/suggestions`)).json()) as any;
+  const during = (await (await fetch(`${API}/api/suggestions`, { method: "POST" })).json()) as any;
   expect(during.suggestions).toEqual([]);
 
   await chatting;
@@ -1468,7 +1530,7 @@ test("先に始まっていた提案生成は、チャットが始まったら�
     const before = abortLines();
 
     // suggestを先に始める。待たない
-    const suggesting = fetch(`${API}/api/suggestions`)
+    const suggesting = fetch(`${API}/api/suggestions`, { method: "POST" })
       .then((r) => r.json())
       .catch(() => null);
 

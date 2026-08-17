@@ -18,6 +18,7 @@ function task(over: Partial<TaskFacts> = {}): TaskFacts {
     blockedBy: null,
     rejected: false,
     contextVersion: 1,
+    checkedAt: null,
     sort: 0,
     ...over,
   };
@@ -107,7 +108,7 @@ test("担当者の変更を拾う", () => {
   assert.match(changes[0], /担当: なし -> zio/);
 });
 
-test("並べ替えは1行にまとめる (1件動かすと周りの sort も連動するため)", () => {
+test("並べ替えは1行にまとめ、その1行から現在の順を復元できる", () => {
   const before = board([
     [1, task({ sort: 0 })],
     [2, task({ sort: 1 })],
@@ -121,7 +122,59 @@ test("並べ替えは1行にまとめる (1件動かすと周りの sort も連�
 
   const changes = diffBoards(before, after);
   assert.equal(changes.length, 1, "3件動いても1行にまとまる");
-  assert.match(changes[0], /並び順が変わった \(#1, #2, #3\)/);
+  // **IDの集合だけでは足りない。**どう並んだかが読み取れること
+  assert.match(changes[0], /todo: #3,#1,#2/);
+});
+
+test("同じIDが動いても、並びが違えば違う文面になる", () => {
+  const before = board([
+    [1, task({ sort: 0 })],
+    [2, task({ sort: 1 })],
+  ]);
+  const swapped = board([
+    [1, task({ sort: 1 })],
+    [2, task({ sort: 0 })],
+  ]);
+  const shifted = board([
+    [1, task({ sort: 5 })],
+    [2, task({ sort: 9 })],
+  ]);
+
+  // 動いたIDの集合はどちらも {1,2} だが、結果の並びは違う
+  assert.notEqual(diffBoards(before, swapped)[0], diffBoards(before, shifted)[0]);
+  assert.match(diffBoards(before, swapped)[0], /todo: #2,#1/);
+  assert.match(diffBoards(before, shifted)[0], /todo: #1,#2/);
+});
+
+test("列をまたいで動いたら、抜けたほうの列の並びも出す", () => {
+  const before = board([
+    [1, task({ status: "todo", sort: 0 })],
+    [2, task({ status: "todo", sort: 1 })],
+    [3, task({ status: "review", sort: 0 })],
+  ]);
+  const after = board([
+    [1, task({ status: "review", sort: 1 })],
+    [2, task({ status: "todo", sort: 1 })],
+    [3, task({ status: "review", sort: 0 })],
+  ]);
+
+  const line = diffBoards(before, after).find((c) => c.startsWith("並び順"));
+  assert.ok(line, "並び順の行が出る");
+  assert.match(line!, /review: #3,#1/);
+  assert.match(line!, /todo: #2/);
+});
+
+test("人の検収の印を拾う (setChecked は updated_at を動かさないので差分でしか気づけない)", () => {
+  const before = board([[5, task({ status: "review" })]]);
+  const after = board([[5, task({ status: "review", checkedAt: "2026-08-17 10:00:00" })]]);
+
+  const changes = diffBoards(before, after);
+  assert.equal(changes.length, 1);
+  assert.match(changes[0], /人が検収の印を付けた/);
+  assert.match(changes[0], /2026-08-17 10:00:00/);
+
+  // 外れたときも拾う (ゴミ箱からの復元で印が残る問題 #161 と関係する)
+  assert.match(diffBoards(after, before)[0], /検収の印が外れた/);
 });
 
 test("並べ替えが status の変化を埋もれさせない", () => {

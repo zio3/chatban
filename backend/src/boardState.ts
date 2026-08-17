@@ -34,6 +34,10 @@ export interface TaskFacts {
   blockedBy: number[] | null;
   rejected: boolean;
   contextVersion: number;
+  /** 人が実物で確かめた日時。**この機能が拾いたいものの本体。**
+   * 2026-08-15 の事故は「人間が検収したことをエージェントが知らなかった」ために起きた。
+   * setChecked は updated_at を動かさないので、タイムスタンプ方式では二重に拾えない (自動レビュー指摘) */
+  checkedAt: string | null;
   /** 並び順。reorder_tasks で動く。1件動かすと周りも連動して変わるので、差分では1行にまとめる */
   sort: number;
 }
@@ -83,6 +87,7 @@ export function captureBoard(): Omit<BoardSnapshot, "stateId" | "takenAt"> {
         blockedBy: t.blockedBy,
         rejected: t.rejected,
         contextVersion: t.contextVersion,
+        checkedAt: t.checkedAt ?? null,
         sort: t.sort,
       },
     ])
@@ -110,6 +115,8 @@ function fieldChanges(prev: TaskFacts, cur: TaskFacts): string[] {
   if (!sameDeps(prev.blockedBy, cur.blockedBy))
     out.push(`依存: [${(prev.blockedBy ?? []).join(",")}] -> [${(cur.blockedBy ?? []).join(",")}]`);
   if (prev.summary !== cur.summary) out.push(`現況: ${cur.summary ?? "(消去)"}`);
+  if (prev.checkedAt !== cur.checkedAt)
+    out.push(cur.checkedAt ? `人が検収の印を付けた (${cur.checkedAt})` : "検収の印が外れた");
   // 経緯メモは本文を載せると差分が膨らむので、変わったことだけ伝えて中身は取りに行かせる
   if (prev.contextVersion !== cur.contextVersion) out.push(`経緯メモが更新された (v${cur.contextVersion})`);
   return out;
@@ -153,7 +160,25 @@ export function diffBoards(
   }
 
   if (reordered.length > 0) {
-    changes.push(`並び順が変わった (${reordered.map((id) => `#${id}`).join(", ")})`);
+    // **動いたIDを並べるだけでは足りない。**それでは「どう並んだか」が分からず、
+    // 違う並べ替えが同じ文面になってしまう。動いた列については現在の順を丸ごと出し、
+    // この1行だけで順序を復元できるようにする (自動レビュー指摘)
+    const columns = new Set<string>();
+    for (const id of reordered) {
+      const after = cur.tasks.get(id);
+      if (after) columns.add(after.status);
+      // 列をまたいだ移動では、抜けたほうの列の並びも詰まる
+      const before = prev.tasks.get(id);
+      if (before) columns.add(before.status);
+    }
+    const lines = [...columns].map((status) => {
+      const ids = [...cur.tasks.entries()]
+        .filter(([, t]) => t.status === status)
+        .sort((a, b) => a[1].sort - b[1].sort)
+        .map(([id]) => `#${id}`);
+      return `${status}: ${ids.length > 0 ? ids.join(",") : "(空)"}`;
+    });
+    changes.push(`並び順が変わった。現在の順は ${lines.join(" / ")}`);
   }
 
   for (const [id, idx] of cur.cards) {

@@ -64,8 +64,9 @@ const SINCE_ON_WRITE = z
   .string()
   .optional()
   .describe(
-    "直前に受け取った状況ID。渡すと、その後にボードで起きた変化 (他所からの更新を含む) が応答に一緒に返る。" +
-      "自分の書き込み結果とは別物で、**自分が見ていない間に何が動いたか**が分かる"
+    "直前に受け取った状況ID。渡すと、その状況IDの時点から**いま書き込んだ結果まで**の変化が changesSince に返る。" +
+      "他所からの更新 (人間の検収・UIでの並べ替え・別のエージェント) も含むので、自分が見ていない間に何が動いたかが分かる。" +
+      "**いま自分が書き換えたぶんも含まれる**ので、updated / created と重なる行がある"
   );
 
 /** 書き込み応答に載せるボードの動き。全件が要るほど変わっていたら get_board へ誘導する (応答を重くしない) */
@@ -76,8 +77,11 @@ function boardUpdate(since?: string) {
   // 差分を返せなかったとき、**新しい状況IDを渡さない。**
   // 渡すとエージェントはそれを次の since に使い、「変化なし」が返って
   // 全件を一度も見ないまま古い認識のまま進む (自動レビュー指摘)
+  //
+  // キーが `note` でないのは、書き込み側が返す note (「done は指定できないので review に置いた」等の
+  // **警告**) を後から spread して消していたため。意味の違うものを同じキーに入れない (自動レビュー指摘)
   return {
-    note: `${d.note ?? "差分を返せなかった"}。since を付けずに get_board を呼び、全体を取り直すこと`,
+    boardNote: `${d.note ?? "差分を返せなかった"}。since を付けずに get_board を呼び、全体を取り直すこと`,
   };
 }
 
@@ -378,7 +382,9 @@ export function buildMcpServer(onEvent: (kind: "board" | "proposals") => void): 
         ...(d.note ? { note: d.note } : {}),
         project: currentProject(),
         projectContext: getProjectContext() ?? "",
-        tasks: listTasks().map((t) => brief(t, isPersonal)),
+        // checked は brief に無いのでここで足す。**人が検収したかどうかは全件応答からも
+        // 読めないといけない** — 差分だけ直しても、取り直したときに分からなければ同じ事故が起きる
+        tasks: listTasks().map((t) => ({ ...brief(t, isPersonal)!, checked: !!t.checkedAt })),
         summaryCards: listSummaryCards().map((c) => ({
           id: c.id,
           title: c.title,

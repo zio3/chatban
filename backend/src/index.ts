@@ -766,6 +766,10 @@ app.post("/mcp", (_req, res) => {
 app.get(["/mcp", "/mcp/:projectId"], (_req, res) => res.status(405).json({ error: "stateless server: POST only" }));
 app.delete(["/mcp", "/mcp/:projectId"], (_req, res) => res.status(405).json({ error: "stateless server: POST only" }));
 
-server.listen(PORT, () => {
+// **待ち受けはループバックに限定する。**ホストを省略するとNodeの既定で全インターフェース (0.0.0.0)
+// に開くが、認証は既定オフ (CHATBAN_AUTH=on のときだけ有効 — auth.ts) なので、同じLANにいる誰でも
+// 板を読み書きでき、/mcp は認証ミドルウェアの外にある。ローカルで動かす個人用ツールに外から届く口は要らない。
+// 環境変数で開ける逃げ道は用意しない — 「開けられる」が残ると、認証が無いまま開ける日が来る
+server.listen(PORT, "127.0.0.1", () => {
   console.log(`ChatBan backend listening on http://localhost:${PORT}`);
 });

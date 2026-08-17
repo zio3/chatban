@@ -10,6 +10,7 @@ import {
   getTask,
   listSummaryCards,
   listTasks,
+  PUBLIC_TABLES,
   queryLogHelp,
   queryProjectData,
   reorderTasks,
@@ -61,6 +62,9 @@ export const QUERY_LOG_DESCRIPTION = [
   "記録にSQLで問い合わせる(読み取り専用)。集計軸・期間・条件は自由に決めてよい。",
   "DBは SQLite。方言はSQLiteに合わせる — 日付は date()/datetime()/strftime() と修飾子('start of month', '-2 months' など)を使い、date_trunc/INTERVAL/NOW() のような他DBの関数は無い。真偽値は 0/1。文字列連結は || 。日時はISO 8601風の文字列で入っている",
   "見えるのは**接続中のプロジェクトの記録だけ**。別プロジェクトのタスクや会話は見えない",
+  // #181: この行は PUBLIC_TABLES から生成する。説明に手で書くと、テーブルを増減したときに
+  // 説明・コード・テストの3箇所を人間が揃える前提になり、実際にズレた (project_context の漏れ)
+  `引けるもの: ${PUBLIC_TABLES.join(" / ")}`,
   "chat_messages(id, role, content, trace, usage, task_id, created_at。role='user' が持ち主の発言、'assistant' がこのアシスタント。usage は所要時間とラウンド数だけ — トークン計測は #181 で撤去した) / summary_cards(id, title, elements, task_ids, frozen, created_at) / project_context(id, text, version, updated_at。全文は get_project_context のほうが読みやすい)",
   "tasks(id, title, status, summary, context, context_version, due, blocked_by, rejected, checked_at, done_at, trashed_at, sort, archived, summary_card_id, created_at, updated_at)",
   "checked_at = 人が実物で確かめた日時 (nullなら未検収)。status とは別物で、done は列が動いたこと・checked_at は検収が進んだこと。片方からもう片方を推測しない。この窓口は読み取り専用で、checked_at を書く手段はどこにも無い (印を付けられるのは人間だけ)",

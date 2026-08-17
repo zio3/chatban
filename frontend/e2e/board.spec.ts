@@ -1082,18 +1082,25 @@ test("Originの付かないブラウザGET (<img>相当) も断る。有料の�
   expect(ok.status).toBe(200);
 });
 
-test("有料のLLM呼び出しを起こす口はGETに置かない (#180)", async () => {
+test("LLMを直接呼ぶ口はGETに置かない (#180)", async () => {
   // GET のままだと、悪意あるページが <img src> で撃つだけで課金を増やせる。
-  // **有料経路を明示的に列挙する** — suggestions だけを見ていると、他の経路が
-  // GETで足されたときに気づけない (自動レビュー指摘。実際 chat と タスクチャットも有料経路)。
-  // #181 で撤去した models / metrics は別のテストが404を固定している
   //
-  // **このテストが保証するのは「GETのルートが存在しないこと」だけ。**POST側が機能することは
-  // ここでは確かめない — 有料のLLM呼び出しが走るため。E2Eは「LLM呼び出しなし」が原則
+  // **「LLMを直接呼ぶ口」に限った検証。**LLMを間接的に起こす口は他にもある
+  // (自動レビュー指摘): POST /api/tasks/approve → 検収でDone要約を作り直す /
+  // PATCH /api/tasks/:id で Done から差し戻すと再要約 / POST /mcp の compact_archive。
+  // どれも POST・PATCH なのでGETでは叩けないが、**このテストはそこまで数えていない**。
+  // 下で /api/tasks/approve と /mcp が GET で通らないことだけ確かめておく
   for (const path of ["/api/suggestions", "/api/chat", "/api/tasks/1/chat"]) {
     const res = await fetch(`${API}${path}`);
     expect(res.status, `${path} がGETで叩ける`).toBe(404);
   }
+  // 間接的に要約(=LLM)を起こす口も、GETでは入口が無い
+  expect((await fetch(`${API}/api/tasks/approve`)).status).toBe(404);
+  // MCPは stateless で POST only。GET は405で明示的に断る (ルートは在るので404ではない)
+  expect((await fetch(`${API}/mcp/1`)).status).toBe(405);
+
+  // **このテストが保証するのは「GETのルートが存在しないこと」だけ。**POST側が機能することは
+  // ここでは確かめない — 有料のLLM呼び出しが走るため。E2Eは「LLM呼び出しなし」が原則
 });
 
 test("知らないページからのSocket接続はハンドシェイクで断る (#180)", async () => {
@@ -1411,15 +1418,18 @@ test("ツール説明に書いてあるテーブルは、実際に引けるも�
   // ハードコードした一覧と突き合わせる形はやめた (自動レビュー指摘) — 説明から表名が落ちても、
   // こちらの一覧を直さなければ通ってしまう。**許可リストの実物は、拒否メッセージが列挙している**
   // ので、そこから取り出して突き合わせる (実行時の値が出所になる)
+  // 実装が持っている許可リスト。拒否メッセージが列挙している
   const blocked = (await mcp("query_log", { sql: "SELECT * FROM sqlite_sequence" })) as any;
   expect(blocked.error).toContain("参照できません");
-  const allow = String(blocked.error)
-    .match(/引けるのは (.+?) だけです/)?.[1]
-    .split(" / ")
-    .map((s) => s.trim()) ?? [];
-  expect(allow.length, "拒否メッセージから許可リストを読み取れない (文言が変わった?)").toBeGreaterThan(3);
+  const fromCode =
+    String(blocked.error)
+      .match(/引けるのは (.+?) だけです/)?.[1]
+      .split(" / ")
+      .map((s) => s.trim()) ?? [];
+  expect(fromCode.length, "拒否メッセージから許可リストを読み取れない (文言が変わった?)").toBeGreaterThan(3);
 
-  // ツール説明の実物を取ってくる
+  // ツール説明が案内している一覧。説明は PUBLIC_TABLES から生成しているので、
+  // 突き合わせる相手が「実装が言っていること」になる (手で書いた一覧との比較はやめた)
   const res = await fetch(`${API}/mcp/1`, {
     method: "POST",
     headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream" },
@@ -1429,17 +1439,27 @@ test("ツール説明に書いてあるテーブルは、実際に引けるも�
   const line = body.split("\n").find((l) => l.startsWith("data: ")) ?? body;
   const tools = JSON.parse(line.replace(/^data: /, "")).result.tools as any[];
   const desc = tools.find((t) => t.name === "query_log").description as string;
+  const fromDesc =
+    desc
+      .split("\n")
+      .find((l) => l.startsWith("引けるもの: "))
+      ?.replace("引けるもの: ", "")
+      .split(" / ")
+      .map((s) => s.trim()) ?? [];
+  expect(fromDesc.length, "説明から一覧を読み取れない (行の形が変わった?)").toBeGreaterThan(3);
 
-  for (const t of allow) {
-    // 引けるのに説明に無い = エージェントは存在を知らないまま
-    expect(desc, `${t} は引けるのに説明に書いていない`).toContain(t);
-    // 説明に在るのに引けない = 案内どおりに書いたら失敗する
+  // **集合として一致すること。**前は許可リスト側の項目だけをループしていたので、
+  // 「許可リストから消えて説明に残った」ケースを見逃していた (自動レビュー指摘)
+  expect([...fromDesc].sort(), "説明の一覧と実装の許可リストがズレている").toEqual([...fromCode].sort());
+
+  // 案内どおりに書いたら実際に引けること (一致していても両方が間違っている場合を弾く)
+  for (const t of fromCode) {
     const r = await mcp("query_log", { sql: `SELECT * FROM ${t} LIMIT 1` });
-    expect(r.error, `${t} は説明に載っているのに引けない`).toBeFalsy();
+    expect(r.error, `${t} は案内されているのに引けない`).toBeFalsy();
   }
 
   // 機密は説明にも載っていない (載っていて引けない、を「一致」と呼ばないため)
-  expect(desc).not.toContain("settings");
+  expect(fromDesc).not.toContain("settings");
 });
 
 test("AI提案チップはプロジェクトごとにOFFにできる。OFFなら提案は空で返る (#167)", async ({ page }) => {

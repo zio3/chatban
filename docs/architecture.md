@@ -22,11 +22,12 @@
 │  ├ mcp.ts       MCPサーバー (POST /mcp/:projectId)           │
 │  └ db.ts        アクティブなプロジェクトDBへの操作            │
 └──────┬────────────────────────────┬────────────────────────┘
-       │ OpenAI SDK                  │ MCP (Claude Code等の外部エージェント)
-┌──────▼────────────┐   「横断的な検討・実装はBYO Agent」
-│  OrcaRouter (LLM)  │   ドッグフーディング: ChatBan自体の改修タスクを
-│  base_url差し替えのみ │   ChatBanのボードでMCP経由管理
-└───────────────────┘
+       │ OpenAI SDK / Messages形式    │ MCP (Claude Code等の外部エージェント)
+┌──────▼──────────────┐  「横断的な検討・実装はBYO Agent」
+│ LLM (config.json で選ぶ) │  ドッグフーディング: ChatBan自体の改修タスクを
+│ OpenAI直/Anthropic直/    │  ChatBanのボードでMCP経由管理
+│ OrcaRouter/ローカルLLM   │
+└─────────────────────┘
 ```
 
 ## 技術スタック

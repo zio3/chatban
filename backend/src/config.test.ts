@@ -6,8 +6,8 @@ import path from "node:path";
 import {
   baseUrlProblem,
   expandHome,
+  gitCheckIgnore,
   ignoreEntryFor,
-  isGitignored,
   parseLlmConfig,
   redactSecrets,
   warnIfConfigNotIgnored,
@@ -157,73 +157,87 @@ test("expandHome はホーム以外のパスに触らない", () => {
   assert.equal(expandHome("~", "/home/zio"), "/home/zio");
 });
 
-test("gitignore の判定は完全一致の行だけを見る", () => {
-  assert.equal(isGitignored("node_modules/\nbackend/config.json\nlogs/"), true);
-  assert.equal(isGitignored("  backend/config.json  "), true, "前後の空白は詰める");
-  assert.equal(isGitignored("/backend/config.json"), true, "先頭スラッシュ付きも有効な書き方");
-  assert.equal(isGitignored("node_modules/\nlogs/"), false);
+const REPO_ROOT = path.join(process.cwd(), "..");
+
+test("**このリポジトリで backend/config.json が git に無視されている**", () => {
+  // **git 本体に聞く。**自前で .gitignore を読む判定は、否定パターン (`!backend/config.json`) や
+  // ワイルドカードを解釈できず「無視されていないのに無視されている」と答えた (Codexレビュー指摘)。
+  // .gitignore の行を消すとこのテストが落ちる
+  assert.equal(
+    gitCheckIgnore(REPO_ROOT, path.join(REPO_ROOT, "backend", "config.json")),
+    true,
+    "backend/config.json が git に無視されていない (APIキーがコミットされる)"
+  );
 });
 
-test("gitignore のコメント行は無視される", () => {
-  // コメントで言及しただけで「無視されている」と誤判定すると、警告が出ないまま公開リポジトリに置かれる
-  assert.equal(isGitignored("# backend/config.json は各自で作る\nlogs/"), false);
-});
-
-test("ワイルドカードの行は gitignore 済みと見なさない", () => {
-  // `config*.json` は examples/ 側まで無視してしまうので、正しい書き方ではない。
-  // ここで true を返すと「サンプルがコミットされていない」構成を追認することになる
-  assert.equal(isGitignored("backend/config*.json"), false);
-  assert.equal(isGitignored("*.json"), false);
-});
-
-test("**このリポジトリの実際の .gitignore が backend/config.json を無視している**", () => {
-  // ここまでの gitignore テストは文字列を渡しているだけなので、**実物が壊れても落ちない**
-  // (Codexレビュー指摘: .gitignore の行を消しても全テストが通る状態だった)。
-  // このテストだけは実ファイルを読む。行を消したらここが落ちる
-  const repoRoot = path.join(process.cwd(), "..");
-  const text = fs.readFileSync(path.join(repoRoot, ".gitignore"), "utf8");
-  assert.equal(isGitignored(text, "backend/config.json"), true, ".gitignore から backend/config.json の行が消えている");
-});
-
-test("**見本ファイルは無視されていない** (コミットしたつもりで入っていない、を防ぐ)", () => {
-  // ignore をワイルドカードにすると examples/ まで消える。実物のパスで確かめる
-  const repoRoot = path.join(process.cwd(), "..");
-  const text = fs.readFileSync(path.join(repoRoot, ".gitignore"), "utf8");
+test("**見本ファイルは git に無視されていない** (コミットしたつもりで入っていない、を防ぐ)", () => {
+  // ignore をワイルドカード (`config*.json`) にすると examples/ まで消える。
+  // 文字列比較では `*.json` のようなパターンを解釈できないので、ここも git に聞く
   for (const name of ["openai", "anthropic", "local", "orcarouter"]) {
-    assert.equal(isGitignored(text, `backend/examples/config.${name}.json`), false);
+    const p = path.join(REPO_ROOT, "backend", "examples", `config.${name}.json`);
+    assert.equal(gitCheckIgnore(REPO_ROOT, p), false, `見本 ${name} が無視されている`);
   }
 });
 
-test("設定ファイルがリポジトリの外にあれば、gitignore の警告はしない", () => {
-  assert.equal(ignoreEntryFor("/home/zio/.chatban/config.json", "/repo"), null);
-  assert.equal(ignoreEntryFor("/repo/../elsewhere/config.json", "/repo"), null);
+test("設定ファイルがリポジトリの外にあれば、警告の対象にしない", () => {
+  assert.equal(ignoreEntryFor(path.join(path.sep, "home", "zio", ".chatban", "config.json"), path.join(path.sep, "repo")), null);
+  assert.equal(ignoreEntryFor(path.join(path.sep, "elsewhere", "config.json"), path.join(path.sep, "repo")), null);
 });
 
-test("gitignore に書かれているべき行は、実際に使うパスから決まる", () => {
+test("`..` で始まる名前のファイルは「リポジトリ外」と誤判定しない", () => {
+  // `startsWith("..")` だと `..secret.json` (リポジトリ直下の正当な名前) が外扱いになり、
+  // **リポジトリ内なのに警告が黙る** (Codexレビュー指摘・Windowsで再現)
+  const repo = path.join(path.sep, "repo");
+  assert.equal(ignoreEntryFor(path.join(repo, "..secret.json"), repo), "..secret.json");
+  assert.equal(ignoreEntryFor(path.join(repo, "backend", "..config.json"), repo), "backend/..config.json");
+});
+
+test("警告に出す行は、実際に使うパスから決まる", () => {
   // CHATBAN_CONFIG で別名を指した場合、固定の backend/config.json を見ても意味がない
-  assert.equal(ignoreEntryFor(path.join("/repo", "backend", "config.json"), "/repo"), "backend/config.json");
-  assert.equal(ignoreEntryFor(path.join("/repo", "backend", "config.work.json"), "/repo"), "backend/config.work.json");
+  const repo = path.join(path.sep, "repo");
+  assert.equal(ignoreEntryFor(path.join(repo, "backend", "config.json"), repo), "backend/config.json");
+  assert.equal(ignoreEntryFor(path.join(repo, "backend", "config.work.json"), repo), "backend/config.work.json");
 });
 
 test("リポジトリ内の設定ファイルが無視されていなければ警告が出る", () => {
-  // **警告の出方そのもの**を確かめる (これまでは判定関数しか通していなかった)
+  // **警告の出方そのもの**を確かめる。git判定は注入して固定する
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "chatban-cfg-"));
   try {
     fs.mkdirSync(path.join(dir, "backend"));
     const cfg = path.join(dir, "backend", "config.work.json");
     fs.writeFileSync(cfg, "{}");
-    fs.writeFileSync(path.join(dir, ".gitignore"), "node_modules/\nbackend/config.json\n");
 
     const warnings: string[] = [];
-    warnIfConfigNotIgnored(cfg, dir, (m) => warnings.push(m));
-    assert.equal(warnings.length, 1, "別名の設定ファイルが無視されていないのに警告が出ない");
+    warnIfConfigNotIgnored(cfg, dir, (m) => warnings.push(m), () => false);
+    assert.equal(warnings.length, 1, "無視されていないのに警告が出ない");
     assert.match(warnings[0], /backend\/config\.work\.json/);
 
-    // 無視されていれば黙る
-    fs.appendFileSync(path.join(dir, ".gitignore"), "backend/config.work.json\n");
     const quiet: string[] = [];
-    warnIfConfigNotIgnored(cfg, dir, (m) => quiet.push(m));
-    assert.deepEqual(quiet, []);
+    warnIfConfigNotIgnored(cfg, dir, (m) => quiet.push(m), () => true);
+    assert.deepEqual(quiet, [], "無視されているのに警告が出た");
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("git の判定が取れないときは黙る (gitが無い環境で雑音を出さない)", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "chatban-cfg-"));
+  try {
+    const cfg = path.join(dir, "config.json");
+    fs.writeFileSync(cfg, "{}");
+    const warnings: string[] = [];
+    warnIfConfigNotIgnored(cfg, dir, (m) => warnings.push(m), () => null);
+    assert.deepEqual(warnings, []);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("gitの管理下にないディレクトリでは判定不能 (null) が返る", () => {
+  // 「無視されていない (false)」と区別できないと、gitを使っていない人に警告が出続ける
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "chatban-nogit-"));
+  try {
+    assert.equal(gitCheckIgnore(dir, path.join(dir, "config.json")), null);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -231,7 +245,7 @@ test("リポジトリ内の設定ファイルが無視されていなければ�
 
 test("設定ファイルが無ければ、警告も出ない (まだ作っていないだけ)", () => {
   const warnings: string[] = [];
-  warnIfConfigNotIgnored(path.join(os.tmpdir(), "chatban-does-not-exist.json"), os.tmpdir(), (m) => warnings.push(m));
+  warnIfConfigNotIgnored(path.join(os.tmpdir(), "chatban-does-not-exist.json"), os.tmpdir(), (m) => warnings.push(m), () => false);
   assert.deepEqual(warnings, []);
 });
 
@@ -244,7 +258,13 @@ test("エラー本文に混ざったAPIキーは伏せられる", () => {
   assert.equal(redactSecrets(`${key} and ${key}`, [key]), "*** and ***");
 });
 
-test("短すぎる値や空の値は伏字にしない (無関係な文字列を壊さない)", () => {
-  assert.equal(redactSecrets("model gpt-5.4 failed", ["gpt"]), "model gpt-5.4 failed");
+test("短いAPIキーも伏せられる (長さで手加減しない)", () => {
+  // 8文字未満を素通りさせていたため、**設定が許す短いキーだけ漏れる**穴になっていた
+  // (Codexレビュー指摘)。ローカルLLM向けのダミー ("ollama") が伏字になる副作用は受け入れる
+  assert.equal(redactSecrets("invalid key abc123", ["abc123"]), "invalid key ***");
+  assert.equal(redactSecrets("model qwen3:8b via ollama failed", ["ollama"]), "model qwen3:8b via *** failed");
+});
+
+test("空の値は伏字にしない (すべての位置に一致してしまう)", () => {
   assert.equal(redactSecrets("some error", [undefined, null, ""]), "some error");
 });

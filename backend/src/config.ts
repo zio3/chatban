@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
 import { homedir } from "node:os";
 import { z } from "zod";
 import { log } from "./log.js";
@@ -27,8 +28,6 @@ export interface LlmConfig {
 
 /** 設定ファイルの位置。既定は backend/config.json (cwd は backend) */
 export const CONFIG_PATH = process.env.CHATBAN_CONFIG ?? path.join(process.cwd(), "config.json");
-/** .gitignore に載っていてほしい行。**リポジトリは公開なので、ここが唯一の事故経路** */
-export const IGNORE_ENTRY = "backend/config.json";
 
 /** ループバック宛か。**HTTPを許すのはここだけ。**
  * ローカルLLM (Ollama等) は http://localhost:11434 で待ち受けるので http を塞げないが、
@@ -94,11 +93,15 @@ const schema = z
  * (Codexレビューで `messages 401: invalid key: sk-...` を再現)。その本文は
  * ログにもHTTP応答にも流れるので、出口で伏せる。
  *
- * 短い値は伏せない — 3文字のキーのようなものを伏字にすると、無関係な文字列まで壊れる */
+ * **長さで手加減しない。**最初は「短い値を伏せると無関係な文字列が壊れる」と考えて8文字未満を
+ * 素通りさせていたが、**設定は短いキーを許すので、短いキーだけ伏字にならない**という穴になった
+ * (Codexレビュー指摘: `apiKey="abc123"` が漏れる)。ローカルLLM向けのダミー (`"ollama"` など) が
+ * 伏字になっても実害は無い — ログに `***` と出るだけで、意味を取り違える情報ではない。
+ * **伏せすぎて困ることより、伏せ損ねて困ることのほうが取り返しがつかない。** */
 export function redactSecrets(text: string, secrets: (string | undefined | null)[]): string {
   let out = text;
   for (const s of secrets) {
-    if (!s || s.length < 8) continue;
+    if (!s) continue; // 空文字だけは除く (全ての位置に一致してしまう)
     out = out.split(s).join("***");
   }
   return out;
@@ -140,18 +143,11 @@ export function parseLlmConfig(
   return { apiKey, baseURL: c.baseURL, apiStyle: c.apiStyle, models: c.models };
 }
 
-/** .gitignore に該当行があるか。コメントと空行は無視し、前後の空白は詰める。
- *
- * **ワイルドカードは受け付けない。**`config*.json` のような書き方だと examples/ 側まで
- * ignore され、「コミットしたつもりが入っていない」という逆向きの事故になる。
- * ここが探すのは完全一致の1行だけ */
-export function isGitignored(gitignoreText: string, entry: string = IGNORE_ENTRY): boolean {
-  return gitignoreText
-    .split(/\r?\n/)
-    .map((l) => l.trim())
-    .filter((l) => l && !l.startsWith("#"))
-    .some((l) => l === entry || l === `/${entry}`);
-}
+// ここに `isGitignored(gitignoreText, entry)` があった。**.gitignore を自前で読んで
+// 「完全一致の行があるか」を見る実装で、gitのignore規則ではなかった** (Codexレビュー指摘)。
+// 否定パターン (`!backend/config.json`)・ワイルドカード・ディレクトリ指定・
+// `.git/info/exclude`・親ディレクトリの .gitignore を扱えず、**無視されていないのに
+// 「無視されている」と答える**ことがある。規則を近似して持つのをやめ、gitCheckIgnore で本家に聞く
 
 /** その設定ファイルについて .gitignore に書かれているべき行。**リポジトリの外なら null。**
  *
@@ -160,32 +156,58 @@ export function isGitignored(gitignoreText: string, entry: string = IGNORE_ENTRY
  * 別名の設定ファイルが追跡対象でも警告されない)。実際に使うパスから逆算する */
 export function ignoreEntryFor(configPath: string, repoRoot: string): string | null {
   const rel = path.relative(repoRoot, configPath);
-  if (!rel || rel.startsWith("..") || path.isAbsolute(rel)) return null; // リポジトリ外なのでgitの管轄外
+  // **`startsWith("..")` では広すぎる。**`..secret.json` はリポジトリ直下の正当なファイル名で、
+  // これを「外」と判定すると**リポジトリ内なのに警告が黙る** (Codexレビュー指摘・Windowsで再現)。
+  // 上位ディレクトリを指すのは、`..` そのものか `..` の直後が区切り文字のときだけ
+  const escapes = rel === ".." || rel.startsWith(`..${path.sep}`) || rel.startsWith("../");
+  if (!rel || escapes || path.isAbsolute(rel)) return null; // リポジトリ外なのでgitの管轄外
   return rel.split(/[\\/]/).join("/"); // .gitignore は常に / 区切り
 }
 
-/** 起動時に一度だけ。**設定ファイルがあるのに .gitignore に載っていなければ警告する。**
+/** そのパスが git に無視されるか。**判定は git 本体に任せる (true / false / 判定不能なら null)。**
+ *
+ * 自前で .gitignore を読む実装にしていたが、**それは「完全一致の行があるか」でしかなく、
+ * gitのignore規則ではなかった** (Codexレビュー指摘)。`!backend/config.json` の否定パターン、
+ * `*.json`、ディレクトリ指定、`.git/info/exclude`、親ディレクトリの .gitignore —
+ * どれも自前実装では扱えない。**近似した規則を持つより、本家に聞くほうが正しい。**
+ *
+ * `--no-index` はインデックスを見ずにパターンだけで判定する (追跡済みのファイルについても
+ * 「そのパターンなら無視されるか」を答えさせるため)。 */
+export function gitCheckIgnore(repoRoot: string, absPath: string): boolean | null {
+  try {
+    const r = spawnSync("git", ["check-ignore", "--no-index", "-q", "--", absPath], {
+      cwd: repoRoot,
+      encoding: "utf8",
+      windowsHide: true,
+      timeout: 5_000,
+    });
+    if (r.error) return null; // gitが無い
+    if (r.status === 0) return true; // 無視される
+    if (r.status === 1) return false; // 無視されない
+    return null; // 128 = リポジトリではない等
+  } catch {
+    return null;
+  }
+}
+
+/** 起動時に一度だけ。**設定ファイルがあるのに git に無視されていなければ警告する。**
  *
  * 公開リポジトリでキーが漏れる経路は実質これ1つ (gitignoreを書き忘れて `git add .`) なので、
- * ファイルを1枚読むだけの確認で塞いでおく。「あとで消す」は履歴に残るので効かない */
+ * 起動のたびに確認しておく。「あとで消す」は履歴に残るので効かない。
+ *
+ * 判定できないとき (gitが無い・リポジトリではない) は**黙る**。無視されている確証は無いが、
+ * git が無い環境ではそもそもコミットされないので、警告は雑音にしかならない */
 export function warnIfConfigNotIgnored(
   configPath: string = CONFIG_PATH,
   repoRoot: string = path.join(process.cwd(), ".."),
-  emit: (msg: string) => void = (m) => log("config", m)
+  emit: (msg: string) => void = (m) => log("config", m),
+  check: (repoRoot: string, absPath: string) => boolean | null = gitCheckIgnore
 ): void {
   if (!fs.existsSync(configPath)) return;
   const entry = ignoreEntryFor(configPath, repoRoot);
   if (entry === null) return; // リポジトリ外に置いてあるなら、そもそもコミットされない
-  const gitignore = path.join(repoRoot, ".gitignore");
-  let text = "";
-  try {
-    text = fs.readFileSync(gitignore, "utf8");
-  } catch {
-    emit(`!! ${gitignore} を読めませんでした。${entry} が無視されるか確認してください`);
-    return;
-  }
-  if (!isGitignored(text, entry)) {
-    emit(`!! ${configPath} が .gitignore に載っていません。APIキーがコミットされる恐れがあります (${entry} を追加してください)`);
+  if (check(repoRoot, configPath) === false) {
+    emit(`!! ${configPath} が git に無視されていません。APIキーがコミットされる恐れがあります (.gitignore に ${entry} を追加してください)`);
   }
 }
 

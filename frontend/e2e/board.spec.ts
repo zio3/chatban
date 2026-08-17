@@ -1783,3 +1783,56 @@ test("検索の絞り込みは引数ではなくSQLへ案内する (#176)", asyn
   expect(narrowedIds).toContain(hit);
   expect(narrowedIds, "SQLで絞ったのに本文で当たったものが残っている").not.toContain(noise);
 });
+
+test("live_tasks と done_tasks に何が入るかは、契約に書いてある通りになっている (#175)", async () => {
+  // **説明を足したら、実物がその通りかを見る。**#175 は「review が live_tasks に
+  // 入るかどうかが契約に書いていない」ために誤報 (「live_tasks に review が出ないバグ」) が
+  // 起きた札。ビューは status ではなく archived / trashed_at / done_at で定義されているので、
+  // 説明のほうを実物に合わせたうえで、その説明をここで固定する
+  const todo = await createTask("live: todoのもの", "todo");
+  const inprogress = await createTask("live: inprogressのもの", "inprogress");
+  const review = await createTask("live: reviewのもの", "review");
+
+  const live = await mcp("query_log", {
+    scope: "audit",
+    sql: `SELECT id, status FROM live_tasks WHERE id IN (${todo}, ${inprogress}, ${review})`,
+  });
+  const ids = live.rows.map((r: any) => r.id);
+  for (const [label, id] of [["todo", todo], ["inprogress", inprogress], ["review", review]] as const) {
+    expect(ids, `${label} が live_tasks に出ていない`).toContain(id);
+  }
+
+  // 検収してDoneへ確定すると done_tasks に現れる。
+  // **このE2Eは AUTO_ARCHIVE=0 なので畳まれず、live_tasks にも残る** —
+  // 契約に書いた「同じタスクが両方に出る瞬間がある (不整合ではない)」がこの状態
+  await fetch(`${API}/api/tasks/${review}/checked`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ checked: true }),
+  });
+  await fetch(`${API}/api/tasks/approve`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ids: [review] }),
+  });
+
+  const done = await mcp("query_log", {
+    scope: "audit",
+    sql: `SELECT id, done_day FROM done_tasks WHERE id=${review}`,
+  });
+  expect(done.rows, "確定したのに done_tasks に出ていない").toHaveLength(1);
+  expect(done.rows[0].done_day, "done_day が空 (date(done_at) が引けていない)").toBeTruthy();
+
+  const stillLive = await mcp("query_log", {
+    scope: "audit",
+    sql: `SELECT id FROM live_tasks WHERE id=${review}`,
+  });
+  expect(stillLive.rows, "畳まれていないDoneが live_tasks から消えている (契約の記述と違う)").toHaveLength(1);
+
+  // 契約側にもその説明が書かれていること (書いていないと推測される #92/#175)
+  const tools = await mcpToolList();
+  const desc = tools.find((t: any) => t.name === "query_log").description as string;
+  for (const word of ["todo / inprogress / review", "両方に出る"]) {
+    expect(desc, `契約に「${word}」の説明が無い`).toContain(word);
+  }
+});

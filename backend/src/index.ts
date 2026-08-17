@@ -45,7 +45,9 @@ import {
   updateTasks,
   approveChecked,
   DONE_GATE_RULE,
+  DUE_FORMAT_RULE,
   isArchived,
+  isDueDate,
   isTaskStatus,
   TASK_STATUSES,
 } from "./db.js";
@@ -208,7 +210,7 @@ app.get("/api/board", (_req, res) => {
 app.post("/api/tasks", (req, res) => {
   const { title, status } = req.body ?? {};
   if (!title) return res.status(400).json({ error: "title required" });
-  const ng = badStatus(status);
+  const ng = badStatus(status) ?? badDue(req.body?.due);
   if (ng) return res.status(400).json({ error: ng });
   const task = createTask(title, status ?? "todo");
   broadcastBoard();
@@ -236,6 +238,13 @@ app.post("/api/tasks/:id/checked", (req, res) => {
 function badStatus(status: unknown): string | null {
   if (status === undefined || isTaskStatus(status)) return null;
   return `status は ${TASK_STATUSES.join(" / ")} のいずれかです (受け取った値: ${JSON.stringify(status)})`;
+}
+
+/** #153: 期限も同じ形で確かめる。契約は YYYY-MM-DD と言っているのに検証が無く、
+ * `not-a-date` がそのまま保存された (ユーザー報告)。解除の null / "" は通す */
+function badDue(due: unknown): string | null {
+  if (due === undefined || due === null || due === "" || isDueDate(due)) return null;
+  return `${DUE_FORMAT_RULE} (受け取った値: ${JSON.stringify(due)})`;
 }
 
 // status:"done" を投げられたが動かさなかったときに添える。黙って無視すると
@@ -269,7 +278,7 @@ app.get("/api/tasks/:id", (req, res) => {
 });
 
 app.patch("/api/tasks/:id", (req, res) => {
-  const ng = badStatus(req.body?.status);
+  const ng = badStatus(req.body?.status) ?? badDue(req.body?.due);
   if (ng) return res.status(400).json({ error: ng });
   const task = updateTask(Number(req.params.id), req.body ?? {});
   if (!task) return res.status(404).json({ error: "not found" });

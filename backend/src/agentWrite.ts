@@ -1,4 +1,13 @@
-import { createTask, DONE_GATE_RULE, getTask, updateTask, updateTasks, type TaskPatch } from "./db.js";
+import {
+  createTask,
+  DONE_GATE_RULE,
+  DUE_FORMAT_RULE,
+  getTask,
+  isDueDate,
+  updateTask,
+  updateTasks,
+  type TaskPatch,
+} from "./db.js";
 import { cleanAgentText } from "./text.js";
 import type { TaskStatus } from "./types.js";
 
@@ -61,6 +70,12 @@ export const CONTEXT_APPEND_DESCRIPTION =
   // 「追記を使え」という指示はあったが、使える形で書き始める方法が無かった
   "追記で積む前提なら、経緯メモの末尾に「## 経過」を作っておく。前半(背景・決めたこと)は固定、経過だけが伸びる形なら追記が効く — 節で細かく構造化すると追記が節の外に付き、毎回全文を書き直すことになる";
 
+/** #153: 期限の形が違うとき。**その行ごと落とさず、due だけ捨てて名指しで言う。**
+ * 他のフィールド (タイトル・経緯メモ) は書けているのに全体を失敗にすると、エージェントは
+ * 同じ内容を送り直すことになる (#120/#108 と同じ理由)。かといって黙って捨てると
+ * 「期限を入れたつもり」が残るので、必ず報告する */
+const BAD_DUE_NOTE = `期限の形式が違うため、その指定だけ適用していません (他の項目は保存しました)。${DUE_FORMAT_RULE}。その旨をユーザーにも伝えてください`;
+
 const NOT_FOUND_NOTE =
   "は存在しません。IDを確認してください (古い一覧を見ている可能性があります)。この指定は何も適用していません。その旨をユーザーにも伝えてください";
 
@@ -73,21 +88,43 @@ const DONE_NOTE =
   `done は指定できないので review に置きました。${DONE_GATE_RULE}。` +
   "実装や作業が終わったという意味だと解釈しています。ユーザーには「reviewに置いたので検収してください」と伝えてください";
 
-export function createTasksAsAgent(tasks: AgentTaskInput[]): { created: unknown[]; note?: string } {
+/** 渡された due を「保存してよい値」に均す。#153: 形が違うものは捨てる (undefined を返す) */
+function acceptableDue(due: string | null | undefined): { due?: string | null; bad: boolean } {
+  if (due === undefined) return { bad: false };
+  if (due === null || due === "") return { due: null, bad: false };
+  return isDueDate(due) ? { due, bad: false } : { bad: true };
+}
+
+export function createTasksAsAgent(tasks: AgentTaskInput[]): {
+  created: unknown[];
+  note?: string;
+  /** 期限の形が違って捨てたもの (タイトルで返す。作成時点ではIDを知らせても意味が薄い) */
+  badDue?: string[];
+} {
   let anyCoerced = false;
+  const badDue: string[] = [];
   const created = tasks.map((t) => {
     const { status, coerced } = coerceStatus(t.status);
     if (coerced) anyCoerced = true;
-    const task = createTask(cleanAgentText(t.title), status ?? "todo");
+    const title = cleanAgentText(t.title);
+    const task = createTask(title, status ?? "todo");
+    const due = acceptableDue(t.due);
+    if (due.bad) badDue.push(title);
     const patch: TaskPatch = {
       ...(t.context !== undefined ? { context: cleanAgentText(t.context) } : {}),
       ...(t.summary !== undefined ? { summary: cleanAgentText(t.summary) } : {}),
-      ...(t.due !== undefined ? { due: t.due } : {}),
+      ...(due.due !== undefined ? { due: due.due } : {}),
       ...(t.blocked_by !== undefined ? { blockedBy: t.blocked_by } : {}),
     };
     return Object.keys(patch).length > 0 ? updateTask(task.id, patch) : task;
   });
-  return { created, ...(anyCoerced ? { note: DONE_NOTE } : {}) };
+  // 2つ重なったら両方言う。片方だけ返すと、もう片方は起きなかったことになる
+  const notes = [anyCoerced ? DONE_NOTE : "", badDue.length > 0 ? BAD_DUE_NOTE : ""].filter(Boolean);
+  return {
+    created,
+    ...(notes.length > 0 ? { note: notes.join(" / ") } : {}),
+    ...(badDue.length > 0 ? { badDue } : {}),
+  };
 }
 
 export function updateTasksAsAgent(updates: AgentTaskUpdate[]): {
@@ -99,11 +136,14 @@ export function updateTasksAsAgent(updates: AgentTaskUpdate[]): {
   coerced: number[];
   conflicts?: ContextConflict[];
   notFound?: number[];
+  /** #153: 期限の形が違って、その指定だけ捨てたタスクID */
+  badDue?: number[];
   note?: string;
 } {
   const coerced: number[] = [];
   const conflicts: ContextConflict[] = [];
   const notFound: number[] = [];
+  const badDue: number[] = [];
 
   const patches = updates.map((u) => {
     // #87: 「差分だけ送る」モデルを前提にしない。全フィールドをエコーバックするモデル
@@ -123,7 +163,10 @@ export function updateTasksAsAgent(updates: AgentTaskUpdate[]): {
     const { status, coerced: didCoerce } = coerceStatus(u.status);
     if (didCoerce) coerced.push(u.id);
 
-    const due = u.due === "" ? null : u.due;
+    // #153: 形が違う due は捨てて名指しで返す ("" は解除として扱う。従来どおり)
+    const dueCheck = acceptableDue(u.due);
+    if (dueCheck.bad) badDue.push(u.id);
+    const due = dueCheck.due;
     const blockedBy = u.blocked_by === undefined ? undefined : (u.blocked_by ?? null);
     const sameDeps =
       blockedBy !== undefined && JSON.stringify(blockedBy ?? []) === JSON.stringify(cur?.blockedBy ?? []);
@@ -186,6 +229,9 @@ export function updateTasksAsAgent(updates: AgentTaskUpdate[]): {
     ...(coerced.length > 0 ? [`#${coerced.join(", #")} は${DONE_NOTE}`] : []),
     ...(conflicts.length > 0 ? [`#${conflicts.map((c) => c.id).join(", #")} は${CONFLICT_NOTE}`] : []),
     ...(notFound.length > 0 ? [`#${notFound.join(", #")} ${NOT_FOUND_NOTE}`] : []),
+    // #153: 期限だけ捨てた行。**rejected には数えない** — 他の項目は保存できているので、
+    // ここで ok:false にすると「1件も書けなかった」と読まれて全部送り直される
+    ...(badDue.length > 0 ? [`#${badDue.join(", #")} は${BAD_DUE_NOTE}`] : []),
   ];
   // #124: 適用できた行だけが入る。undefined/null は混ざらない (内部事情を漏らさない)
   const applied = updated.filter((t): t is NonNullable<typeof t> => t != null);
@@ -199,6 +245,7 @@ export function updateTasksAsAgent(updates: AgentTaskUpdate[]): {
     coerced,
     ...(conflicts.length > 0 ? { conflicts } : {}),
     ...(notFound.length > 0 ? { notFound } : {}),
+    ...(badDue.length > 0 ? { badDue } : {}),
     ...(notes.length > 0 ? { note: notes.join(" / ") } : {}),
   };
 }

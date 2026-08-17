@@ -1600,3 +1600,87 @@ test("先に始まっていた提案生成は、チャットが始まったら�
   }
   expect(observed, "3回試しても中断のログが増えなかった (suggestが毎回chatより先に完了した?)").toBe(true);
 });
+
+test("ゴミ箱に入れると検収の印が落ちる (古い確認のままDoneへ通せない) (#161)", async () => {
+  // 検収まで済ませる (人間のUI操作と同じ道)
+  const id = await createTask("検収済みだがゴミ箱を通ったタスク", "review");
+  await fetch(`${API}/api/tasks/${id}/checked`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ checked: true }),
+  });
+  const checkedAt = async () =>
+    (await mcp("query_log", { scope: "audit", sql: `SELECT checked_at FROM tasks WHERE id=${id}` }))
+      .rows[0].checked_at;
+  expect(await checkedAt(), "検収の印が付いていない").toBeTruthy();
+
+  // ゴミ箱 → 復元。**AIが呼べるMCPツールだけで往復できる**のがこの穴の入口だった
+  expect((await mcp("delete_tasks", { ids: [id] })).ok).toBe(true);
+  expect((await mcp("restore_tasks", { ids: [id] })).ok).toBe(true);
+
+  // 復元後は未検収に戻っている (ゴミ箱と復元の間に人間の確認は一度も入っていない)
+  expect(await checkedAt(), "古い検収の印が生き返っている").toBeFalsy();
+
+  // 印が無いので確定も通らない。setChecked はRESTにしか無いので、AIはここから先へ進めない
+  const res = await fetch(`${API}/api/tasks/approve`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ids: [id] }),
+  });
+  const after = await mcp("query_log", { scope: "audit", sql: `SELECT status FROM tasks WHERE id=${id}` });
+  expect(res.ok).toBe(true); // 一括検収そのものは成功で返る (条件を満たす件だけ通す)
+  expect(after.rows[0].status, "未検収なのにDoneへ入った").not.toBe("done");
+});
+
+test("期限の形式が違うとその指定だけ捨てて名指しで返す (#153)", async () => {
+  // REST は 400 で断る
+  const id = await createTask("期限を入れたいタスク");
+  const bad = await fetch(`${API}/api/tasks/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ due: "not-a-date" }),
+  });
+  expect(bad.status).toBe(400);
+  expect((await bad.json()).error).toContain("YYYY-MM-DD");
+
+  // エージェント経路 (MCP) は行ごと落とさず、他の項目は保存して badDue で報告する
+  const r = await mcp("update_tasks", { updates: [{ id, summary: "現況は保存される", due: "2026-02-31" }] });
+  expect(r.badDue, "期限を捨てたことが名指しで返っていない").toContain(id);
+  expect(r.note).toContain("期限の形式");
+
+  const row = await mcp("query_log", {
+    scope: "audit",
+    sql: `SELECT due, summary FROM tasks WHERE id=${id}`,
+  });
+  expect(row.rows[0].due, "暦に無い日付が保存された").toBeFalsy();
+  expect(row.rows[0].summary, "期限以外も一緒に落ちている").toBe("現況は保存される");
+
+  // 正しい形式は通る (弾きすぎていないことの確認)
+  const ok = await mcp("update_tasks", { updates: [{ id, due: "2026-08-17" }] });
+  expect(ok.badDue).toBeUndefined();
+  expect((await mcp("query_log", { scope: "audit", sql: `SELECT due FROM tasks WHERE id=${id}` })).rows[0].due)
+    .toBe("2026-08-17");
+});
+
+test("search_tasks は title_only で本文のかすりを落とせる (#176)", async () => {
+  const hit = await createTask("スクリーンショットを撮り直す");
+  const noise = await createTask("ダークモードの検討");
+  // 経緯メモに語が入っているだけのタスク (#130 で実際に起きた形)。
+  // context の全文上書きは版が要るので、版の要らない context_append で足す
+  await mcp("update_tasks", {
+    updates: [{ id: noise, context_append: "提出前に見た目を揃えるかどうか。スクリーンショットの見え方も含む" }],
+  });
+
+  const wide = await mcp("search_tasks", { terms: ["スクリーンショット"] });
+  const wideIds = wide.hits.map((h: any) => h.id);
+  expect(wideIds).toContain(hit);
+  expect(wideIds, "本文で当たるものが出ていない (前提が崩れている)").toContain(noise);
+
+  const narrow = await mcp("search_tasks", { terms: ["スクリーンショット"], title_only: true });
+  const narrowIds = narrow.hits.map((h: any) => h.id);
+  expect(narrowIds).toContain(hit);
+  expect(narrowIds, "タイトル限定なのに本文で当たったものが残っている").not.toContain(noise);
+  // 絞ったときは会話ログも引かない (絞ったつもりで同じ量を読むことにならないように)
+  expect(narrow.chatHits).toBeUndefined();
+  expect(narrow.titleOnly).toBe(true);
+});

@@ -4,7 +4,7 @@ import { extractChoices, suggestSkipReason } from "./chat.js";
 import { differs } from "./archive.js";
 import { readFileSync } from "node:fs";
 import { tools } from "./chat.js";
-import { DONE_GATE_RULE, isTaskStatus, mayEnterDone } from "./db.js";
+import { DONE_GATE_RULE, isDueDate, isTaskStatus, mayEnterDone } from "./db.js";
 import { AGENT_STATUS_VALUES } from "./chat.js";
 import { isAllowedOrigin, isBrowserCrossSite } from "./origin.js";
 
@@ -143,6 +143,42 @@ test("Review列以外からは入れない", () => {
 
 test("ゴミ箱にあるものは入れない (印が残っていても)", () => {
   assert.equal(mayEnterDone({ ...review, trashedAt: "2026-08-12 09:00" }), false);
+});
+
+// #153: 期限の形式チェック。契約は YYYY-MM-DD と言っていたのに確かめておらず、
+// `not-a-date` がそのまま保存された (ユーザー報告)。
+// **保存できてしまう値のほうが、弾かれる値より始末が悪い** — バッジや「期限が近い順」が静かに狂う
+test("期限は YYYY-MM-DD だけ通る", () => {
+  for (const ok of ["2026-08-17", "2026-01-01", "2024-02-29" /* 閏年 */, "2026-12-31"]) {
+    assert.equal(isDueDate(ok), true, `${ok} は通るはず`);
+  }
+});
+
+test("**暦として在る日かも見る** (正規表現だけだと 2026-02-31 が通る)", () => {
+  for (const ng of ["2026-02-31", "2026-13-01", "2026-00-10", "2026-01-32", "2023-02-29"]) {
+    assert.equal(isDueDate(ng), false, `${ng} は弾くはず`);
+  }
+});
+
+test("形が違うものを弾く (報告された not-a-date を含む)", () => {
+  for (const ng of [
+    "not-a-date", // ユーザー報告の実物
+    "2026/08/17", // 区切りが違う
+    "2026-8-17", // 0埋めなし
+    "26-08-17",
+    "2026-08-17T00:00:00", // 時刻つき
+    " 2026-08-17", // 前後の空白は通さない (保存前に整えるのは呼ぶ側の責任)
+    "2026-08-17 ",
+    "",
+  ]) {
+    assert.equal(isDueDate(ng), false, `${JSON.stringify(ng)} は弾くはず`);
+  }
+});
+
+test("文字列以外を渡されても落ちない (外から来る値なので型は当てにしない)", () => {
+  for (const ng of [null, undefined, 20260817, {}, [], true, new Date()]) {
+    assert.equal(isDueDate(ng), false, `${JSON.stringify(ng)} は弾くはず`);
+  }
 });
 
 test("エージェントの契約に done は無い — 選べないものは選ばれない", () => {

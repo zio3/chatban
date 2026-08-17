@@ -152,6 +152,17 @@ export const SUMMARY_DESCRIPTION =
 export const CONTEXT_WRITE_DESCRIPTION =
   "経緯メモの全文上書き。累積の記録なので、既存を読んでマージした全文を渡す(書き直すときに要約すると前の情報が消える)。渡すときは context_version も必須。1件足すだけなら context_append を使う — そちらは読む必要も版も要らない";
 
+/** #153: 期限の契約。以前は「期限 YYYY-MM-DD」だけで、**渡した値が使われたかどうかが
+ * 返り値から分からなかった** — `not-a-date` がそのまま保存された報告がある。
+ * 検証を足したので、契約側でも「実在する日付」と「違うと捨てて報告する」ことを言う */
+export const DUE_DESCRIPTION =
+  "期限 YYYY-MM-DD (実在する日付。相対表現は今日の日付から解決する)。形式が違うとその指定だけ捨てて badDue で名指しで返す — 保存されたつもりにならないよう、返り値を確かめる";
+
+/** #176: 検索を絞る唯一のつまみ。OR検索は表記ゆれの展開に必要なので変えず、
+ * 「見る範囲」を狭める側で絞れるようにする */
+export const SEARCH_TITLE_ONLY_DESCRIPTION =
+  "trueにすると本文(経緯メモ・会話ログ)を見ずタイトルだけを引く。候補が広すぎて読み直しになるときの絞り込み用。まずは省略して引き、ノイズが多ければこれで引き直す";
+
 /** 依存の契約。「順番に着手したい」を依存にしてしまう失敗が実際に起きた
  * (「DateTimeOffset化はデモの後」を blocked_by で表現していた)。
  * 依存は着手可能性の話で、優先順位は sort(並び順)で表す。
@@ -185,7 +196,7 @@ export const tools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
               properties: {
                 title: { type: "string" },
                 context: { type: "string", description: "登録に至った経緯・会話で出た論点・決まったこと。相談や議論の流れから登録するときは必ず書く (タイトルだけでは背景が失われる)" },
-                due: { type: "string", description: "期限 YYYY-MM-DD。相対表現は今日の日付から解決" },
+                due: { type: "string", description: DUE_DESCRIPTION },
                 blocked_by: { type: "array", items: { type: "integer" }, description: BLOCKED_BY_DESCRIPTION },
               },
               required: ["title"],
@@ -213,7 +224,7 @@ export const tools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
                 title: { type: "string" },
                 status: { type: "string", enum: STATUS_VALUES, description: STATUS_DESCRIPTION },
                 summary: { type: "string", description: SUMMARY_DESCRIPTION },
-                due: { type: ["string", "null"], description: "期限 YYYY-MM-DD。解除はnull" },
+                due: { type: ["string", "null"], description: `${DUE_DESCRIPTION}。解除はnull` },
                 blocked_by: { type: ["array", "null"], items: { type: "integer" }, description: `${BLOCKED_BY_DESCRIPTION}。全置換で、解除はnull` },
                 rejected: { type: "boolean", description: REJECTED_DESCRIPTION },
                 context: { type: "string", description: CONTEXT_WRITE_DESCRIPTION },
@@ -297,6 +308,7 @@ export const tools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
         type: "object",
         properties: {
           terms: { type: "array", items: { type: "string" }, description: "検索語(最大10)。言い換え・英日表記を並べる" },
+          title_only: { type: "boolean", description: SEARCH_TITLE_ONLY_DESCRIPTION },
         },
         required: ["terms"],
       },
@@ -401,7 +413,7 @@ async function execTool(name: string, args: any, uiActions: UiAction[], events: 
       };
     }
     case "search_tasks": {
-      const r = searchTasks(args.terms ?? []);
+      const r = searchTasks(args.terms ?? [], undefined, !!args.title_only);
       // スニペットは「当たった箇所の周辺」でしかないので、判断の核心が範囲外にあることが多い。
       // 検索は「どのタスクか」を絞るまでの道具と位置づけ、中身は query_log で読ませる
       return {

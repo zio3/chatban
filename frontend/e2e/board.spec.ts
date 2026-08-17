@@ -749,7 +749,15 @@ test("summary の契約はチャットとMCPで同じ文言になっている (�
   expect(summaryDesc).not.toContain("状態ではなく");
 
   const dep = update.inputSchema.properties.updates.items.properties.blocked_by.description;
-  expect(dep).toContain("それが終わらないと着手できない");
+  // #152: 依存は緩い参照で、コードは何も止めない (mayEnterDone は依存先を見ない)。
+  // 以前は「それが終わらないと着手できない」と書いてあり、実装が課していない制約を
+  // 宣言していた — 相互依存や循環を見たエージェントが「矛盾」として直そうとする。
+  // 契約側で「止めない」「循環でも矛盾ではない」を言えていることを検査する
+  expect(dep).toContain("コードは何も止めない");
+  expect(dep).toContain("循環していても矛盾ではない");
+  expect(dep).not.toContain("着手できない");
+  // 依存を優先順位に使う失敗 (#41) への歯止めは残っていること
+  expect(dep).toContain("reorder_tasks");
 
   // 契約が「渡せないもの」を案内していないこと。additionalProperties:false なので、
   // 存在しないパラメータ名を書くと渡した側が確実にエラーになる (実際 rejected の説明が

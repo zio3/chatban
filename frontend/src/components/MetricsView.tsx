@@ -41,7 +41,8 @@ export default function MetricsView() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    apiFetch("/api/metrics")
+    // POST なのは副作用があるから (外部の請求API・カタログを引き、単価をDBへ書く。#180)
+    apiFetch("/api/metrics", { method: "POST" })
       .then((r) => r.json())
       .then(setData)
       .catch((e) => setError(String(e)));

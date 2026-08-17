@@ -6,7 +6,7 @@ import { readFileSync } from "node:fs";
 import { tools } from "./chat.js";
 import { DONE_GATE_RULE, exportableSettings, isTaskStatus, mayEnterDone } from "./db.js";
 import { AGENT_STATUS_VALUES } from "./chat.js";
-import { isAllowedOrigin } from "./origin.js";
+import { isAllowedOrigin, isBrowserCrossSite } from "./origin.js";
 
 // #180: 認証を廃止したので、境界は「待ち受けを閉じる」と「知らないページを断る」だけ。
 // **cors() の許可リストは境界にならない** — 許可しない Origin には ACAO を付けないだけで
@@ -26,6 +26,22 @@ test("知らないページからは断る", () => {
   assert.equal(isAllowedOrigin("http://localhost:5174", ORIGINS), false);
   assert.equal(isAllowedOrigin("https://localhost:5173", ORIGINS), false);
   assert.equal(isAllowedOrigin("http://localhost:5173.evil.example", ORIGINS), false);
+});
+
+// Origin だけ見ていると、**Origin が付かないブラウザ要求**が素通りする。
+// `<img src="http://localhost:8787/api/suggestions">` のような subresource GET がそれで、
+// 実際そこは有料のLLM呼び出しを起こしていた (自動レビュー指摘)。
+// Sec-Fetch-Site はブラウザが自分で付けるのでページ側から偽装できない
+
+test("他所のページからの要求は Sec-Fetch-Site で断る (Originが無くても)", () => {
+  assert.equal(isBrowserCrossSite("cross-site"), true);
+});
+
+test("自分のページとブラウザ以外は通す", () => {
+  assert.equal(isBrowserCrossSite("same-origin"), false);
+  assert.equal(isBrowserCrossSite("same-site"), false);
+  assert.equal(isBrowserCrossSite("none"), false); // アドレス欄に打った / ブックマーク
+  assert.equal(isBrowserCrossSite(undefined), false); // curl・スクリプト・MCP は送らない
 });
 
 test("Originが無い呼び出しは通す (curl・スクリプト・MCP)", () => {

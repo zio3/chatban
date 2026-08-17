@@ -19,11 +19,27 @@ export function isAllowedOrigin(origin: string | undefined | null, allowed: stri
   // Origin が無い呼び出しは通す。curl・スクリプト・MCP (Claude Code) がこれで、
   // 塞ぐと Claude Code から /mcp に繋がらなくなる (ローカルのエージェント用の口)。
   //
-  // 安全なのは **状態を変える cross-origin の fetch / フォーム送信と WebSocket が
-  // 必ず Origin を伴う**ため。ただし **トップレベルのGETナビゲーション (リンクを踏む、
-  // アドレス欄に打つ) には Origin が付かない**ので、これは
-  // **「GETに副作用を持たせない」ことを前提にした判断**である。
-  // GETで状態を変えるAPIを足すと、この前提ごと崩れる (自動レビュー指摘)
+  // **ここだけでは足りない。**Origin が付かないブラウザ要求が2種類ある —
+  // トップレベルのGETナビゲーション (リンクを踏む) と、`<img src>` のような subresource GET。
+  // 後者は悪意あるページから撃てるので、Origin の有無だけを見ていると素通りする。
+  // それを塞ぐのが下の isBrowserCrossSite (自動レビュー指摘で追加)
   if (!origin) return true;
   return allowed.includes(origin);
+}
+
+/** **Origin が付かないブラウザ要求**を捕まえるための第2の判定。
+ *
+ * 悪意あるページは `<img src="http://localhost:8787/api/...">` で GET を撃てる。
+ * この要求に Origin は付かないので `isAllowedOrigin` は通してしまう。実際、
+ * `GET /api/suggestions` は**有料のLLM呼び出しを起こす**ので、開いているだけで
+ * 課金と記録を増やされる経路だった (自動レビュー指摘)。
+ *
+ * `Sec-Fetch-Site` は**ブラウザが自分で付ける**ヘッダ (ページ側から偽装できない)。
+ * `cross-site` を断れば、他所のページからの要求は方式を問わず落ちる。
+ * curl・スクリプト・MCP はこのヘッダを送らないので影響を受けない。
+ *
+ * 「GETに副作用を持たせない」設計は**それはそれで守る** (副作用のあるものは POST にした)。
+ * ここは、うっかり戻したときに事故らないための二重化 */
+export function isBrowserCrossSite(secFetchSite: string | undefined | null): boolean {
+  return secFetchSite === "cross-site";
 }

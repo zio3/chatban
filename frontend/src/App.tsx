@@ -235,7 +235,8 @@ export default function App() {
   // ✨AI提案チップ (#75): ボードの文脈を読んだ提案を非同期で追加 (固定チップは即時表示の保険)
   const [aiSuggestions, setAiSuggestions] = useState<Suggestion[]>([]);
   const fetchAiSuggestions = useCallback(() => {
-    apiFetch("/api/suggestions")
+    // POST なのは副作用があるから (有料のLLM呼び出しが走る。#180)
+    apiFetch("/api/suggestions", { method: "POST" })
       .then((r) => r.json())
       .then((d) =>
         setAiSuggestions(

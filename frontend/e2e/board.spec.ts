@@ -1079,6 +1079,29 @@ test("知らないページからのRESTは403で断る (認証が無い以上�
   expect(noOrigin.status).toBe(200);
 });
 
+test("Originの付かないブラウザGET (<img>相当) も断る。有料の呼び出しを撃たせない (#180)", async () => {
+  // 悪意あるページは <img src="http://localhost:8787/api/..."> で GET を撃てる。
+  // この要求に Origin は付かないので Origin 判定では止まらない。
+  // 止めるのは Sec-Fetch-Site (ブラウザが自分で付けるのでページ側から偽装できない)
+  const res = await fetch(`${API}/api/board`, {
+    headers: { "Sec-Fetch-Site": "cross-site", "Sec-Fetch-Mode": "no-cors", "Sec-Fetch-Dest": "image" },
+  });
+  expect(res.status).toBe(403);
+
+  // 対照: 自分のページからの要求は通る
+  const ok = await fetch(`${API}/api/board`, {
+    headers: { Origin: "http://localhost:5199", "Sec-Fetch-Site": "same-origin" },
+  });
+  expect(ok.status).toBe(200);
+});
+
+test("お金が動く口はGETに置かない (#180)", async () => {
+  // GET のままだと、開いているだけで課金と記録を増やされる。
+  // 「読み取りに見えるが副作用がある」ものは POST にして、Origin判定と二重で守る
+  const res = await fetch(`${API}/api/suggestions`);
+  expect(res.status).toBe(404); // GETのルートは存在しない
+});
+
 test("知らないページからのSocket接続はハンドシェイクで断る (#180)", async () => {
   // WebSocketのハンドシェイクは CORS の対象外なので、cors 設定では止まらない。
   // 止めるのは allowRequest。ここが開いていると board:changed を外部ページに配信してしまう
@@ -1437,7 +1460,7 @@ test("AI提案チップはプロジェクトごとにOFFにできる。OFFの間
     return (r.rows as any[])[0].c as number;
   };
   const before = await llmCalls();
-  const s = (await (await fetch(`${API}/api/suggestions`)).json()) as any;
+  const s = (await (await fetch(`${API}/api/suggestions`, { method: "POST" })).json()) as any;
   expect(s.suggestions).toEqual([]);
   expect(await llmCalls(), "OFFなのにLLMを呼んでいる").toBe(before);
 
@@ -1467,7 +1490,7 @@ test("チャットの処理中は提案チップを生成しない (#162)", asyn
 
   // 立ち上がりを待ってから確認する
   await new Promise((r) => setTimeout(r, 300));
-  const during = (await (await fetch(`${API}/api/suggestions`)).json()) as any;
+  const during = (await (await fetch(`${API}/api/suggestions`, { method: "POST" })).json()) as any;
   expect(during.suggestions).toEqual([]);
 
   await chatting;
@@ -1501,7 +1524,7 @@ test("先に始まっていた提案生成は、チャットが始まったら�
     const before = abortLines();
 
     // suggestを先に始める。待たない
-    const suggesting = fetch(`${API}/api/suggestions`)
+    const suggesting = fetch(`${API}/api/suggestions`, { method: "POST" })
       .then((r) => r.json())
       .catch(() => null);
 

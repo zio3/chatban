@@ -50,7 +50,8 @@ export default function SettingsView() {
 
   useEffect(() => {
     load().catch((e) => setError(String(e)));
-    apiFetch("/api/models")
+    // POST なのは副作用があるから (外部カタログを引き、model_prices を更新する。#180)
+    apiFetch("/api/models", { method: "POST" })
       .then((r) => r.json())
       .then((d) => setModels(d.models ?? []))
       .catch(() => setModels([]));

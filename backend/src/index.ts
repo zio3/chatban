@@ -9,7 +9,7 @@ import { generateSuggestions, runChatTurn } from "./chat.js";
 import { archiveState, hooks } from "./hooks.js";
 import { log } from "./log.js";
 import { buildMcpServer } from "./mcp.js";
-import { isAllowedOrigin } from "./origin.js";
+import { isAllowedOrigin, isBrowserCrossSite } from "./origin.js";
 import { resetPromptState } from "./promptState.js";
 import { assertTimezone } from "./timezone.js";
 import {
@@ -82,6 +82,12 @@ app.use(
 // ブラウザが遮るのは「レスポンスを読むこと」だけなので、書き込みは通ってしまう。
 // 認証が無い以上ここが最後の砦なので、**明示的に 403 で断る**
 app.use((req, res, next) => {
+  // Sec-Fetch-Site はブラウザが自分で付ける (ページ側から偽装できない)。
+  // Origin の付かない `<img src>` のような subresource GET を捕まえるのはこちら
+  if (isBrowserCrossSite(req.header("Sec-Fetch-Site"))) {
+    log("api", `他所のページからの要求を拒否しました (Sec-Fetch-Site): ${req.method} ${req.path}`);
+    return res.status(403).json({ error: "forbidden origin" });
+  }
   if (isAllowedOrigin(req.header("Origin"), ALLOWED_ORIGINS)) return next();
   log("api", `許可していないOriginからの要求を拒否しました: ${req.header("Origin")} ${req.method} ${req.path}`);
   res.status(403).json({ error: "forbidden origin" });
@@ -413,7 +419,8 @@ app.post("/api/tasks/:id/chat", async (req, res) => {
   }
 });
 
-app.get("/api/metrics", async (_req, res) => {
+// #180: POST。請求API・モデルカタログを外部に取りに行き、単価をDBへ書く副作用がある
+app.post("/api/metrics", async (_req, res) => {
   // #21: OrcaRouter請求サマリー(実$)を合流。外部API失敗時はnull (トークン集計は常に返す)
   const billing = await fetchBillingUsage();
   const m = metrics();
@@ -442,7 +449,11 @@ app.get("/api/audit", (_req, res) => {
 });
 
 // AI提案チップ (#75): ボードの文脈から「いま価値のある操作」を最大3つ。失敗時は空配列 (固定チップが保険)
-app.get("/api/suggestions", async (_req, res) => {
+// #180: **POST にしてあるのは副作用があるから。**ここは有料のLLM呼び出しを起こし、
+// llm_calls に記録も増える。GET のままだと、悪意あるページが `<img src>` で撃つだけで
+// 課金と記録を増やせる (Origin が付かないので Origin 判定では止まらない。自動レビュー指摘)。
+// 「読み取りに見えるがお金が動く」ものは GET に置かない
+app.post("/api/suggestions", async (_req, res) => {
   try {
     res.json({ suggestions: await generateSuggestions() });
   } catch (e: any) {
@@ -570,7 +581,8 @@ app.post("/api/settings/models", (req, res) => {
 });
 
 // モデル候補一覧 (単価つき)。外部API失敗時は空配列 — 手入力のフォールバックがあるので致命的でない
-app.get("/api/models", async (_req, res) => {
+// #180: POST。外部API (モデルカタログ) を取りに行き、model_prices を更新する副作用がある
+app.post("/api/models", async (_req, res) => {
   try {
     res.json({ models: await fetchModelCatalog() });
   } catch (e: any) {
@@ -640,9 +652,11 @@ app.post("/mcp", (_req, res) => {
 app.get(["/mcp", "/mcp/:projectId"], (_req, res) => res.status(405).json({ error: "stateless server: POST only" }));
 app.delete(["/mcp", "/mcp/:projectId"], (_req, res) => res.status(405).json({ error: "stateless server: POST only" }));
 
-// **待ち受けはループバックに限定する。これが唯一の防壁。**ホストを省略するとNodeの既定で
-// 全インターフェース (0.0.0.0) に開き、同じLANにいる誰でも板を読み書きできてしまう。
-// #180 で認証を廃止したので、**代わりに守るものはもう無い** — ここが開いた時点で無防備になる。
+// **待ち受けはループバックに限定する。**#180 で認証を廃止したあとの防壁は2つで、これはその1枚目
+// (もう1枚は上の Origin / Sec-Fetch-Site の拒否 — こちらは「利用者自身が開いたページ」を止める)。
+// ホストを省略するとNodeの既定で全インターフェース (0.0.0.0) に開き、
+// 同じLANにいる誰でも板を読み書きできてしまう。ここが開くと、残る1枚はブラウザ由来の要求しか見ないので、
+// **他の端末からの curl は素通りになる**。
 // 環境変数で開ける逃げ道は用意しない (「開けられる」が残ると、いつか開ける日が来る)。
 // 外から使いたくなったら、認証を戻すのではなく SSH ポートフォワードやトンネルを使う
 server.listen(PORT, "127.0.0.1", () => {

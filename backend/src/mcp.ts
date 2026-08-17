@@ -15,7 +15,6 @@ import {
 } from "./chat.js";
 import { z } from "zod";
 import {
-  queryLlmCalls,
   queryLogHelp,
   queryProjectData,
   reorderTasks,
@@ -27,7 +26,6 @@ import {
   listSummaryCards,
   listTasks,
   listTrashedTasks,
-  metrics,
   searchTasks,
   setProjectContext,
   updateTasks,
@@ -226,17 +224,16 @@ export function buildMcpServer(onEvent: (kind: "board" | "proposals") => void): 
     {
       description: QUERY_LOG_DESCRIPTION,
       inputSchema: {
-        scope: z.enum(["cost", "audit"]).describe("cost=LLM呼び出し記録 / audit=会話・割り振り・タスク"),
         sql: z.string().describe("SELECT または WITH で始まる1文"),
       },
     },
-    async ({ scope, sql }) => {
+    async ({ sql }) => {
       try {
-        return text(scope === "audit" ? queryProjectData(sql) : queryLlmCalls(sql));
+        return text(queryProjectData(sql));
       } catch (e: any) {
         // 失敗したら、直せるだけの材料を一緒に返す。チャットと同じ関数を使う
         const error = e?.message ?? String(e);
-        return text({ ok: false, error, ...queryLogHelp(scope, error) });
+        return text({ ok: false, error, ...queryLogHelp(error) });
       }
     }
   );

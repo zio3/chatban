@@ -2,7 +2,6 @@ import fs, { readFileSync } from "node:fs";
 import path, { join } from "node:path";
 import { homedir } from "node:os";
 import OpenAI from "openai";
-import { getSetting, loadModelPrices, recordLlmCall, saveModelPrices } from "./db.js";
 import { currentProjectId } from "./store.js";
 import { log } from "./log.js";
 import { messagesCompletion, usesMessagesApi } from "./messagesRoute.js";
@@ -22,28 +21,16 @@ const BASE_URL = process.env.ORCA_BASE_URL ?? "https://www.orcarouter.ai/v1";
 
 export const client = new OpenAI({ apiKey: loadApiKey(), baseURL: BASE_URL });
 
-// #21: OrcaRouterの課金サマリーAPI (docs/operations/billing-and-usage)。
-// total_usageはセント表記。60秒キャッシュ (毎回外部に問い合わせない)
-let billingCache: { totalUsageUsd: number; fetchedAt: number } | null = null;
-export async function fetchBillingUsage(): Promise<{ totalUsageUsd: number } | null> {
-  if (billingCache && Date.now() - billingCache.fetchedAt < 60_000) {
-    return { totalUsageUsd: billingCache.totalUsageUsd };
-  }
-  try {
-    const res = await fetch("https://api.orcarouter.ai/v1/dashboard/billing/usage", {
-      headers: { Authorization: `Bearer ${loadApiKey()}` },
-    });
-    if (!res.ok) return null;
-    const data = (await res.json()) as { total_usage?: number };
-    if (typeof data.total_usage !== "number") return null;
-    const totalUsageUsd = data.total_usage / 100;
-    billingCache = { totalUsageUsd, fetchedAt: Date.now() };
-    return { totalUsageUsd };
-  } catch (e: any) {
-    log("billing", `usage fetch failed: ${e?.message ?? e}`);
-    return null;
-  }
-}
+// #181: 計測系を撤去した。ここにあったもの:
+//  - fetchBillingUsage() — OrcaRouter専用の課金サマリーAPI (残高表示)
+//  - fetchModelCatalog() — 182件の単価つきカタログ (10分キャッシュ)。**単価を返すのは
+//    OrcaRouterの独自拡張**で、OpenAI/Anthropic の /v1/models は返さない (#182で直接APIへ移る)
+//  - priceOf / costOf / estimateCallCost / キャッシュ割引率の仮定値
+//
+// **副産物: LLM呼び出しごとのカタログ依存が消えた。**単価を打刻するために毎回
+// fetchModelCatalog() を触っていたので、起動直後の呼び出しは外部APIを待っていた。
+// トークン・キャッシュ・レイテンシは backend/logs/ に残る (`tokens=8208/23 cached=3200 1555ms`) ので、
+// 速度やキャッシュ効きの確認はログでできる。個人利用に requestごとの単価計算は要らない
 
 // 用途別モデル戦略 (Day2の実測比較で決定。切り替えはモデルID1行 — ルーターの利点):
 //  - 対話(main): OpenAI系は自動プロンプトキャッシュがOrcaRouter経由でも効く(実測: 2回目以降の入力85-95%が0.1x課金)。
@@ -52,105 +39,12 @@ export async function fetchBillingUsage(): Promise<{ totalUsageUsd: number } | n
 //    anthropic/ のモデルはそちらへ流す。既定は実績のある gpt-5.4-mini のまま
 //  - 要約の要素分解(archive): 品質が肝 + 非同期でレイテンシ許容 → ルーティングに委任
 //  - 定型(cheap): タイトル生成など → コスト優先ルーティング
-// #88: 管理画面のモデル選択肢。OrcaRouterの /v1/models は単価・コンテキスト長・入力モダリティを返す。
-// 182件と多く内容もほぼ不変なので10分キャッシュする
-export interface ModelCatalogEntry {
-  id: string;
-  name: string | null;
-  inputPerM: number | null;
-  outputPerM: number | null;
-  contextLength: number | null;
-  inputModalities: string[];
-}
-let catalogCache: { entries: ModelCatalogEntry[]; fetchedAt: number } | null = null;
-
-/** #106: 料金表はDBに保存したものを正とする。外部APIは補充役。
- * 呼び出しごとの単価打刻に使うので、APIが落ちている・起動直後という理由で
- * 単価NULLの行ができるのを避けたい。取得できたらDBを更新して次回以降に備える */
-export async function fetchModelCatalog(): Promise<ModelCatalogEntry[]> {
-  if (catalogCache && Date.now() - catalogCache.fetchedAt < 600_000) return catalogCache.entries;
-  try {
-    const res = await client.models.list();
-    const entries = (res.data as any[]).map((m) => ({
-      id: m.id as string,
-      name: (m.name as string) ?? null,
-      inputPerM: m.pricing?.prompt_per_million != null ? Number(m.pricing.prompt_per_million) : null,
-      outputPerM: m.pricing?.completion_per_million != null ? Number(m.pricing.completion_per_million) : null,
-      contextLength: (m.context_length as number) ?? null,
-      inputModalities: (m.architecture?.input_modalities as string[]) ?? [],
-    }));
-    saveModelPrices(entries);
-    catalogCache = { entries, fetchedAt: Date.now() };
-    return entries;
-  } catch (e: any) {
-    // 外部が落ちていてもDBの料金表で動き続ける (単価が古いだけで機能は止まらない)
-    const stored = loadModelPrices();
-    log("llm", `model catalog fetch failed, DBの料金表 ${stored.length}件で継続: ${e?.message ?? e}`);
-    if (stored.length === 0) throw e;
-    catalogCache = { entries: stored, fetchedAt: Date.now() };
-    return stored;
-  }
-}
-
-/** モデルIDから単価を引く。routed_model は provider 接頭辞なしで返ることがある */
-export function priceOf(catalog: ModelCatalogEntry[], id: string | null): ModelCatalogEntry | undefined {
-  if (!id) return undefined;
-  return catalog.find((m) => m.id === id || m.id.split("/").pop() === id);
-}
-
-/** キャッシュ入力の割引率。カタログに欄がないので仮定値 (OpenAI系は概ね定価の10%) */
-export const CACHE_DISCOUNT = 0.1;
-
-/** キャッシュに**書く**ときの割増率。Anthropic の5分キャッシュは標準入力の1.25倍。
- * 読みと同じ扱いにすると、初回に払う25,000トークン分の概算が25%安く出る (外部レビュー指摘)。
- * OpenAI系は自動キャッシュで書き込みの追加料金が無いため、この係数は
- * cache_creation_tokens を返す経路 (Anthropic Messages API) でしか効かない */
-export const CACHE_WRITE_MULTIPLIER = 1.25;
-
-/** 1呼び出しのコスト概算。routed_model の実単価 × 実測トークン。
- * 実測(2026-08-10)では主力モデルは請求と100%一致するが、gpt-5.4-pro のように
- * カタログ単価が実態とずれるモデルもあるため、あくまで概算として扱う (UIにも明記) */
-export async function estimateCallCost(
-  routedModel: string | null,
-  model: string,
-  promptTokens: number,
-  completionTokens: number,
-  cachedTokens: number,
-  /** キャッシュに書いたぶん。読みより高いので別に受ける (省略時は0=書き込み無し) */
-  cacheCreationTokens = 0
-): Promise<number | null> {
-  const catalog = await fetchModelCatalog();
-  // routed_model は provider 接頭辞なしで返ることがある ("gpt-5.4-mini-2026-03-17")
-  const find = (id: string | null) =>
-    id ? catalog.find((m) => m.id === id || m.id.split("/").pop() === id) : undefined;
-  const e = find(routedModel) ?? find(model);
-  if (!e || e.inputPerM == null || e.outputPerM == null) return null;
-  return costOf(e.inputPerM, e.outputPerM, promptTokens, completionTokens, cachedTokens, cacheCreationTokens);
-}
-
-/** 入力を「新規 / キャッシュ読み / キャッシュ書き」の3つに割って単価を掛ける。
- * 記録時 (llm.ts) と再計算時 (/api/metrics) で同じ式を使う — 片方だけ直すとズレる */
-export function costOf(
-  inputPerM: number,
-  outputPerM: number,
-  promptTokens: number,
-  completionTokens: number,
-  cachedTokens: number,
-  cacheCreationTokens = 0
-): number {
-  const fresh = Math.max(0, promptTokens - cachedTokens - cacheCreationTokens);
-  return (
-    (fresh * inputPerM +
-      cachedTokens * inputPerM * CACHE_DISCOUNT +
-      cacheCreationTokens * inputPerM * CACHE_WRITE_MULTIPLIER +
-      completionTokens * outputPerM) /
-    1e6
-  );
-}
 
 export type ModelSlot = "main" | "archive" | "cheap";
 
-/** 出荷時の既定値。管理画面(#88)で上書きされていない場合はこれが使われる */
+/** 用途別モデル。#181 で ⚙設定タブ (#88 の実行時切り替え) を撤去したので、**env だけが供給元**。
+ * 選択UIはカタログ (182件) から選ばせる形だったが、カタログごと消えたため供給元を失った。
+ * 個人利用なら env か設定ファイルで足りる (Claude Code から直接書ける) */
 export const MODEL_DEFAULTS: Record<ModelSlot, string> = {
   main: process.env.ORCA_MODEL_MAIN ?? "openai/gpt-5.4-mini-2026-03-17",
   // 2026-08-11: orcarouter/auto から gpt-5.6-luna へ。実測40〜80秒(最大110秒)が4〜12秒になった。
@@ -168,10 +62,10 @@ export const MODEL_DEFAULTS: Record<ModelSlot, string> = {
   cheap: process.env.ORCA_MODEL_CHEAP ?? "openai/gpt-5.6-luna",
 };
 
-/** 実効モデルID。優先順位: 管理画面の設定 > env > 既定値。
- * 呼び出しのたびにDBを引くので、再起動なしで切り替えが効く (#88) */
+/** 実効モデルID。#181 以降は env (または既定値) だけ。
+ * かつては settings の `model.<slot>` を先に見て、再起動なしの切り替えを効かせていた (#88) */
 export function getModel(slot: ModelSlot): string {
-  return getSetting(`model.${slot}`) ?? MODEL_DEFAULTS[slot];
+  return MODEL_DEFAULTS[slot];
 }
 
 /** gpt-5.6-luna は function tools と reasoning_effort を併用できず400を返す
@@ -306,36 +200,8 @@ export async function chatCompletion(
     "llm",
     `<- ${purpose} routed=${res.model} finish=${res.choices[0]?.finish_reason} tokens=${res.usage?.prompt_tokens}/${res.usage?.completion_tokens} cached=${cachedTokens} ${elapsedMs}ms`
   );
-  // #106: 呼び出し時点の単価と概算額を打刻する。DBの料金表を使うので外部APIが落ちていても欠けない
-  const promptTokens = res.usage?.prompt_tokens ?? 0;
-  const completionTokens = res.usage?.completion_tokens ?? 0;
-  let priceInPerM: number | null = null;
-  let priceOutPerM: number | null = null;
-  let estimatedUsd: number | null = null;
-  try {
-    const e = priceOf(await fetchModelCatalog(), res.model ?? null) ?? priceOf(await fetchModelCatalog(), model);
-    if (e?.inputPerM != null && e.outputPerM != null) {
-      priceInPerM = e.inputPerM;
-      priceOutPerM = e.outputPerM;
-      estimatedUsd = costOf(e.inputPerM, e.outputPerM, promptTokens, completionTokens, cachedTokens, cacheCreationTokens);
-    } else {
-      log("llm", `単価が引けなかったので概算を記録できない: ${res.model ?? model}`);
-    }
-  } catch {
-    /* 単価が引けなくても記録自体は残す */
-  }
-  recordLlmCall({
-    purpose,
-    model,
-    routedModel: res.model ?? null,
-    promptTokens,
-    completionTokens,
-    cachedTokens,
-    cacheCreationTokens,
-    elapsedMs,
-    priceInPerM,
-    priceOutPerM,
-    estimatedUsd,
-  });
+  // #106 → #181: ここで単価を引いて llm_calls へ打刻していた (recordLlmCall)。撤去した。
+  // **打刻のために毎回 fetchModelCatalog() を待っていた**のが消えるので、呼び出しが素直になる。
+  // 記録は上の1行 (トークン・キャッシュ・レイテンシ) が backend/logs/ に残るだけで足りる
   return res;
 }

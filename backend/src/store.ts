@@ -47,26 +47,6 @@ CREATE TABLE IF NOT EXISTS settings (
   value TEXT NOT NULL,
   updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
 );
-CREATE TABLE IF NOT EXISTS model_prices (
-  id TEXT PRIMARY KEY,
-  input_per_m REAL,
-  output_per_m REAL,
-  context_length INTEGER,
-  input_modalities TEXT,
-  fetched_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
-);
-CREATE TABLE IF NOT EXISTS llm_calls (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  purpose TEXT NOT NULL,
-  model TEXT NOT NULL,
-  routed_model TEXT,
-  prompt_tokens INTEGER NOT NULL DEFAULT 0,
-  completion_tokens INTEGER NOT NULL DEFAULT 0,
-  cached_tokens INTEGER NOT NULL DEFAULT 0,
-  elapsed_ms INTEGER NOT NULL DEFAULT 0,
-  project_id INTEGER,
-  created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
-);
 `);
   // #107: 無効フラグ。削除するほどではないが普段は見せたくないプロジェクト用。
   // ドロップダウンから消えるだけで、設定画面には出る (実体もタスクもそのまま)
@@ -78,41 +58,38 @@ CREATE TABLE IF NOT EXISTS llm_calls (
     }
   };
   addProj("ALTER TABLE projects ADD COLUMN archived INTEGER NOT NULL DEFAULT 0");
-  // 旧DBから移設した llm_calls には project_id が無いので後付けする
-  const add = (sql: string) => {
-    try {
-      db.exec(sql);
-    } catch {
-      /* already exists */
-    }
-  };
-  add("ALTER TABLE llm_calls ADD COLUMN project_id INTEGER");
-  // #106: 呼び出し時点の単価と概算額を打刻する。あとで単価が改定されても過去の記録が変わらない。
-  // 単価も残すのは、キャッシュ割引率(0.1)が仮定値で、後から見直したときに再計算できるようにするため
-  add("ALTER TABLE llm_calls ADD COLUMN price_in_per_m REAL");
-  add("ALTER TABLE llm_calls ADD COLUMN price_out_per_m REAL");
-  add("ALTER TABLE llm_calls ADD COLUMN estimated_usd REAL");
-  // #172: キャッシュに「書いた」ぶん。読み(cached_tokens)と単価が違う(書き込みは1.25倍)ので別に持つ。
-  // 保存しないと /api/metrics の再計算で書き込み分を読み扱いしてしまい、初回の概算が25%安く出る
-  add("ALTER TABLE llm_calls ADD COLUMN cache_creation_tokens INTEGER NOT NULL DEFAULT 0");
 
   // #180: 認証の設定を消す。**特に auth.sessionSecret は平文のセッション署名鍵**で、
   // 読める相手は誰にでもなりすませた。使う側が消えたあとも残しておく理由が無い
   // (使われない秘密が置きっぱなしになるのが、いちばんよくある漏れ方)。
-  // allowedEmails は個人のメールアドレスなので、Export や記事の一次資料に混ざらないよう一緒に落とす。
+  // allowedEmails は個人のメールアドレスなので、記録に混ざらないよう一緒に落とす。
+  //
+  // #181: モデル設定 (model.main / archive / cheap) も消す。⚙設定タブを撤去して供給元が
+  // env だけになったので、DBに残っていると**画面から変えられない値が実効値として優先され続ける**
+  // (「設定したのに効かない」ではなく「消したのに効き続ける」ほうの事故)。
   //
   // 消えたときだけ記録する。**鍵の値そのものはログに出さない** (消した記録が漏洩経路になっては本末転倒)
-  const purged = db.prepare("DELETE FROM settings WHERE key LIKE 'auth.%'").run().changes;
-  if (purged > 0) log("schema", `認証の設定 ${purged}件 (署名鍵・許可リスト・クライアントID) を削除しました (#180)`);
+  const purged = db.prepare("DELETE FROM settings WHERE key LIKE 'auth.%' OR key LIKE 'model.%'").run().changes;
+  if (purged > 0) log("schema", `認証とモデルの設定 ${purged}件を削除しました (#180 / #181)`);
+
+  // #181: 計測系のテーブルを落とす。llm_calls (呼び出しごとのトークン・単価・概算額) と
+  // model_prices (182件の料金表)。**読まないだけにして残さない** — #179/#180 と同じ判断で、
+  // スキーマに残るとSQL窓口を広げた誰かが集計に使い、廃止したはずの軸が復活する。
+  // トークン・レイテンシは backend/logs/ に残るので、速度やキャッシュ効きの確認はログでできる
+  const droppedTables: string[] = [];
+  db.transaction(() => {
+    for (const t of ["llm_calls", "model_prices"]) {
+      if (!db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name = ?").get(t)) continue;
+      db.exec(`DROP TABLE IF EXISTS ${t}`);
+      droppedTables.push(t);
+    }
+  })();
+  if (droppedTables.length > 0) log("schema", `${droppedTables.join(" / ")} を削除しました (#181 計測系の撤去)`);
 }
 
-/** #106: コスト分析はLLMにSQLを書かせる。書き込めない接続を別に持つのが安全境界
- * (プロンプトで「SELECTだけ」と言っても漏れるが、readonly接続は漏れない) */
-let adminRo: Database.Database | null = null;
-export function adminReadonly(): Database.Database {
-  if (!adminRo) adminRo = new Database(ADMIN_PATH, { readonly: true });
-  return adminRo;
-}
+// #106 → #181: 管理DBの readonly 接続 (adminReadonly) もここにあった。
+// コスト分析のSQL窓口 (query_log の scope='cost') 専用だったので、計測系の撤去で用途を失った。
+// **プロジェクト側の readonly 接続 (projectReadonly) は残る** — 安全境界そのものは変わらない
 
 /** プロジェクトDBのスキーマ。DBを開くたびに流すので、新規作成と既存の移行が同じ経路になる
  * (EF Migration不使用の流儀: CREATE IF NOT EXISTS + ALTER の失敗は適用済みとして無視) */

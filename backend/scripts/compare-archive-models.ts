@@ -31,7 +31,7 @@ const MODELS = argModels ?? [
   "openai/gpt-5.4-mini-2026-03-17", // 現行の対話モデル (比較の基準)
   "openai/gpt-5-mini", // out $2.00 — 24秒/2,724tk
   "anthropic/claude-opus-4.8", // out $25.00 — 30秒/1,138tk。内容の正確さの上限を見る用
-  "orcarouter/fusion-mini", // 現行の cheap スロット (比較の基準)
+  "orcarouter/fusion-mini", // 当時の cheap スロット (いまは openai/gpt-5.6-luna。比較の基準として残す)
 ];
 
 interface Run {

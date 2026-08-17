@@ -12,8 +12,7 @@ AIはレコメンドのみ、確定は人間承認 (human-in-the-loop)。提出�
 backend/   Express + Socket.IO + better-sqlite3 (port 8787)
            OpenAI SDK (base_url=OrcaRouter) の tool use ループ — src/chat.ts
            MCPサーバー (Streamable HTTP) — src/mcp.ts → POST /mcp
-           全LLM呼び出しを llm_calls テーブルに記録 — POST /api/metrics
-           (外部の請求APIを叩き単価をDBへ書くのでPOST。副作用のある口はGETに置かない #180)
+           LLM呼び出しの記録は logs/ の1行だけ (#181で計測系とllm_callsを撤去)
 frontend/  Vite + React + TS + Tailwind v4 + dnd-kit (port 5173、/api と /socket.io は8787へproxy)
 ```
 
@@ -34,7 +33,7 @@ cd backend; npx tsc --noEmit           # 型チェック (frontendも同様)
 ## APIキー・モデル
 
 - OrcaRouter APIキー: 環境変数 `ORCAROUTER_API_KEY` または `~\.orcarouter\apikey.txt` (1行)。**キーの値をチャットやログに出さない**
-- モデルは用途別: 対話=`openai/gpt-5.4-mini-2026-03-17`固定 / 要約分解=`orcarouter/auto` / 定型=`orcarouter/fusion-mini`。env `ORCA_MODEL_MAIN` / `ORCA_MODEL_ARCHIVE` / `ORCA_MODEL_CHEAP` で上書き可。**実行時の切り替えは⚙設定タブから** (#88、再起動不要)
+- モデルは用途別: 対話=`openai/gpt-5.4-mini-2026-03-17` / 要約分解=`openai/gpt-5.6-luna` / 定型=`openai/gpt-5.6-luna`。**供給元は env だけ** (`ORCA_MODEL_MAIN` / `ORCA_MODEL_ARCHIVE` / `ORCA_MODEL_CHEAP`)、変更したら再起動。#88の⚙設定タブからの実行時切り替えは #181 で撤去 (選択肢の供給元が単価つきカタログだったため)
 - 対話モデルは**日付つきスナップショットIDで固定する**。プロンプトキャッシュはモデルごとに別物なので、エイリアスや`orcarouter/auto`だとキャッシュが乗らない (「プレフィックスを安定させる」だけでは足りず「モデルを固定する」が対になる)
 - モデルIDは `provider/model` 形式必須 (`gpt-4o-mini` 等は model_not_found)
 

@@ -4,7 +4,6 @@ import cors from "cors";
 import express from "express";
 import { Server } from "socket.io";
 import { onTaskReopened, onTasksCompleted } from "./archive.js";
-import { estimateCallCost, fetchBillingUsage, fetchModelCatalog, getModel, MODEL_DEFAULTS, type ModelSlot } from "./llm.js";
 import { generateSuggestions, runChatTurn } from "./chat.js";
 import { archiveState, hooks } from "./hooks.js";
 import { log } from "./log.js";
@@ -29,23 +28,17 @@ import {
   withProject,
 } from "./store.js";
 import {
-  auditLog,
   createTask,
   setChecked,
-  deleteSetting,
   listTrashedTasks,
   purgeTask,
   restoreTask,
   trashTask,
-  exportAll,
-  getSetting,
-  setSetting,
   getProjectContextRow,
   getTask,
   listChatMessages,
   listSummaryCards,
   listTasks,
-  metrics,
   saveChatMessage,
   updateTask,
   updateTasks,
@@ -419,39 +412,18 @@ app.post("/api/tasks/:id/chat", async (req, res) => {
   }
 });
 
-// #180: POST。請求API・モデルカタログを外部に取りに行き、単価をDBへ書く副作用がある
-app.post("/api/metrics", async (_req, res) => {
-  // #21: OrcaRouter請求サマリー(実$)を合流。外部API失敗時はnull (トークン集計は常に返す)
-  const billing = await fetchBillingUsage();
-  const m = metrics();
-  // 直近リストの各行にコスト概算を付ける。単価が引けない/カタログ取得失敗なら null のまま
-  const recent = await Promise.all(
-    m.recent.map(async (r: any) => ({
-      ...r,
-      estimatedUsd: await estimateCallCost(
-        r.routed_model,
-        r.model,
-        r.prompt_tokens,
-        r.completion_tokens,
-        r.cached_tokens ?? 0,
-        r.cache_creation_tokens ?? 0
-      ).catch(
-        () => null
-      ),
-    }))
-  );
-  res.json({ ...m, recent, billing });
-});
-
-// オーディットログ (#33): 会話・LLM呼び出し・割り振り履歴の閲覧
-app.get("/api/audit", (_req, res) => {
-  res.json(auditLog());
-});
+// #181: 計測系と監査ログのAPIを撤去した。ここにあったもの:
+//  - POST /api/metrics — 📊コストタブ (請求サマリー + トークン集計 + 概算額)
+//  - GET  /api/audit — 📜監査タブ (会話とLLM呼び出しの時系列)
+//  - GET  /api/audit/export — 全ログExport (#83)
+//  - POST /api/models — 単価つきモデルカタログ (182件)
+//  - GET/POST /api/settings/models — 用途別モデルの実行時切り替え (#88)
+// デバッグは backend/logs/ で足りる。モデルは env が供給元 (llm.ts の MODEL_DEFAULTS)
 
 // AI提案チップ (#75): ボードの文脈から「いま価値のある操作」を最大3つ。失敗時は空配列 (固定チップが保険)
-// #180: **POST にしてあるのは副作用があるから。**ここは有料のLLM呼び出しを起こし、
-// llm_calls に記録も増える。GET のままだと、悪意あるページが `<img src>` で撃つだけで
-// 課金と記録を増やせる (Origin が付かないので Origin 判定では止まらない。自動レビュー指摘)。
+// #180: **POST にしてあるのは副作用があるから。**ここは有料のLLM呼び出しを起こす。
+// GET のままだと、悪意あるページが `<img src>` で撃つだけで課金を増やせる
+// (Origin が付かないので Origin 判定では止まらない。自動レビュー指摘)。
 // 「読み取りに見えるがお金が動く」ものは GET に置かない
 app.post("/api/suggestions", async (_req, res) => {
   try {
@@ -460,20 +432,6 @@ app.post("/api/suggestions", async (_req, res) => {
     log("chat", `suggestions failed: ${e?.message ?? e}`);
     res.json({ suggestions: [] });
   }
-});
-
-// 全ログExport (#83): 全テーブルのダンプをJSONダウンロード (検証利用)。
-// **いま伏字にしている設定は無い** — かつてここに載っていたセッション署名鍵は #180 で
-// 認証ごと廃止した。伏字の仕組み自体は db.ts の exportableSettings に残してあるので、
-// 秘密を持つ設定を足すときはそこに1行足す。伏せる判断はDB層にあってこの口からは見えないが、
-// 「渡してよいファイルか」を考える人はまずここを読む
-app.get("/api/audit/export", (_req, res) => {
-  const stamp = new Date().toISOString().slice(0, 19).replace(/[-:T]/g, "").slice(0, 14);
-  res.setHeader("Content-Disposition", `attachment; filename="chatban-audit-${stamp}.json"`);
-  // #83: これは機械向けのAPIレスポンスではなく、人が開いて読むファイル (検証・記事の一次資料)。
-  // res.json() の1行JSONだと、エディタで開いた瞬間に折り返しの壁になって読めない。
-  // ここだけ整形して返す — 他のAPIレスポンスまで太らせない (zio依頼)
-  res.type("application/json").send(JSON.stringify(exportAll(), null, 2));
 });
 
 /** メンバー名の配列として受け取れる形か。書き込みを始める前に確かめる。
@@ -551,49 +509,16 @@ app.delete("/api/projects/:id", (req, res) => {
   res.json({ ok: true, projects: projectSummaries() });
 });
 
-// 管理画面 (#88): 用途別モデルの実効値と既定値。source=どこから来た値か
-const SLOTS: ModelSlot[] = ["main", "archive", "cheap"];
 // #180: ログイン設定 (/api/settings/auth) は認証ごと廃止した。個人利用に特化したので、
 // 「誰を通すか」を決める窓口そのものを持たない。守るのは待ち受けアドレス (127.0.0.1固定) と、
 // 他所のページからの要求を断ること (Origin / Sec-Fetch-Site の明示拒否) の2つ。
 // **cors() は境界ではない** — ヘッダを付けないだけでリクエストは通る (origin.ts の注記)
-
-app.get("/api/settings/models", (_req, res) => {
-  res.json({
-    slots: SLOTS.map((slot) => ({
-      slot,
-      model: getModel(slot),
-      default: MODEL_DEFAULTS[slot],
-      source: getSetting(`model.${slot}`) ? "settings" : "default",
-    })),
-  });
-});
-
-// 切り替えは即時反映 (getModelが呼び出しごとにDBを引くため再起動不要)。
-// null/空文字を渡すと設定を削除して既定値に戻る
-app.post("/api/settings/models", (req, res) => {
-  const updates = (req.body ?? {}) as Partial<Record<ModelSlot, string | null>>;
-  for (const slot of SLOTS) {
-    if (!(slot in updates)) continue;
-    const v = updates[slot];
-    if (v) setSetting(`model.${slot}`, v);
-    else deleteSetting(`model.${slot}`);
-  }
-  log("settings", `models -> ${SLOTS.map((s) => `${s}=${getModel(s)}`).join(" ")}`);
-  io.emit("settings:changed", {});
-  res.json({ ok: true, slots: SLOTS.map((slot) => ({ slot, model: getModel(slot) })) });
-});
-
-// モデル候補一覧 (単価つき)。外部API失敗時は空配列 — 手入力のフォールバックがあるので致命的でない
-// #180: POST。外部API (モデルカタログ) を取りに行き、model_prices を更新する副作用がある
-app.post("/api/models", async (_req, res) => {
-  try {
-    res.json({ models: await fetchModelCatalog() });
-  } catch (e: any) {
-    log("settings", `model catalog failed: ${e?.message ?? e}`);
-    res.json({ models: [] });
-  }
-});
+//
+// #181: モデル設定 (/api/settings/models) と候補一覧 (/api/models) も撤去した。
+// 実行時切り替え (#88) は「182件のカタログから選ぶUI」が前提で、カタログごと消えたため
+// 供給元を失う。設定は env (llm.ts の MODEL_DEFAULTS) に一本化した —
+// **画面から変えられない値をDBに残すと「消したのに効き続ける」**ので、settings の
+// model.* 行も起動時に削除している (store.ts)
 
 // プロジェクト前提情報の閲覧 (#73)。編集はチャット経由のみ (update_project_context)
 app.get("/api/project-context", (_req, res) => {

@@ -365,11 +365,11 @@ test("検収の印はDBに残り、AIは読めるが付けられない (#108)", 
   expect(checked.checkedAt).toBeTruthy();
 
   // エージェントはSQL窓口で読める
-  const read = await mcp("query_log", { scope: "audit", sql: `SELECT checked_at FROM tasks WHERE id = ${id}` });
+  const read = await mcp("query_log", { sql: `SELECT checked_at FROM tasks WHERE id = ${id}` });
   expect(read.rows[0].checked_at).toBeTruthy();
 
   // 書く口はどこにも無い: SQL窓口は読み取り専用、update_tasks のスキーマにも無い
-  const write = await mcp("query_log", { scope: "audit", sql: `UPDATE tasks SET checked_at = NULL WHERE id = ${id}` });
+  const write = await mcp("query_log", { sql: `UPDATE tasks SET checked_at = NULL WHERE id = ${id}` });
   expect(write.ok).toBe(false);
   await mcp("update_tasks", { updates: [{ id, checked_at: null, checkedAt: null }] });
   const afterAgent = await (await fetch(`${API}/api/tasks/${id}`)).json();
@@ -442,7 +442,6 @@ test("MCPの読み取りはSQL窓口1本。落とした一覧ツールは同じ�
 
   // 落としたぶんはSQLで引ける (接続の足場だけは get_project_context に残す)
   const board = await mcp("query_log", {
-    scope: "audit",
     sql: "SELECT id, status, title FROM tasks WHERE archived=0 AND trashed_at IS NULL",
   });
   expect(board.rows.some((r: any) => r.id === id)).toBe(true);
@@ -663,7 +662,6 @@ test("生きているタスクは live_tasks ビューで引ける (母集団の
   await mcp("delete_tasks", { ids: [trashed] });
 
   const r = await mcp("query_log", {
-    scope: "audit",
     sql: "SELECT id, title FROM live_tasks",
   });
   const ids = (r.rows as any[]).map((x) => x.id);
@@ -672,7 +670,6 @@ test("生きているタスクは live_tasks ビューで引ける (母集団の
 
   // tasks を直に引けばゴミ箱も見える (見たいときは見られる)
   const raw = await mcp("query_log", {
-    scope: "audit",
     sql: `SELECT id FROM tasks WHERE id=${trashed} AND trashed_at IS NOT NULL`,
   });
   expect(raw.rows).toHaveLength(1);
@@ -782,7 +779,6 @@ test("完了は done_tasks ビューで引ける。登録日と取り違えよ�
   });
 
   const r = await mcp("query_log", {
-    scope: "audit",
     sql: `SELECT id, done_day, done_at FROM done_tasks WHERE id=${id}`,
   });
   expect(r.rows).toHaveLength(1);
@@ -792,7 +788,6 @@ test("完了は done_tasks ビューで引ける。登録日と取り違えよ�
   // 終わっていないものは入らない (created_at を完了日と取り違える余地がない)
   const alive = await createTask("まだ終わっていない");
   const none = await mcp("query_log", {
-    scope: "audit",
     sql: `SELECT id FROM done_tasks WHERE id=${alive}`,
   });
   expect(none.rows).toHaveLength(0);
@@ -801,43 +796,41 @@ test("完了は done_tasks ビューで引ける。登録日と取り違えよ�
 test("要約カードの列は frozen (旧 settled)。SQL窓口から新しい名前で引ける", async () => {
   // 改名のマイグレーションが効いていること。旧名で引くと落ちる = 移行漏れが検出できる
   const r = await mcp("query_log", {
-    scope: "audit",
     sql: "SELECT id, title, frozen FROM summary_cards LIMIT 1",
   });
   expect(r.error).toBeUndefined();
 
-  const old = await mcp("query_log", { scope: "audit", sql: "SELECT settled FROM summary_cards LIMIT 1" });
+  const old = await mcp("query_log", { sql: "SELECT settled FROM summary_cards LIMIT 1" });
   expect(JSON.stringify(old)).toContain("no such column");
 });
 
 test("SQLが失敗したら、直せる材料を一緒に返す (説明を厚くする代わりの事後注入)", async () => {
   // 列名を間違えたら、実DBから引いたスキーマが返る (説明とスキーマがズレない)
-  const badCol = await mcp("query_log", { scope: "audit", sql: "SELECT id, titel FROM live_tasks LIMIT 1" });
+  const badCol = await mcp("query_log", { sql: "SELECT id, titel FROM live_tasks LIMIT 1" });
   expect(badCol.ok).toBe(false);
   expect(badCol.schema["live_tasks (ビュー)"]).toContain("title");
   expect(badCol.hint).toContain("live_tasks");
 
   // 他のDBの関数を使ったら、SQLiteでの書き方が返る
-  const badFn = await mcp("query_log", { scope: "cost", sql: "SELECT date_trunc('day', created_at) FROM llm_calls" });
+  const badFn = await mcp("query_log", { sql: "SELECT date_trunc('day', created_at) FROM live_tasks" });
   expect(badFn.ok).toBe(false);
   expect(JSON.stringify(badFn.dialect)).toContain("start of month");
 });
 
 test("エラーにならない間違いには、結果と一緒に一言添える", async () => {
   // tasks 直引き = ゴミ箱もアーカイブも混ざる。エラーにならないので気づけない
-  const raw = await mcp("query_log", { scope: "audit", sql: "SELECT id, title FROM tasks LIMIT 3" });
+  const raw = await mcp("query_log", { sql: "SELECT id, title FROM tasks LIMIT 3" });
   expect(raw.rows.length).toBeGreaterThan(0); // 結果は普通に返る
   expect(raw.note).toContain("live_tasks");
 
   // created_at で完了を数える = 登録日を数えている (実データで踏まれていた間違い)
   const wrongDate = await mcp("query_log", {
-    scope: "audit",
     sql: "SELECT date(created_at) d, COUNT(*) n FROM tasks WHERE archived=1 GROUP BY 1",
   });
   expect(wrongDate.note).toContain("done_at");
 
   // 正しく引いたときは余計なことを言わない
-  const ok = await mcp("query_log", { scope: "audit", sql: "SELECT id, title FROM live_tasks LIMIT 3" });
+  const ok = await mcp("query_log", { sql: "SELECT id, title FROM live_tasks LIMIT 3" });
   expect(ok.note).toBeUndefined();
 });
 
@@ -1015,22 +1008,16 @@ test("検収の印を付けられるのはReview列だけ (順序を飛ばして
   expect((await check(plain, false)).status).toBe(200);
 });
 
-test("全ログExportは人が読める形で返る (改行とインデント)", async () => {
-  // #83のExportは機械向けのAPIレスポンスではなく、人が開いて読むファイル
-  // (検証・記事の一次資料)。1行JSONだとエディタで開いた瞬間に読めない
-  const res = await fetch(`${API}/api/audit/export`);
-  expect(res.status).toBe(200);
-  const text = await res.text();
-  expect(text.split("\n").length).toBeGreaterThan(10); // 1行に潰れていない
-  expect(text).toContain('\n  "'); // トップレベルのキーが2スペース下がっている
-  expect(() => JSON.parse(text)).not.toThrow(); // 整形してもJSONとして壊れていない
-
-  // Exportは人に渡すファイル。かつてセッション署名鍵が平文で入っており、渡した先で
-  // 任意のメールアドレスのCookieを偽造できた。#180 で認証ごと廃止したので鍵は存在しないが、
-  // **番人は残す** (秘密を持つ設定が増えたときに落ちる側にしておく)
-  const dump = JSON.parse(text) as { settings: { key: string; value: string }[] };
-  expect(dump.settings.some((r) => r.key.startsWith("auth."))).toBe(false);
-  expect(text).not.toMatch(/"[0-9a-f]{64}"/); // 64桁hexが素で出ていない
+test("計測系と監査ログのAPIは無い (#181の撤去漏れの番人)", async () => {
+  // ここには「全ログExportが人が読める形で返る」テストがあった。#181 で監査ログごと撤去した。
+  // **消えたことをテストで固定する** — 撤去したはずのものが復活したら落ちる側にしておく
+  // (#179 では消し残した .mjs が壊れたまま残り、テストが無いので気づけなかった)
+  for (const path of ["/api/metrics", "/api/audit", "/api/audit/export", "/api/models", "/api/settings/models"]) {
+    const res = await fetch(`${API}${path}`);
+    expect(res.status, `${path} がまだ生きている`).toBe(404);
+    const post = await fetch(`${API}${path}`, { method: "POST" });
+    expect(post.status, `${path} (POST) がまだ生きている`).toBe(404);
+  }
 });
 
 test("存在しないプロジェクトを指定したSocketは、既定プロジェクトの更新を受け取らない (#125)", async () => {
@@ -1095,17 +1082,14 @@ test("Originの付かないブラウザGET (<img>相当) も断る。有料の�
   expect(ok.status).toBe(200);
 });
 
-test("お金が動く口・外部を叩く口はGETに置かない (#180)", async () => {
-  // GET のままだと、悪意あるページが <img src> で撃つだけで課金と記録を増やせる。
-  // 3本まとめて見るのは、1本だけ固定すると他の2本が黙って戻せてしまうため
-  for (const path of ["/api/suggestions", "/api/models", "/api/metrics"]) {
-    const res = await fetch(`${API}${path}`);
-    expect(res.status, `${path} がGETで叩ける`).toBe(404);
-  }
+test("お金が動く口はGETに置かない (#180)", async () => {
+  // GET のままだと、悪意あるページが <img src> で撃つだけで課金を増やせる
+  // (#181 で models / metrics は撤去したので、残るのは suggestions だけ)。
+  //
   // **このテストが保証するのは「GETのルートが存在しないこと」だけ。**POST側が機能することは
-  // ここでは確かめない。対照を置かないのは、3本とも外部API (LLM・モデルカタログ・請求) への
-  // 通信が走るためで、うち課金が発生するのは suggestions (有料のLLM呼び出し)。
-  // E2Eは「LLM呼び出しなし」が原則 (自動レビュー指摘)
+  // ここでは確かめない — 有料のLLM呼び出しが走るため。E2Eは「LLM呼び出しなし」が原則
+  const res = await fetch(`${API}/api/suggestions`);
+  expect(res.status).toBe(404);
 });
 
 test("知らないページからのSocket接続はハンドシェイクで断る (#180)", async () => {
@@ -1384,45 +1368,46 @@ test("SQL窓口は許可リスト方式。載っていないものは名前も�
   // もとは隠す側を列挙していたので、遮断リストに書き忘れた経路が開いていた
   // (pragma_table_list から settings を含む全テーブル名が読めた)。
   // 許可リストなら、次にテーブルを足しても黙って開かない
-  const q = async (scope: "cost" | "audit", sql: string) => await mcp("query_log", { scope, sql });
+  const q = async (sql: string) => await mcp("query_log", { sql });
 
-  // 機密そのもの
-  expect((await q("cost", "SELECT * FROM settings")).error).toContain("参照できません");
+  // 機密そのもの。#181 で管理DB側の窓口 (旧 scope='cost') を撤去したので、settings には
+  // **そもそも到達できない** — この接続はプロジェクトDBで、settings は管理DBにある。
+  // 許可リストで弾く以前に存在しないので、返るのは "no such table"。守りとしては一段強い
+  // (許可リストを間違えても届かない)
+  expect((await q("SELECT * FROM settings")).error).toBeTruthy();
+  // 許可リストそのものは、プロジェクトDBに実在して許可していないもので確かめる (下の sqlite_sequence)。
   // sqlite_master 自身は sqlite_master に載らないので、実在名の照合だけでは捕まらない。
   // 許可リスト化したとき実際にここが開き、このテストが拾った
-  expect((await q("cost", "SELECT name FROM sqlite_master")).error).toContain("参照できません");
+  expect((await q("SELECT name FROM sqlite_master")).error).toContain("参照できません");
   // 仮想テーブルも sqlite_master に載らない。名前を数え上げる方式では「知らないものは開く」から
   // 抜け出せず、実際 pragma_* を閉じた直後に dbstat が残っていた (外部レビュー指摘)。
   // dbstat は全テーブル名とページ構成を返すので、塞いだはずの settings の存在漏れが残っていた。
   // いまは EXPLAIN の VOpen で機構ごと閉じているので、名前を知らなくても捕まる
-  expect((await q("cost", "SELECT name FROM pragma_table_list")).error).toContain("仮想テーブル");
-  expect((await q("cost", "SELECT name, pageno FROM dbstat")).error).toContain("仮想テーブル");
-  expect((await q("audit", "SELECT name FROM dbstat")).error).toContain("仮想テーブル");
+  expect((await q("SELECT name FROM pragma_table_list")).error).toContain("仮想テーブル");
+  expect((await q("SELECT name, pageno FROM dbstat")).error).toContain("仮想テーブル");
   // 機密ではないが許可もしていないもの。「危なくないから開けておく」をやらない
-  expect((await q("cost", "SELECT * FROM sqlite_sequence")).error).toContain("参照できません");
+  expect((await q("SELECT * FROM sqlite_sequence")).error).toContain("参照できません");
 
   // 開けているものは素通りする (閉めすぎて使えなくなっていないこと)
-  const cost = await q("cost", "SELECT purpose, COUNT(*) n FROM llm_calls GROUP BY 1");
-  expect(Array.isArray(cost.rows)).toBe(true);
-  const audit = await q("audit", "SELECT id, title FROM live_tasks LIMIT 1");
-  expect(Array.isArray(audit.rows)).toBe(true);
+  const rows = await q("SELECT id, title FROM live_tasks LIMIT 1");
+  expect(Array.isArray(rows.rows)).toBe(true);
   // WITH も通ること。EXPLAIN を1回挟むようにしたので、素直なSELECT以外が壊れていないか確かめる
-  const cte = await q("audit", "WITH x AS (SELECT id FROM live_tasks LIMIT 3) SELECT COUNT(*) c FROM x");
+  const cte = await q("WITH x AS (SELECT id FROM live_tasks LIMIT 3) SELECT COUNT(*) c FROM x");
   expect(Array.isArray(cte.rows)).toBe(true);
 
-  // scopeは別の接続。またげない (cost=全プロジェクト横断 / audit=接続中のプロジェクトだけ)
-  expect((await q("audit", "SELECT COUNT(*) FROM llm_calls")).error).toBeTruthy();
-  expect((await q("cost", "SELECT COUNT(*) FROM tasks")).error).toBeTruthy();
+  // #181: 撤去した計測系のテーブルには届かない (プロジェクトDBの接続なので、そもそも存在しない)
+  expect((await q("SELECT COUNT(*) FROM llm_calls")).error).toBeTruthy();
+  expect((await q("SELECT COUNT(*) FROM model_prices")).error).toBeTruthy();
 });
 
 test("ツール説明に書いてあるテーブルは、実際に引けるものと一致する (#168)", async () => {
   // 説明と実装のズレは #92 #108 #114 で3回踏んでいる。今度は許可リストが唯一の出所なので、
   // 説明に載っているのに引けない / 引けるのに載っていない、が起きないことを確かめる
-  const listed = (await mcp("query_log", { scope: "audit", sql: "SELECT * FROM settings" })) as any;
+  const listed = (await mcp("query_log", { sql: "SELECT * FROM settings" })) as any;
   expect(listed.error).toBeTruthy();
 
   for (const t of ["live_tasks", "done_tasks", "tasks", "chat_messages", "summary_cards"]) {
-    const r = await mcp("query_log", { scope: "audit", sql: `SELECT * FROM ${t} LIMIT 1` });
+    const r = await mcp("query_log", { sql: `SELECT * FROM ${t} LIMIT 1` });
     expect(r.error, `${t} は説明に載っているのに引けない`).toBeFalsy();
   }
 });
@@ -1459,16 +1444,22 @@ test("AI提案チップはプロジェクトごとにOFFにできる。OFFの間
   // 切ったのは1だけ。他のプロジェクトは巻き込まれない
   expect(await enabledOf(otherId)).toBe(true);
 
-  // OFFならLLMを呼ばない。**呼び出し回数で直接確かめる** —
-  // 所要時間で判定すると、上流が即座に失敗して空配列になった場合にも合格してしまう
-  const llmCalls = async () => {
-    const r = await mcp("query_log", { scope: "cost", sql: "SELECT COUNT(*) c FROM llm_calls" });
-    return (r.rows as any[])[0].c as number;
+  // OFFならLLMを呼ばない。**呼んだ回数で直接確かめる** —
+  // 所要時間で判定すると、上流が即座に失敗して空配列になった場合にも合格してしまう。
+  //
+  // #181 まではこれを llm_calls テーブルで数えていたが、計測系ごと撤去したのでログで数える
+  // (chatCompletion が呼ばれると `[llm] -> suggest` の行が必ず出る)。
+  // 中断の検証 (下のテスト) が既に同じ方式なので、数え方をそちらと揃えた
+  const suggestCalls = (): number => {
+    const today = new Date().toLocaleDateString("sv-SE"); // YYYY-MM-DD
+    const file = path.join("..", "backend", "logs", `chatban-${today}.log`);
+    if (!fs.existsSync(file)) return 0;
+    return fs.readFileSync(file, "utf-8").split("\n").filter((l) => l.includes("-> suggest")).length;
   };
-  const before = await llmCalls();
+  const before = suggestCalls();
   const s = (await (await fetch(`${API}/api/suggestions`, { method: "POST" })).json()) as any;
   expect(s.suggestions).toEqual([]);
-  expect(await llmCalls(), "OFFなのにLLMを呼んでいる").toBe(before);
+  expect(suggestCalls(), "OFFなのにLLMを呼んでいる").toBe(before);
 
   // UIのトグルはラベルで状態が読める (押せるが何も起きないボタンにしない)
   await page.goto("/");

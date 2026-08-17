@@ -4,7 +4,7 @@ import { extractChoices } from "./chat.js";
 import { differs } from "./archive.js";
 import { readFileSync } from "node:fs";
 import { tools } from "./chat.js";
-import { DONE_GATE_RULE, exportableSettings, isTaskStatus, mayEnterDone } from "./db.js";
+import { DONE_GATE_RULE, isTaskStatus, mayEnterDone } from "./db.js";
 import { AGENT_STATUS_VALUES } from "./chat.js";
 import { isAllowedOrigin, isBrowserCrossSite } from "./origin.js";
 
@@ -175,30 +175,10 @@ test("知らない値は列として認めない", () => {
   assert.equal(isTaskStatus(3), false);
 });
 
-// Export は「検証のために人へ渡すファイル」「記事の一次資料」。settings を全行そのまま
-// 出していたため、セッション署名鍵が平文で入っていた (自動レビュー指摘)。
-// #180 で認証ごと廃止し、いま settings に秘密は無い。
-//
-// **このテストが見ているのは2点だけ** — 認証の設定が消えていること、64桁hex (旧署名鍵の形) が
-// 素で出ていないこと。**「あらゆる秘密を伏せる」ことも「伏字の仕組みが働く」ことも保証していない**
-// (`REDACTED_SETTINGS` は空なので、伏字の分岐はいまどのキーにも当たらない)。
-// 主張をテストの実力より強く書くと、通っているのに守られていない状態になる (自動レビュー指摘)。
-// 秘密を持つ設定を足すときは、`REDACTED_SETTINGS` への追加と、その伏字を確かめるテストを一緒に足す
-
-test("認証の設定はExportに残っていない (#180の削除漏れの番人)", () => {
-  const rows = exportableSettings();
-  assert.deepEqual(
-    rows.filter((r) => r.key.startsWith("auth.")),
-    [],
-    "認証は #180 で廃止した。auth.* が残っているなら設定の削除が漏れている"
-  );
-});
-
-test("旧セッション署名鍵の形 (64桁hex) が素で出ていない", () => {
-  for (const r of exportableSettings()) {
-    assert.ok(!/^[0-9a-f]{64}$/.test(r.value), `${r.key} に64桁hexが素で載っている`);
-  }
-});
+// #180 で「Exportに認証の設定と64桁hexが載っていないこと」を見る番人を2本置いていたが、
+// **#181 で Export (全ログExport / 監査タブ) ごと撤去したので消した。**
+// 渡すファイルが無くなったので、そこに秘密が載る経路も無い。
+// 設定を読める窓口は残っていない (query_log の許可リストに settings は入っていない)
 
 // 3本目に「設定が存在したことは記録として残る (#88: どのモデルで動いていたかを追うため)」という
 // テストがあったが**消した。**rows をループして key が非空かを見るだけで、**rows が空でも通る** —

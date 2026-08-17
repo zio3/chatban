@@ -178,6 +178,46 @@ test("列を移っても sort の数値が変わらないケースを拾う", ()
   assert.match(order!, /review: #1,#2,#3/);
 });
 
+test("ゴミ箱からの復元は、列の途中に戻っても位置が分かる", () => {
+  // restoreTask は sort を保ったまま戻すので、列の真ん中に現れることがある。
+  // 復元は「追加」なので並び順の判定 (居続けたIDの比較) には入らず、
+  // 追加行に位置を書かないとエージェントには順序が分からない (自動レビュー指摘)
+  const before = board([
+    [10, task({ sort: 0 })],
+    [20, task({ sort: 10 })],
+  ]);
+  const after = board([
+    [10, task({ sort: 0 })],
+    [5, task({ sort: 5, title: "戻ってきた仕事" })],
+    [20, task({ sort: 10 })],
+  ]);
+
+  const added = diffBoards(before, after).find((c) => c.startsWith("+"));
+  assert.ok(added);
+  assert.match(added!, /todo の #10 と #20 の間/);
+});
+
+test("列の先頭・末尾に入ったときも位置が分かる", () => {
+  const base = board([
+    [10, task({ sort: 0 })],
+    [20, task({ sort: 10 })],
+  ]);
+
+  const atHead = diffBoards(base, board([
+    [1, task({ sort: -5 })],
+    [10, task({ sort: 0 })],
+    [20, task({ sort: 10 })],
+  ])).find((c) => c.startsWith("+"));
+  assert.match(atHead!, /todo の先頭 \(次が #10\)/);
+
+  const atTail = diffBoards(base, board([
+    [10, task({ sort: 0 })],
+    [20, task({ sort: 10 })],
+    [30, task({ sort: 99 })],
+  ])).find((c) => c.startsWith("+"));
+  assert.match(atTail!, /todo の末尾 \(前が #20\)/);
+});
+
 test("ゴミ箱からの復元は、追加行に検収済みが載る", () => {
   // restoreTask は checked_at を保ったまま戻すので、「追加」として現れる。
   // 追加行は fieldChanges を通らないため、ここに書かないと検収状態が抜け落ちる (自動レビュー指摘)

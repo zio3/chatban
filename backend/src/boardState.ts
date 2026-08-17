@@ -98,9 +98,11 @@ export function captureBoard(): Omit<BoardSnapshot, "stateId" | "takenAt"> {
   return { tasks, cards, projectContext: getProjectContext() ?? "" };
 }
 
-/** 列ごとの「並んでいるIDの順」。sort の数値ではなくこの並びを比べる。
- * only を渡すと、そこに含まれるIDだけで並びを作る (追加・消滅による見かけの変化を除くため) */
-function columnOrders(tasks: Map<number, TaskFacts>, only?: Set<number>): Map<string, string> {
+/** 列ごとの「並んでいるIDの列」。sort の数値ではなくこの並びを比べる。
+ * only を渡すと、そこに含まれるIDだけで並びを作る (追加・消滅による見かけの変化を除くため)。
+ * sort が同値のときは id で決める — 実データは listTasks の ORDER BY sort, id 順で入るので、
+ * 比較関数にも同じ規則を書いておく (暗黙の安定性に寄りかからない) */
+function columnLists(tasks: Map<number, TaskFacts>, only?: Set<number>): Map<string, number[]> {
   const byStatus = new Map<string, { id: number; sort: number }[]>();
   for (const [id, t] of tasks) {
     if (only && !only.has(id)) continue;
@@ -108,17 +110,32 @@ function columnOrders(tasks: Map<number, TaskFacts>, only?: Set<number>): Map<st
     list.push({ id, sort: t.sort });
     byStatus.set(t.status, list);
   }
-  const out = new Map<string, string>();
+  const out = new Map<string, number[]>();
   for (const [status, list] of byStatus) {
     out.set(
       status,
-      list
-        .sort((a, b) => a.sort - b.sort)
-        .map((x) => `#${x.id}`)
-        .join(",")
+      list.sort((a, b) => a.sort - b.sort || a.id - b.id).map((x) => x.id)
     );
   }
   return out;
+}
+
+function columnOrders(tasks: Map<number, TaskFacts>, only?: Set<number>): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const [status, ids] of columnLists(tasks, only)) out.set(status, ids.map((id) => `#${id}`).join(","));
+  return out;
+}
+
+/** 列の中でそのタスクがどこに居るか。**追加行にこれが要る** —
+ * ゴミ箱からの復元は sort を保ったまま戻るので列の途中に入りうるが、
+ * 「追加」は並び順の判定 (居続けたIDの比較) から外れるため、ここで言わないと位置が分からない (自動レビュー指摘) */
+function positionIn(lists: Map<string, number[]>, status: string, id: number): string {
+  const ids = lists.get(status) ?? [];
+  const at = ids.indexOf(id);
+  if (at < 0 || ids.length <= 1) return `${status} の先頭`;
+  if (at === 0) return `${status} の先頭 (次が #${ids[1]})`;
+  if (at === ids.length - 1) return `${status} の末尾 (前が #${ids[at - 1]})`;
+  return `${status} の #${ids[at - 1]} と #${ids[at + 1]} の間`;
 }
 
 function sameDeps(a: number[] | null, b: number[] | null): boolean {
@@ -156,6 +173,7 @@ export function diffBoards(
   cur: Pick<BoardSnapshot, "tasks" | "cards" | "projectContext">
 ): string[] {
   const changes: string[] = [];
+  const curLists = columnLists(cur.tasks);
 
   for (const [id, t] of cur.tasks) {
     const before = prev.tasks.get(id);
@@ -164,7 +182,7 @@ export function diffBoards(
       // **検収済みかどうかもここに要る** — ゴミ箱からの復元は checked_at を保ったまま
       // 「追加」として現れるので、fieldChanges を通らずに検収状態が抜け落ちる (自動レビュー指摘)
       const marks = [
-        t.status,
+        positionIn(curLists, t.status, id),
         ...(t.due ? [`期限 ${t.due}`] : []),
         ...(t.rejected ? ["却下"] : []),
         ...(t.checkedAt ? ["検収済み"] : []),

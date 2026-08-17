@@ -4,11 +4,11 @@ import { admin, adminReadonly, currentProjectId, db, projectReadonly } from "./s
 import { decodeUnicodeEscapes } from "./text.js";
 import type { Task, TaskStatus } from "./types.js";
 
-// #179: 担当者・割り振りの機能は落とした (個人利用に特化)。
-// **DBの列とテーブルは残してある** — tasks.assignee / assign_reason / members /
-// proposals / assignment_history には実際に回した記録が入っており、消すと戻らない。
-// 残っているのは「データ」であって「機能」ではない: 読む経路も書く経路も無く、
-// query_log の許可リストからも外してある。認証 (#180) で逃げ道を残さなかったのと矛盾しない
+// #179: 担当者・割り振りは機能ごと落とした (個人利用に特化)。
+// tasks.assignee / assign_reason と members / proposals / assignment_history は
+// **列・テーブルごと削除してある** (store.ts の ensureProjectSchema)。
+// 読まないだけにして残すと、SQL窓口 (query_log) を広げた誰かが集計に使い、
+// 廃止したはずの軸が復活する — 認証 (#180) で逃げ道を残さないのと同じ判断
 
 // #86: スキーマ定義とファイルの置き場は store.ts が持つ。
 // ここは「いまアクティブなプロジェクトのDB」に対する操作だけを書く。

@@ -110,7 +110,7 @@ Done列の肥大問題(AIワーカー参加で完了速度が人間の数倍に�
 ```bash
 cd backend
 node scripts/cost-report.mjs        # purpose別・ルーティング先別の集計
-node scripts/prompt-breakdown.mjs   # システムプロンプトのセクション別サイズ
+npx tsx scripts/prompt-breakdown.ts  # システムプロンプトのセクション別サイズ
 node scripts/before-after.mjs       # アーカイブ前後の入力トークン比較
 ```
 

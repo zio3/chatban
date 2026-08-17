@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { diffBoards, formatBoardUpdate, type TaskFacts } from "./boardState.js";
+import { diffBoards, formatBoardUpdate, makeSyncToken, type TaskFacts } from "./boardState.js";
 
 /** #150: ボード状況の差分。
  *
@@ -331,12 +331,33 @@ test("複数の変化がまとめて返る", () => {
  * (「#9999 は存在しません。古い一覧を見ている可能性があります」) を spread で消していた。
  * diffBoards のテストでは検出できず、実機で気づいた */
 
+/** #187: 同期トークンの一意性。
+ *
+ * ここが破れると、差分機能は**黙って嘘をつく** — 旧トークンが新プロセスのスナップショットに
+ * 誤ヒットし、再起動をまたいだ変化を「変化なし」として返す。エラーにならないぶん気づけない。
+ * 一度この符丁を消して「秒までの時刻があれば十分」としたが、連番はプロセスごとに0へ戻るので
+ * 同じ秒に立て直すと完全に一致する (自動レビュー指摘) */
+test("同じ秒・同じ連番でも、プロセスが違えば別のトークンになる", () => {
+  const at = new Date(2026, 7, 17, 14, 49, 51);
+  assert.notEqual(makeSyncToken(1, at, "a1b2", 1), makeSyncToken(1, at, "c3d4", 1));
+});
+
+test("同じプロセス内では連番で分かれ、プロジェクトをまたいでも衝突しない", () => {
+  const at = new Date(2026, 7, 17, 14, 49, 51);
+  assert.notEqual(makeSyncToken(1, at, "a1b2", 1), makeSyncToken(1, at, "a1b2", 2));
+  assert.notEqual(makeSyncToken(1, at, "a1b2", 1), makeSyncToken(2, at, "a1b2", 1));
+});
+
+test("トークンを読めば、いつのものかが分かる (ログと突き合わせるため)", () => {
+  assert.equal(makeSyncToken(1, new Date(2026, 7, 17, 14, 49, 51), "a1b2", 3), "p1-20260817T144951-a1b23");
+});
+
 const TOKEN_1 = "p1-20260817T140000-1";
 const TOKEN_2 = "p1-20260817T140500-2";
 
 test("差分が返せたときは同期トークンと変化を返す", () => {
   const r = formatBoardUpdate(
-    { syncToken: TOKEN_2, since: TOKEN_1, changes: ["~ #4 status: todo -> review"], projectContextVersion: 7 },
+    { syncToken: TOKEN_2, fromSyncToken: TOKEN_1, changes: ["~ #4 status: todo -> review"], projectContextVersion: 7 },
     TOKEN_1
   );
   assert.equal(r.syncToken, TOKEN_2);
@@ -346,7 +367,7 @@ test("差分が返せたときは同期トークンと変化を返す", () => {
 });
 
 test("変化が無ければ boardChanges を付けない (空配列を読ませない)", () => {
-  const r = formatBoardUpdate({ syncToken: TOKEN_2, since: TOKEN_1, changes: [], projectContextVersion: 7 }, TOKEN_1);
+  const r = formatBoardUpdate({ syncToken: TOKEN_2, fromSyncToken: TOKEN_1, changes: [], projectContextVersion: 7 }, TOKEN_1);
   assert.equal(r.syncToken, TOKEN_2);
   assert.ok(!("boardChanges" in r));
 });
@@ -359,7 +380,7 @@ test("sync_token を渡していなければ、次回のための同期トーク
 test("前提情報の版は、差分でも全件でも必ず載る", () => {
   // #187: 本文を返さなくなったので、**版が唯一の手がかり**。
   // どちらか片方にしか載らないと、書き込みを続けている間に前提情報が変わったことを取り逃す
-  const diff = formatBoardUpdate({ syncToken: TOKEN_2, since: TOKEN_1, changes: [], projectContextVersion: 7 }, TOKEN_1);
+  const diff = formatBoardUpdate({ syncToken: TOKEN_2, fromSyncToken: TOKEN_1, changes: [], projectContextVersion: 7 }, TOKEN_1);
   const full = formatBoardUpdate({ syncToken: TOKEN_1, full: true, projectContextVersion: 7 });
 
   assert.equal(diff.projectContextVersion, 7);

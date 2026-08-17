@@ -19,8 +19,8 @@ import { CONTEXT_TEMPLATE } from "./contextTemplate.js";
 //   data/chatban-admin.db          projects / settings / llm_calls (コストは口座単位なので横断)
 //   data/projects/<id>-<slug>.db   tasks / summary_cards / chat_messages / project_context
 //
-// #179: 既存DBには members / proposals / assignment_history と tasks.assignee も残っているが、
-// 新規には作らない。実データを消さないために DROP はせず、作るのをやめただけ
+// #179: members / proposals / assignment_history と tasks.assignee / assign_reason は
+// 作るのをやめ、既存DBからも削除する (下の ensureProjectSchema 末尾)
 
 const DATA_DIR = process.env.CHATBAN_DATA_DIR ?? "data";
 const ADMIN_PATH = join(DATA_DIR, "chatban-admin.db");
@@ -263,10 +263,15 @@ CREATE VIEW live_tasks AS
   //
   // **ビューの作り直しより後に置くこと。** SQLite は列がビューから参照されていると
   // DROP COLUMN を拒む。古い定義 (assignee を SELECT していたころのもの) が残ったままだと、
-  // 起動のたびに黙って失敗し、列がいつまでも消えない
-  // 列の削除は lane (#107) と同じ扱い。2度目以降は失敗して無視される
-  addColumn("ALTER TABLE tasks DROP COLUMN assignee");
-  addColumn("ALTER TABLE tasks DROP COLUMN assign_reason");
+  // 列がいつまでも消えない。
+  //
+  // **addColumn は使わない。**あれは全例外を「適用済み」とみなして捨てるので、
+  // 想定外の理由 (未知のindex・trigger・view からの参照など) で失敗しても起動は成功し、
+  // 「列は残ったままテーブルだけ消えた」状態に静かに着地する。手元の13DBで成功したことは、
+  // 未知の参照を持つDBで成功する保証にならない (自動レビュー指摘)。
+  // 消えていないなら消えていないと言わせる
+  dropColumn("tasks", "assignee");
+  dropColumn("tasks", "assign_reason");
   for (const t of ["members", "proposals", "assignment_history"]) {
     const existed = !!db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name = ?").get(t);
     db.exec(`DROP TABLE IF EXISTS ${t}`);
@@ -274,6 +279,20 @@ CREATE VIEW live_tasks AS
     if (existed) log("schema", `${t} を削除しました (#179 担当者の廃止)`);
   }
 
+  /** 列が実在するときだけ DROP し、**消えたことを確かめる**。
+   * 無ければ何もしない (適用済み) / 消せなければログに残す (黙って通さない) */
+  function dropColumn(table: string, column: string): void {
+    const has = () => (db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).some((c) => c.name === column);
+    if (!has()) return;
+    try {
+      db.exec(`ALTER TABLE ${table} DROP COLUMN ${column}`);
+    } catch (e: any) {
+      log("schema", `${table}.${column} を削除できませんでした (#179): ${e?.message ?? e}`);
+      return;
+    }
+    if (has()) log("schema", `${table}.${column} の削除が反映されていません (#179)`);
+    else log("schema", `${table}.${column} を削除しました (#179 担当者の廃止)`);
+  }
 }
 
 export const admin = open(ADMIN_PATH);
@@ -557,6 +576,17 @@ export function trashProject(id: number): void {
  * 移行と初期化は別の責務。片方を消してももう片方が残る形にしておく */
 export function ensureInitialProject(): void {
   if (listProjects().length > 0) return;
+  // #179: 旧構成 (単一の chatban.db) からの移行は撤去した。**取り込まないこと自体は決定事項**だが、
+  // 中身のあるDBが転がっているのに黙って空ボードを出すと、利用者からは「データが消えた」に見える。
+  // 消えていないことと、原本の場所は言う (自動レビュー指摘)
+  const legacy = process.env.DB_PATH ?? "chatban.db";
+  if (existsSync(legacy)) {
+    log(
+      "project",
+      `${legacy} を見つけましたが取り込みません (#179で旧構成からの移行は廃止)。原本はそのまま残っています。` +
+        `中身が必要なら 2026-08-17 より前の版で一度起動して data/ 形式へ移してから上げ直してください`
+    );
+  }
   const p = insertProject("マイプロジェクト");
   projectDb(p.id); // ここで ensureProjectSchema が当たる
   setActiveProjectId(p.id);

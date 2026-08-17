@@ -345,7 +345,7 @@ export function buildMcpServer(onEvent: (kind: "board" | "proposals") => void): 
       if (!d.full) {
         return text({
           syncToken: d.syncToken,
-          since: d.since,
+          fromSyncToken: d.fromSyncToken,
           projectContextVersion: d.projectContextVersion,
           // 空配列は返さない (書き込み応答の formatBoardUpdate と同じ扱い)。
           // 「[] と note が両方載っている」は読む側に一瞬考えさせるだけで、何も足さない

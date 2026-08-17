@@ -51,17 +51,32 @@ export interface BoardSnapshot {
   projectContextVersion: number;
 }
 
-// 同期トークンの時刻部分。**再起動をまたいだ偶然の一致を防ぐのが目的** —
-// 連番はプロセス起動ごとに振り直されるので、これが無いと前のプロセスが配ったトークンが
-// たまたま一致し、無関係なスナップショットからの差分を返してしまう。
-// 乱数でも防げるが (以前はそうしていた)、秒までの時刻なら**いつのものかが読んで分かる**。
-// backend/logs と突き合わせられるほうが、失効の調査で効く
+// 同期トークンの時刻部分。読んで「いつのものか」が分かるようにするためのもので、
+// backend/logs と突き合わせられると失効の調査が早い
 function stamp(at: Date): string {
   const p = (n: number) => String(n).padStart(2, "0");
   return (
     `${at.getFullYear()}${p(at.getMonth() + 1)}${p(at.getDate())}` +
     `T${p(at.getHours())}${p(at.getMinutes())}${p(at.getSeconds())}`
   );
+}
+
+/** プロセス起動ごとに変わる符丁。**衝突を防いでいるのはこれで、時刻ではない。**
+ *
+ * 連番はプロセス起動ごとに0へ戻るので、これが無いと「同じ秒に旧プロセスと新プロセスが
+ * それぞれ最初のスナップショットを作る」だけで**まったく同じトークン**になる。
+ * 旧トークンを持ったクライアントが新プロセスのスナップショットに誤ヒットし、
+ * 再起動をまたいだ変化を既読扱いして空差分が返る — 差分機能が黙って嘘をつく一番悪い形。
+ *
+ * 秒を細かくしても (ミリ秒にしても) 理論上の衝突は残るので、時刻の精度ではなく符丁で断つ。
+ * 一度これを消して時刻だけにし、自動レビューに指摘されて戻している */
+const RUN = Math.random().toString(36).slice(2, 6);
+
+/** 同期トークンの組み立て。**符丁を引数で受ける形にしてあるのはテストのため** —
+ * 「同じ秒・同じ連番でも、プロセスが違えば別のトークンになる」を、
+ * 実際にプロセスを立て直さずに固定できる */
+export function makeSyncToken(projectId: number, at: Date, run: string, seq: number): string {
+  return `p${projectId}-${stamp(at)}-${run}${seq}`;
 }
 
 let counter = 0;
@@ -267,7 +282,7 @@ export function takeSnapshot(): BoardSnapshot {
   const projectId = currentProjectId();
   const now = Date.now();
   const snap: BoardSnapshot = {
-    syncToken: `p${projectId}-${stamp(new Date(now))}-${++counter}`,
+    syncToken: makeSyncToken(projectId, new Date(now), RUN, ++counter),
     takenAt: now,
     ...captureBoard(),
   };
@@ -295,8 +310,10 @@ export function resetSnapshots(): void {
 
 export interface BoardDelta {
   syncToken: string;
-  /** 差分を返したときだけ入る。渡された同期トークン */
-  since?: string;
+  /** 差分を返したときだけ入る。**どの時点からの差分か** (呼び出し側が渡してきたトークン)。
+   * 名前を since のままにしない — 応答に出る語は、エージェントにとって次に使う語の見本になる。
+   * 引数が sync_token になったのに応答で since と呼ぶと、旧契約を再提示することになる (自動レビュー指摘) */
+  fromSyncToken?: string;
   changes?: string[];
   full?: boolean;
   note?: string;
@@ -309,7 +326,7 @@ export interface BoardDelta {
 /**
  * MCPの応答に載せるボード状況を組み立てる。
  *
- * - `since` が無い / メモリに無い / 失効している → **全件を返す** (エラーにしない)。
+ * - 同期トークンが無い / メモリに無い / 失効している → **全件を返す** (エラーにしない)。
  *   失効は正常系で、エラーを返すとLLMがリトライを考え始める
  * - 見つかれば、そこからの差分だけ返す
  * - 差分が MAX_CHANGES を超えたら、読ませる負担が上回るので全件に切り替える
@@ -321,14 +338,14 @@ export interface BoardDelta {
  * note ではなく boardNote を使うのが肝。書き込み側が返す note (「#9999 は存在しません。
  * 古い一覧を見ている可能性があります」等の**警告**) と同じキーにすると、spread の順で警告が消える。
  */
-export function formatBoardUpdate(d: BoardDelta, since?: string): Record<string, unknown> {
+export function formatBoardUpdate(d: BoardDelta, syncToken?: string): Record<string, unknown> {
   if (!d.full)
     return {
       syncToken: d.syncToken,
       projectContextVersion: d.projectContextVersion,
       ...(d.changes?.length ? { boardChanges: d.changes } : {}),
     };
-  if (!since) return { syncToken: d.syncToken, projectContextVersion: d.projectContextVersion };
+  if (!syncToken) return { syncToken: d.syncToken, projectContextVersion: d.projectContextVersion };
   // 差分を返せなかったとき、**新しい同期トークンを渡さない。**
   // 渡すとエージェントはそれを次の sync_token に使い、「変化なし」が返って
   // 全件を一度も見ないまま古い認識のまま進む
@@ -337,28 +354,28 @@ export function formatBoardUpdate(d: BoardDelta, since?: string): Record<string,
   };
 }
 
-export function boardDelta(since?: string): BoardDelta {
+export function boardDelta(syncToken?: string): BoardDelta {
   const snap = takeSnapshot();
-  const base = since ? findSnapshot(since) : null;
+  const base = syncToken ? findSnapshot(syncToken) : null;
   const head = { syncToken: snap.syncToken, projectContextVersion: snap.projectContextVersion };
 
-  if (!since) return { ...head, full: true };
+  if (!syncToken) return { ...head, full: true };
   if (!base) {
     return {
       ...head,
       full: true,
-      note: `同期トークン ${since} は保持期間(60分)を過ぎたか、このプロジェクトのものではないため、最新の全件を返した`,
+      note: `同期トークン ${syncToken} は保持期間(60分)を過ぎたか、このプロジェクトのものではないため、最新の全件を返した`,
     };
   }
 
   const changes = diffBoards(base, snap);
   if (changes.length > MAX_CHANGES) {
-    log("board", `diff ${since} -> ${snap.syncToken}: ${changes.length}件で上限超過、全件に切り替え`);
+    log("board", `diff ${syncToken} -> ${snap.syncToken}: ${changes.length}件で上限超過、全件に切り替え`);
     return {
       ...head,
       full: true,
       note: `前回から${changes.length}件変わっており差分が大きいため、最新の全件を返した`,
     };
   }
-  return { ...head, since, changes };
+  return { ...head, fromSyncToken: syncToken, changes };
 }

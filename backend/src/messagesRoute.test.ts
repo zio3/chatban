@@ -1,19 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { toAnthropicMessages, toAnthropicTools, toOpenAiShape, usesMessagesApi } from "./messagesRoute.js";
+import { toAnthropicMessages, toAnthropicTools, toOpenAiShape } from "./messagesRoute.js";
 
 /** #172: OpenAI形式 ⇄ Anthropic Messages API 形式の変換。
  *
  * ここが壊れると「ツールを呼んだのに結果が渡らない」「会話が続かない」形で失敗する。
- * 変換は純粋関数なので、DBもサーバーも要らずに確かめられる */
-
-test("経路の判定はモデルIDだけで決まる (設定も環境変数も足さない)", () => {
-  assert.equal(usesMessagesApi("anthropic/claude-haiku-4.5"), true);
-  assert.equal(usesMessagesApi("openai/gpt-5.4-mini-2026-03-17"), false);
-  assert.equal(usesMessagesApi("orcarouter/auto"), false);
-  // 大文字small違いで経路が変わると、設定タブに打った文字列で挙動が割れる
-  assert.equal(usesMessagesApi("Anthropic/claude-haiku-4.5"), true);
-});
+ * 変換は純粋関数なので、DBもサーバーも要らずに確かめられる。
+ *
+ * #182: ここにあった「経路の判定はモデルIDだけで決まる」(`usesMessagesApi`) は、
+ * 判定が設定 (`apiStyle`) へ移ったので config.test.ts 側に移した */
 
 test("system は本文から分離される (Anthropicは別フィールド)", () => {
   const { system, messages } = toAnthropicMessages([

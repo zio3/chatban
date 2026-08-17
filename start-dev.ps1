@@ -20,6 +20,18 @@ if (Test-Path $dataDir) {
 # #179: 旧構成 (backend\chatban.db 単一ファイル) を退避する分岐は外した。
 # 取り込む処理そのものが無くなったので、バックアップを取っても行き先が無い
 
+# --- 1.5 LLM config check (#182) ---
+# 設定が無くても起動はできる (LLMを使う操作で初めて要求される) ので、ここでは止めずに案内だけ出す。
+# 画面は開くのにチャットだけ失敗する、という分かりにくい状態を先に説明しておく
+$configPath = Join-Path $root "backend\config.json"
+if (-not (Test-Path $configPath)) {
+    Write-Host "[config] backend\config.json がありません (チャットと要約は動きません)" -ForegroundColor Yellow
+    Write-Host "         backend\examples\ から使うプロバイダのものをコピーしてください:" -ForegroundColor Yellow
+    Get-ChildItem (Join-Path $root "backend\examples") -Filter "config.*.json" -ErrorAction SilentlyContinue |
+        ForEach-Object { Write-Host "           copy backend\examples\$($_.Name) backend\config.json" -ForegroundColor DarkGray }
+    Write-Host "         設定したら `npx tsx scripts/check-config.ts` で疎通を確かめられます" -ForegroundColor DarkGray
+}
+
 function Test-Port([int]$port) {
     return [bool](Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue)
 }

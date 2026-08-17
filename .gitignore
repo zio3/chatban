@@ -8,3 +8,8 @@ logs/
 test-results/
 playwright-report/
 backend/backup/
+# #182: LLMの接続設定 (APIキーを含む)。**この1行だけを無視する。**
+# `config*.json` のようなワイルドカードにすると backend/examples/ のサンプルまで無視され、
+# 「コミットしたつもりが入っていない」という逆向きの事故になる。
+# サンプルは backend/examples/config.*.json にあり、そちらはコミットする (キーは空)
+backend/config.json

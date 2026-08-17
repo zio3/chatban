@@ -174,8 +174,9 @@ export function toOpenAiShape(data: any, fallbackModel: string): OpenAiShapedRes
   };
 }
 
-/** Messages API 形式で問い合わせる。baseURL は OpenAI互換と同じものを使う
- * (OrcaRouter は /v1/chat/completions と /v1/messages の両方を持っている) */
+/** Messages API 形式で問い合わせる。宛先は設定の baseURL をそのまま使う。
+ * OrcaRouter は /v1/chat/completions と /v1/messages の両方を持ち、Anthropic直は後者だけを持つ —
+ * どちらで話すかは `apiStyle` が決める (#182)。この関数は「言われた宛先へ Messages 形式で投げる」だけ */
 export async function messagesCompletion(
   baseURL: string,
   apiKey: string,
@@ -237,8 +238,8 @@ export async function messagesCompletion(
   return toOpenAiShape(await res.json(), model);
 }
 
-/** この経路を使うモデルか。**モデルIDだけで決まる**ので、環境変数も設定も足さない。
- * ⚙設定タブでモデルを anthropic/… に変えれば経路も一緒に切り替わる (#88の操作のまま) */
-export function usesMessagesApi(model: string): boolean {
-  return /^anthropic\//i.test(model);
-}
+// #182: ここに `usesMessagesApi(model)` があった (`/^anthropic\//` で判定)。
+// **モデルIDの接頭辞で経路を決めるのをやめ、宛先の設定 (`apiStyle`) から引くようにした。**
+// 接頭辞判定は OrcaRouter が `provider/model` 形式を要求することに乗ったもので、
+// 直接APIのモデルIDには接頭辞が無いため成立しない。判定が設定に移ったことで、
+// 「モデルIDを送信直前に加工する」処理も要らなくなった (設定の文字列をそのまま送る)

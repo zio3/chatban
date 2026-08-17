@@ -5,7 +5,7 @@ import ProjectSettings from "./ProjectSettings";
 // かつては #88 の「用途別モデルを実行時に切り替える (再起動不要)」があった。
 // 「モデルID1行で差し替えられる」というルーターの利点をUIとして触れる形にしたものだったが、
 // **選択肢の供給元が単価つきカタログ (182件) だった**ので、計測系の撤去で空になる。
-// モデルは env で決める (backend/src/llm.ts の MODEL_DEFAULTS) —
+// #182 以降、宛先・キー・モデルは backend/config.json が供給元 —
 // 個人利用なら Claude Code から直接書けるので、UIを持つ理由が無い。
 //
 // ログイン設定 (GoogleクライアントID・許可リスト) も #180 で認証ごと廃止した。
@@ -14,9 +14,8 @@ export default function SettingsView() {
     <div className="mx-auto max-w-4xl space-y-5 p-6">
       <ProjectSettings />
       <p className="text-[11px] text-slate-400">
-        使うモデルは環境変数で決めます (<span className="font-mono">ORCA_MODEL_MAIN</span> /{" "}
-        <span className="font-mono">ORCA_MODEL_ARCHIVE</span> / <span className="font-mono">ORCA_MODEL_CHEAP</span>)。
-        変更したら再起動してください。
+        接続先とモデルは <span className="font-mono">backend/config.json</span> で決めます
+        (見本は <span className="font-mono">backend/examples/</span>)。変更したら再起動してください。
       </p>
     </div>
   );

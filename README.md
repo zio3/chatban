@@ -74,7 +74,7 @@ MCPで繋いだとき、ChatBanは**エージェントの外部記憶**として
 | 層 | 技術 |
 |---|---|
 | フロント | Vite + React 19 + TypeScript + Tailwind CSS v4 + dnd-kit + Socket.IO |
-| バック | Express + better-sqlite3 + OpenAI SDK (→ [OrcaRouter](https://www.orcarouter.ai)) |
+| バック | Express + better-sqlite3 + OpenAI SDK (接続先は設定ファイルで差し替え) |
 | 外部連携 | MCPサーバー内蔵 (Claude Code等からボードを直接操作可能) |
 | テスト | Playwright E2E + backendのユニットテスト (`node:test`) |
 
@@ -83,17 +83,19 @@ AIに何をさせないか (権限境界) と、割り切った部分は [docs/s
 
 ## 起動方法
 
-前提: Node.js 20+ / OrcaRouter APIキー
+前提: Node.js 20+ と、**いずれか1つ**のLLM接続先(OpenAI / Anthropic / OrcaRouter / ローカルLLM)。
 
 ```powershell
-# APIキー設定 (どちらか)
-$env:ORCAROUTER_API_KEY = "sk-orca-..."
-# または ~/.orcarouter/apikey.txt に1行で保存
-
-# 依存関係
+# 1. 依存関係
 cd backend; npm install; cd ../frontend; npm install; cd ..
 
-# 起動 (Windows: DBバックアップ+両サーバー+ヘルスチェック)
+# 2. LLMの設定 — 使うプロバイダの見本を1枚コピーしてキーを書く
+copy backend\examples\config.openai.json backend\config.json
+
+# 3. 疎通確認 (用途別の3モデルすべてに1回ずつ投げます)
+cd backend; npx tsx scripts/check-config.ts
+
+# 4. 起動 (Windows: DBバックアップ+両サーバー+ヘルスチェック)
 .\start-dev.ps1
 
 # 手動起動の場合
@@ -103,12 +105,35 @@ cd frontend; npm run dev   # http://localhost:5173 (こちらを開く。/api �
 
 データは `backend/data/` に置かれます(プロジェクトごとに1つのSQLiteファイル)。初回起動時に「マイプロジェクト」が1つ作られます。
 
-使うモデルは**envで決めます** (変更したら再起動。#181 で⚙設定タブの実行時切り替えは撤去しました):
+### 接続先とモデル
 
-- `ORCA_MODEL_MAIN` — 対話 (default: `openai/gpt-5.4-mini-2026-03-17`)
-- `ORCA_MODEL_ARCHIVE` — 要約の要素分解 (default: `openai/gpt-5.6-luna`)
-- `ORCA_MODEL_CHEAP` — 定型処理 (default: `openai/gpt-5.6-luna`)
-- `ORCA_BASE_URL` — 1行でプロバイダ差し替え (default: `https://www.orcarouter.ai/v1`)
+`backend/config.json` の1枚が供給元です(変更したら再起動)。見本は `backend/examples/` にあります:
+
+| 見本 | 宛先 | 備考 |
+|---|---|---|
+| `config.openai.json` | OpenAI直 | 動作確認済み |
+| `config.anthropic.json` | Anthropic直 | `apiStyle: "messages"`。プロンプトキャッシュが効きます |
+| `config.local.json` | Ollama | **APIキー不要**。要約とタイトル生成は十分速い一方、チャットからのタスク登録は取りこぼします |
+| `config.orcarouter.json` | OrcaRouter | 1つのキーで多くのモデル。モデルIDは `provider/model` 形式 |
+
+```jsonc
+{
+  "apiKeyFile": "~/.openai/apikey.txt",   // "apiKey": "sk-..." と直接書いてもよい
+  "baseURL": "https://api.openai.com/v1",
+  "apiStyle": "chat",                     // "chat" | "messages" (APIの形式。プロバイダ名ではない)
+  "models": {
+    "main": "gpt-5.4-mini-2026-03-17",    // 対話
+    "archive": "gpt-5.6-luna",            // 要約の要素分解
+    "cheap": "gpt-5.6-luna"               // 定型処理
+  }
+}
+```
+
+**この4つは常にセットで動く**ので、1枚にまとめてあります。個別の環境変数だと「OpenAIの宛先にAnthropicのモデルID」のような組み合わせが作れてしまいますが、見本を丸ごとコピーする形ならそれが起こりません。
+
+`config.json` は `.gitignore` 済みです(キーを含むため)。**設定を人に見せる予定があるなら** `apiKey` の代わりに `apiKeyFile` を使うと、ファイルを貼ってもキーが写りません。
+
+環境変数で決めるのは、プロバイダと関係のないものだけです: `PORT` / `CHATBAN_DATA_DIR` / `CHATBAN_ALLOWED_ORIGINS`。
 
 ## プロジェクト
 

@@ -22,11 +22,12 @@
 │  ├ mcp.ts       MCPサーバー (POST /mcp/:projectId)           │
 │  └ db.ts        アクティブなプロジェクトDBへの操作            │
 └──────┬────────────────────────────┬────────────────────────┘
-       │ OpenAI SDK                  │ MCP (Claude Code等の外部エージェント)
-┌──────▼────────────┐   「横断的な検討・実装はBYO Agent」
-│  OrcaRouter (LLM)  │   ドッグフーディング: ChatBan自体の改修タスクを
-│  base_url差し替えのみ │   ChatBanのボードでMCP経由管理
-└───────────────────┘
+       │ OpenAI SDK / Messages形式    │ MCP (Claude Code等の外部エージェント)
+┌──────▼──────────────┐  「横断的な検討・実装はBYO Agent」
+│ LLM (config.json で選ぶ) │  ドッグフーディング: ChatBan自体の改修タスクを
+│ OpenAI直/Anthropic直/    │  ChatBanのボードでMCP経由管理
+│ OrcaRouter/ローカルLLM   │
+└─────────────────────┘
 ```
 
 ## 技術スタック
@@ -40,7 +41,7 @@
 | ルーティング | なし (`location.pathname` を読むだけ) | `/p/<id>` の1形式しかないのでReact Routerは過剰 |
 | バック | Express + tsx watch | 最小構成、ホットリロード |
 | DB | better-sqlite3 (プロジェクトごとに1ファイル) | 同期APIで簡潔。マイグレーションはALTER+try/catch流儀 |
-| LLM | OpenAI SDK → OrcaRouter | OpenAI互換。モデルIDは `provider/model` 形式必須 |
+| LLM | OpenAI SDK (+ Anthropic Messages形式) | 接続先は `backend/config.json`。モデルIDの書き方は宛先次第 (直接APIは接頭辞なし、OrcaRouterは `provider/model` 形式) |
 | MCP | @modelcontextprotocol/sdk | Streamable HTTP (stateless、リクエスト毎に接続構築) |
 | E2E | Playwright | 専用ポート8799/5199+専用データディレクトリで開発サーバーと共存 |
 
@@ -84,18 +85,28 @@ Socket.IOの配信もプロジェクト単位のroomへ送る。
 
 ## LLMモデル戦略 (用途別)
 
-| 用途 | モデル | 理由 |
+| 用途 | 既定のモデル (OpenAI直) | 理由 |
 |---|---|---|
-| 対話 (chat / suggest) | `openai/gpt-5.4-mini-2026-03-17` 固定 | 応答速度が生命線 + 自動キャッシュが実額に効く |
-| 要約の要素分解 (archive-decompose) | `openai/gpt-5.6-luna` | 実測で `orcarouter/auto` の40〜80秒が4〜12秒に。遅さの正体は思考トークン |
-| 定型 (archive-title) | `openai/gpt-5.6-luna` | 短いラベル生成に思考は要らない。20秒でタイムアウトさせる |
+| 対話 (chat / suggest) | `gpt-5.4-mini-2026-03-17` 固定 | 応答速度が生命線 + 自動キャッシュが実額に効く |
+| 要約の要素分解 (archive-decompose) | `gpt-5.6-luna` | 実測で `orcarouter/auto` の40〜80秒が4〜12秒に。遅さの正体は思考トークン |
+| 定型 (archive-title) | `gpt-5.6-luna` | 短いラベル生成に思考は要らない。20秒でタイムアウトさせる |
 
-- **供給元は env だけ** (`ORCA_MODEL_MAIN` / `ORCA_MODEL_ARCHIVE` / `ORCA_MODEL_CHEAP`)。変更したら再起動。
+- **供給元は `backend/config.json` だけ** (#182、`config.ts`)。変更したら再起動。見本は `backend/examples/`。
   #88 の「⚙設定タブから実行時に切り替え」は #181 で撤去した — 選択肢の供給元が
-  単価つきカタログ(182件)だったので、計測系の撤去で空になる
+  単価つきカタログ(182件)だったので、計測系の撤去で空になる。
+  その後 env に一本化していたが、**宛先・キー・API形式・モデル3つは常にセットで動く**ので
+  1枚のファイルにまとめた。個別のenvだと「OpenAIの宛先にAnthropicのモデルID」が作れてしまう
+- **どのAPI形式で話すかは宛先の属性** (`apiStyle`: `chat` | `messages`)。
+  以前はモデルIDの `anthropic/` 接頭辞で判定していたが、それは OrcaRouter が `provider/model` 形式を
+  要求することに乗った判定で、直接APIのIDには接頭辞が無い。**推測はしない** —
+  OrcaRouter のように両方を持つ宛先があるので、URLからは原理的に当てられない
 - 対話モデルは**日付つきスナップショットIDで固定する**。キャッシュはモデルごとに別物なので、
-  エイリアスやルーティング委任だとキャッシュが乗らない
-- APIキー: env `ORCAROUTER_API_KEY` または `~\.orcarouter\apikey.txt` (1行)。**値をログ・チャットに出さない**
+  エイリアスやルーティング委任だとキャッシュが乗らない。
+  2026-08-17 実測: OpenAI直でも自動キャッシュは効く (2round目の入力12,547のうち12,416がキャッシュヒット)
+- APIキーは `config.json` の `apiKey`、または `apiKeyFile` で外部ファイルを指す。**値をログ・チャットに出さない**。
+  `config.json` は `.gitignore` 済みで、**起動時に .gitignore へ載っているか確認して警告する**
+  (公開リポジトリでキーが漏れる経路は実質これ1つ)
+- 疎通確認は `npx tsx scripts/check-config.ts` (3スロットすべてに1回ずつ投げる)
 - 呼び出しの記録は `backend/logs/` のログ1行 (`tokens=8208/23 cached=3200 1555ms`)。
   `llm_calls` テーブルへの打刻は #181 で撤去した。**副産物として、単価を引くための
   カタログ取得が呼び出し経路から消えた** (起動直後は外部APIを待っていた)

@@ -208,7 +208,7 @@ ChatBanは転記工程そのものを消す。**話した場所がそのまま�
 | フロント | Vite + React 19 + TS + Tailwind v4 + dnd-kit | AIで書きやすい + HMRの応答性 |
 | リアルタイム | Socket.IO | ボード変更・ツール進捗・要約再生成の逐次配信 |
 | バック | Express + better-sqlite3 (プロジェクトごとに1ファイル) | 最小構成、同期APIで簡潔 |
-| LLM | OpenAI SDK → **OrcaRouter** | OpenAI互換。`ORCA_BASE_URL` 1行でプロバイダ差し替え |
+| LLM | OpenAI SDK (+ Anthropic Messages形式) | 接続先は `backend/config.json` 1枚。OpenAI直・Anthropic直・OrcaRouter・ローカルLLMを見本から選ぶ |
 | 外部連携 | MCP (Streamable HTTP) | Claude Code等からボードを直接操作 |
 | テスト | Playwright E2E | 専用ポート/DBで開発サーバーと共存 |
 

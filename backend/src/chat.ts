@@ -20,7 +20,8 @@ import {
   updateTasks,
 } from "./db.js";
 import { currentProjectId, suggestEnabled } from "./store.js";
-import { chatCompletion, getModel } from "./llm.js";
+import { chatCompletion } from "./llm.js";
+import { getModel } from "./config.js";
 import { log } from "./log.js";
 import type { TaskStatus, UiAction } from "./types.js";
 

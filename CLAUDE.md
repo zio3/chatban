@@ -61,8 +61,8 @@ cd backend; npx tsc --noEmit           # 型チェック (frontendも同様)
 
 ## 注意
 
-- DB (chatban.db) はSQLite直接編集しない。REST/MCP経由で操作する (Socket.IOブロードキャストと履歴記録が飛ぶため)
-- chatban.db はドッグフーディングの実録データ (記事の一次資料)。start-dev.ps1 が起動時に backend/backup/ へ自動バックアップする
+- DBはSQLite直接編集しない。REST/MCP経由で操作する (Socket.IOブロードキャストと履歴記録が飛ぶため)
+- 実体は `backend/data/` (管理DB `chatban-admin.db` + `projects/<id>-<名前>.db`)。ドッグフーディングの実録データなので、start-dev.ps1 が起動時に backend/backup/ へ世代バックアップする
 - **リポジトリは既にPublic** (https://github.com/zio3/chatban)。コミットした瞬間に公開されるので、実データ・接続情報・セキュリティの詳細を混入させない。「あとで消す」は効かない (履歴に残る)
   - 特に危ないのは `docs/` 配下。2026-08-14 に**VPSのIPと未解消の脆弱性を書いたレビュー結果を置きかけた** (コミット前に気づいて `~/.chatban-demo/security-review/` へ退避)。セキュリティ関連の記録はリポジトリの外に置く
   - **公開状態を推測で語らない。**「まだprivateのはず」と思い込んで踏みかけたので、迷ったら `gh repo view --json visibility` で見る

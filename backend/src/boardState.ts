@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { getProjectContextRow, listSummaryCards, listTasks } from "./db.js";
 import { currentProjectId } from "./store.js";
 import { log } from "./log.js";
@@ -69,8 +70,11 @@ function stamp(at: Date): string {
  * 再起動をまたいだ変化を既読扱いして空差分が返る — 差分機能が黙って嘘をつく一番悪い形。
  *
  * 秒を細かくしても (ミリ秒にしても) 理論上の衝突は残るので、時刻の精度ではなく符丁で断つ。
- * 一度これを消して時刻だけにし、自動レビューに指摘されて戻している */
-const RUN = Math.random().toString(36).slice(2, 6);
+ * 一度これを消して時刻だけにし、自動レビューに指摘されて戻している。
+ *
+ * Math.random() ではなく暗号乱数を使う。**衝突したときの症状が「空差分」で、
+ * エラーにならないぶん検知が絶望的**なので、識別子の質をケチる場所ではない (自動レビュー指摘) */
+const RUN = randomUUID().slice(0, 8);
 
 /** 同期トークンの組み立て。**符丁を引数で受ける形にしてあるのはテストのため** —
  * 「同じ秒・同じ連番でも、プロセスが違えば別のトークンになる」を、

@@ -270,28 +270,37 @@ CREATE VIEW live_tasks AS
   // 「列は残ったままテーブルだけ消えた」状態に静かに着地する。手元の13DBで成功したことは、
   // 未知の参照を持つDBで成功する保証にならない (自動レビュー指摘)。
   // 消えていないなら消えていないと言わせる
-  dropColumn("tasks", "assignee");
-  dropColumn("tasks", "assign_reason");
-  for (const t of ["members", "proposals", "assignment_history"]) {
-    const existed = !!db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name = ?").get(t);
-    db.exec(`DROP TABLE IF EXISTS ${t}`);
-    // 消えたときだけ記録する。起動のたびに出しても意味がない
-    if (existed) log("schema", `${t} を削除しました (#179 担当者の廃止)`);
-  }
+  //
+  // **全部消えるか、何も消えないか。**列だけ残ってテーブルが消えた中途半端な状態を作らない
+  // (途中で失敗しても、次の起動でもう一度そこから始められる)。
+  // 列が消せないのに起動を続けると、**廃止したはずの軸がスキーマに残ったまま固定される** —
+  // ログは誰も見ないので、部分適用に気づく機会が無い (自動レビュー指摘)。異常なので止める
+  db.transaction(() => {
+    dropColumn("tasks", "assignee");
+    dropColumn("tasks", "assign_reason");
+    for (const t of ["members", "proposals", "assignment_history"]) {
+      const existed = !!db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name = ?").get(t);
+      db.exec(`DROP TABLE IF EXISTS ${t}`);
+      // 消えたときだけ記録する。起動のたびに出しても意味がない
+      if (existed) log("schema", `${t} を削除しました (#179 担当者の廃止)`);
+    }
+  })();
 
   /** 列が実在するときだけ DROP し、**消えたことを確かめる**。
-   * 無ければ何もしない (適用済み) / 消せなければログに残す (黙って通さない) */
+   * 無ければ何もしない (適用済み) / 消せなければ投げる (黙って通さない) */
   function dropColumn(table: string, column: string): void {
     const has = () => (db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).some((c) => c.name === column);
     if (!has()) return;
     try {
       db.exec(`ALTER TABLE ${table} DROP COLUMN ${column}`);
     } catch (e: any) {
-      log("schema", `${table}.${column} を削除できませんでした (#179): ${e?.message ?? e}`);
-      return;
+      throw new Error(
+        `${table}.${column} を削除できませんでした (#179 担当者の廃止): ${e?.message ?? e}。` +
+          `この列を参照している index / trigger / view が残っている可能性があります`
+      );
     }
-    if (has()) log("schema", `${table}.${column} の削除が反映されていません (#179)`);
-    else log("schema", `${table}.${column} を削除しました (#179 担当者の廃止)`);
+    if (has()) throw new Error(`${table}.${column} の削除が反映されていません (#179 担当者の廃止)`);
+    log("schema", `${table}.${column} を削除しました (#179 担当者の廃止)`);
   }
 }
 

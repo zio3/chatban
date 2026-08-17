@@ -1,5 +1,5 @@
 # ChatBan dev environment launcher
-# - Backs up chatban.db (dogfooding data = article source material)
+# - Backs up backend/data (dogfooding data = article source material)
 # - Starts backend (8787) / frontend (5173) in separate windows if not running
 # Usage: .\start-dev.ps1
 
@@ -10,9 +10,6 @@ $root = $PSScriptRoot
 # #86: プロジェクトごとにDBが分かれたので data/ 配下をまとめて世代バックアップする
 # (管理DB chatban-admin.db + projects/*.db。突き合わせは管理DBのprojects表でできる)
 $dataDir = Join-Path $root "backend\data"
-$legacyDb = Join-Path $root "backend\chatban.db"
-$backupDir = Join-Path $root "backend\backup"
-$stamp = Get-Date -Format "yyyyMMdd-HHmmss"
 if (Test-Path $dataDir) {
     # WALモードではファイルコピーだと直近の書き込みが落ちるので、
     # SQLiteのオンラインバックアップAPI経由で取る (稼働中でも整合が取れる)
@@ -20,12 +17,8 @@ if (Test-Path $dataDir) {
     node scripts/backup-data.mjs 20
     Pop-Location
 }
-elseif (Test-Path $legacyDb) {
-    # 移行前 (初回起動でプロジェクト構成へ変換される) の保険
-    New-Item -ItemType Directory -Force $backupDir | Out-Null
-    Copy-Item $legacyDb (Join-Path $backupDir "chatban-$stamp.db")
-    Write-Host "[backup] chatban.db -> backup/chatban-$stamp.db" -ForegroundColor Green
-}
+# #179: 旧構成 (backend\chatban.db 単一ファイル) を退避する分岐は外した。
+# 取り込む処理そのものが無くなったので、バックアップを取っても行き先が無い
 
 function Test-Port([int]$port) {
     return [bool](Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue)

@@ -28,8 +28,10 @@ const {
   claimTasksForCard,
   createSummaryCard,
   createTask,
+  detachTaskFromCard,
   getTask,
   listUnfoldedDoneIds,
+  reassignTasksToCard,
   setChecked,
   tasksOfCard,
   trashTask,
@@ -51,6 +53,10 @@ test("畳み損ないは「done かつ 未アーカイブ かつ ゴミ箱でな
   const review = createTask("検収待ち", "review").id;
   const trashedDone = makeDoneTask("Doneにしてからゴミ箱へ");
   trashTask(trashedDone);
+  // **畳み済みのDoneも作る。**これが無いと `archived = 0` の条件を落としても
+  // このテストが通ってしまう (Codexレビュー指摘。3条件のうち1つだけ試験していなかった)
+  const archivedDone = makeDoneTask("既に畳んであるDone");
+  claimTasksForCard([archivedDone], createSummaryCard().id);
 
   const found = listUnfoldedDoneIds();
   assert.ok(found.includes(done), "畳み損なったDoneが見つかっていない");
@@ -58,6 +64,25 @@ test("畳み損ないは「done かつ 未アーカイブ かつ ゴミ箱でな
   // **ゴミ箱のDoneを拾うと、ゴミ箱と要約カードの両方に入る** (trashTask は status を変えないので、
   // status だけ見ていると素通りする)
   assert.ok(!found.includes(trashedDone), "ゴミ箱のDoneを拾っている");
+  // 畳み済みを拾うと、**同じタスクが2枚のカードに入る**
+  assert.ok(!found.includes(archivedDone), "畳み済みのDoneを拾っている");
+});
+
+test("**archived=0 なのに古いカードIDが残った行も畳み直せる** (回復不能にしない) (#195)", () => {
+  // #196 の競合 (rollUpOldCards と compactArchive) で、`archived = 0` なのに
+  // `summary_card_id` が埋まったままの行ができうる。claim の条件に
+  // `summary_card_id IS NULL` を入れると、**その行は二度と畳めなくなる**。
+  // 二重取りは `archived = 0` だけで防げるので、その条件は置かない
+  const id = makeDoneTask("古いカードIDが残ったDone");
+  const stale = createSummaryCard();
+  claimTasksForCard([id], stale.id);
+  detachTaskFromCard(id); // 再オープン相当: archived=0 に戻る
+  // 競合で summary_card_id だけが書き戻された状態を作る
+  reassignTasksToCard([id], stale.id);
+
+  const card = createSummaryCard();
+  assert.deepEqual(claimTasksForCard([id], card.id), [id], "壊れた行を畳み直せていない");
+  assert.deepEqual(tasksOfCard(card.id).map((t) => t.id), [id]);
 });
 
 test("押さえられたものだけを返す (#195)", () => {

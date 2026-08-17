@@ -377,21 +377,33 @@ export function createSummaryCard(): SummaryCard {
  *   **後から来たカードが奪い、先発カードの task_ids には同じIDが残る**
  *
  * どちらも「読んだ時点の事実」を根拠に書いていたのが原因なので、**書くときに条件を付ける**。
- * `summary_card_id IS NULL` が二重取りの歯止めで、`trashed_at IS NULL` がゴミ箱の歯止め。
- * 押さえられなかったIDは呼び出し側が捨てる (Codexレビュー指摘) */
+ * `archived = 0` が二重取りの歯止め (押さえた瞬間に1になるので、次の claim は空振りする)、
+ * `trashed_at IS NULL` がゴミ箱の歯止め。押さえられなかったIDは呼び出し側が捨てる。
+ *
+ * **`summary_card_id IS NULL` は条件に入れない** (Codexレビュー指摘)。二重取りは `archived = 0`
+ * だけで防げるので足す必要が無く、足すと**壊れた状態を回復不能にする**:
+ * `rollUpOldCards` と `compactArchive` の競合で「`archived = 0` なのに `summary_card_id` は
+ * 埋まっている」行ができうる (#196)。この条件があると、その行は**二度と畳めない**。
+ * 直せるものを直せなくする条件は置かない。
+ *
+ * タスク側とカード側の更新は**1つのトランザクションにする**。まさにこの札が扱っている
+ * 「途中でプロセスが止まる」が間に起きると、**`archived = 1` なのにカードの task_ids は空**
+ * という、`listUnfoldedDoneIds` では拾えない状態が残る (同上) */
 export function claimTasksForCard(taskIds: number[], cardId: number): number[] {
   const stmt = db().prepare(
-    "UPDATE tasks SET archived = 1, summary_card_id = ? WHERE id = ? AND status = 'done' AND archived = 0 AND trashed_at IS NULL AND summary_card_id IS NULL"
+    "UPDATE tasks SET archived = 1, summary_card_id = ? WHERE id = ? AND status = 'done' AND archived = 0 AND trashed_at IS NULL"
   );
-  const claimed = taskIds.filter((id) => stmt.run(cardId, id).changes > 0);
-  if (claimed.length === 0) return claimed;
-  // カード側の索引にも、押さえられたものだけ載せる
-  const ids = new Set<number>(
-    JSON.parse((db().prepare("SELECT task_ids FROM summary_cards WHERE id = ?").get(cardId) as any).task_ids)
-  );
-  for (const id of claimed) ids.add(id);
-  db().prepare("UPDATE summary_cards SET task_ids = ? WHERE id = ?").run(JSON.stringify([...ids]), cardId);
-  return claimed;
+  const readCard = db().prepare("SELECT task_ids FROM summary_cards WHERE id = ?");
+  const writeCard = db().prepare("UPDATE summary_cards SET task_ids = ? WHERE id = ?");
+  return db().transaction((): number[] => {
+    const claimed = taskIds.filter((id) => stmt.run(cardId, id).changes > 0);
+    if (claimed.length === 0) return claimed;
+    // カード側の索引にも、押さえられたものだけ載せる
+    const ids = new Set<number>(JSON.parse((readCard.get(cardId) as any).task_ids));
+    for (const id of claimed) ids.add(id);
+    writeCard.run(JSON.stringify([...ids]), cardId);
+    return claimed;
+  })();
 }
 
 // #195: ここに `assignTaskToCard(taskId, cardId)` があった (**無条件のUPDATE**)。

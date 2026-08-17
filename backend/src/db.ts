@@ -274,12 +274,17 @@ export function trashTask(id: number): boolean {
  *   2. **この変更より前からゴミ箱にある行にも効く。**trash 時に消す形だと、既にゴミ箱で
  *      眠っている checked_at 非NULLの行は復元で古い印が復活したままになる (移行が必要になる)
  *
- * 条件に trashed_at IS NOT NULL を付けているので、ゴミ箱に無いものを restore しても印は消えない */
+ * 条件に trashed_at IS NOT NULL を付けているので、ゴミ箱に無いものを restore しても印は消えない。
+ *
+ * **戻すのは「実際に戻したとき」だけ。**以前は changes を見ずに必ず getTask を返していたので、
+ * ゴミ箱に無い生きたタスクのIDを渡しても成功として扱われ、呼び出し側が
+ * 「復元しました」と報告していた (Codexレビュー指摘)。**やっていないことを報告しない** —
+ * 0件更新は undefined を返し、入口側 (REST 404 / restored:false) に判断させる */
 export function restoreTask(id: number): Task | undefined {
-  db()
+  const changed = db()
     .prepare("UPDATE tasks SET trashed_at = NULL, checked_at = NULL WHERE id = ? AND trashed_at IS NOT NULL")
-    .run(id);
-  return getTask(id);
+    .run(id).changes;
+  return changed > 0 ? getTask(id) : undefined;
 }
 
 /** 実体を消す。人間のUI操作からのみ通す (チャット・MCPからは呼ばない)。

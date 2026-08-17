@@ -207,8 +207,10 @@ export function diffBoards(
     const before = prev.tasks.get(id);
     if (!before) {
       // 追加はIDだけでは何か分からないので内容ごと載せる。
-      // **検収済みかどうかもここに要る** — ゴミ箱からの復元は checked_at を保ったまま
-      // 「追加」として現れるので、fieldChanges を通らずに検収状態が抜け落ちる (自動レビュー指摘)
+      // **検収済みかどうかもここに要る** — 検収済みのタスクが「追加」として現れる経路があり
+      // (fieldChanges を通らないので検収状態が抜け落ちる。自動レビュー指摘)。
+      // #161 以降、ゴミ箱からの復元は checked_at を落とすのでこの例からは外れたが、
+      // スナップショット失効後の再ベースラインなどでは依然として起きる
       const marks = [
         positionIn(curLists, t.status, id),
         ...(t.due ? [`期限 ${t.due}`] : []),

@@ -160,8 +160,10 @@ export function updateTasksAsAgent(updates: AgentTaskUpdate[]): {
     }
     const changed = <T>(incoming: T | undefined, current: T) => incoming !== undefined && incoming !== current;
 
+    // done → review の倒し込みも、報告に積むのは行の適用が決まってから (下の contextStale の後)。
+    // badDue と同じ形で、版が合わずに行ごと未適用のときに「reviewに置きました」と返っていた
+    // (Codexレビュー指摘: 直した badDue の隣に同型が残っていた)
     const { status, coerced: didCoerce } = coerceStatus(u.status);
-    if (didCoerce) coerced.push(u.id);
 
     // #153: 形が違う due は捨てて名指しで返す ("" は解除として扱う。従来どおり)。
     // **報告に積むのは行が実際に適用されると分かってから** (下の contextStale の後)。
@@ -207,8 +209,9 @@ export function updateTasksAsAgent(updates: AgentTaskUpdate[]): {
     // updated に載ったのを見て「書けた」と読まれる。成功と失敗は排他にする #120)
     if (contextStale) return null;
 
-    // ここまで来た行は適用される。期限を捨てたことを報告に積むのはこの位置 (#153)
+    // ここまで来た行は適用される。**適用されたことが前提の報告はこの位置で積む** (#153)
     if (dueCheck.bad) badDue.push(u.id);
+    if (didCoerce) coerced.push(u.id);
 
     return {
       id: u.id,

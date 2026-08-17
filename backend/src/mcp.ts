@@ -207,9 +207,23 @@ export function buildMcpServer(onEvent: (kind: "board" | "proposals") => void): 
       inputSchema: { ids: z.array(z.number().int()) },
     },
     async ({ ids }) => {
-      const restored = ids.map((id) => restoreTask(id));
+      // #161: **戻せなかったものを成功に混ぜない。**restoreTask はゴミ箱に無いIDでは
+      // undefined を返すので、以前の形だと restored に null が並び (=#124 で嫌った内部事情の漏れ)、
+      // しかも ok:true のままだった。名指しで返して、何が起きなかったかを言う
+      const results = ids.map((id) => ({ id, task: restoreTask(id) }));
+      const restored = results.filter((r) => r.task).map((r) => brief(r.task));
+      const notRestored = results.filter((r) => !r.task).map((r) => r.id);
       onEvent("board");
-      return text({ ok: true, restored: restored.map((t: any) => brief(t)) });
+      return text({
+        ok: notRestored.length === 0,
+        restored,
+        ...(notRestored.length > 0
+          ? {
+              notRestored,
+              note: `#${notRestored.join(", #")} はゴミ箱に無いので戻していません (既にボードにあるか、存在しないIDです)。その旨をユーザーにも伝えてください`,
+            }
+          : {}),
+      });
     }
   );
 

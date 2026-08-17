@@ -1645,6 +1645,13 @@ test("ゴミ箱に入れると検収の印が落ちる (古い確認のままDon
   // ゴミ箱にある限り mayEnterDone は trashedAt を見て false なので、残っていても危険はない —
   // **落とすのは復元のとき**。この形なら、変更前からゴミ箱にある行にも効く
 
+  // **やっていないことを報告しない。**ゴミ箱に無いタスクを restore しても成功にしない
+  // (以前は更新0件でも getTask を返していたので「復元しました」と言えてしまった)
+  const again = await mcp("restore_tasks", { ids: [id] });
+  expect(again.ok, "ゴミ箱に無いのに復元成功として返っている").toBe(false);
+  expect(again.notRestored).toContain(id);
+  expect(again.restored, "戻していないのに restored に載っている").toHaveLength(0);
+
   // 印が無いので確定も通らない。setChecked はRESTにしか無いので、AIはここから先へ進めない
   const res = await fetch(`${API}/api/tasks/approve`, {
     method: "POST",

@@ -2,7 +2,7 @@ import {
   detachTaskFromCard,
   createSummaryCard,
   getSummaryCard,
-  claimTasksForCard,
+  createCardWithClaimedTasks,
   deleteSummaryCards,
   getTask,
   listSummaryCards,
@@ -263,15 +263,15 @@ export async function onTasksCompleted(taskIds: number[]): Promise<SummaryCard |
   //   - Doneから戻された → 「todoなのに archived=1 でボードから消える」幽霊を作らない (#105)
   //   - ゴミ箱へ入れられた → ゴミ箱と要約カードの両方に入るのを防ぐ (Codexレビュー指摘)
   //   - 別の経路が先に畳んだ (起動時の掃除 #195 と通常のフックが重なる) → 二重取りしない
-  const card = createSummaryCard();
-  const claimed = claimTasksForCard(taskIds, card.id);
-  if (claimed.length === 0) {
-    // **空のカードを残さない。**畳むものが無いのにカードだけ増えると、
-    // ボードに中身の無い要約が並ぶ (#191 で空カードを嫌ったのと同じ理由)
-    deleteSummaryCards([card.id]);
+  // **カードの作成と claim は1つのトランザクション。**別々にすると、カードを作った直後に
+  // プロセスが止まったときに空のカードが残る — この札が塞ごうとしている事故そのものを
+  // 自分の実装で作ることになる (Codexレビュー指摘)。押さえられなければカードごと巻き戻る
+  const result = createCardWithClaimedTasks(taskIds);
+  if (!result) {
     log("archive", `tasksCompleted [${taskIds.join(",")}]: 畳める対象が無かったのでカードは作らない`);
     return undefined;
   }
+  const { card, claimed } = result;
   if (claimed.length < taskIds.length) {
     const skipped = taskIds.filter((id) => !claimed.includes(id));
     log("archive", `tasksCompleted: #${skipped.join(", #")} は畳まなかった (done以外・ゴミ箱・畳み済みのいずれか)`);

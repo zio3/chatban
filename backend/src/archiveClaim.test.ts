@@ -26,10 +26,13 @@ ensureInitialProject(); // 空のデータディレクトリなのでプロジ�
 
 const {
   claimTasksForCard,
+  createCardWithClaimedTasks,
   createSummaryCard,
   createTask,
   detachTaskFromCard,
+  getSummaryCard,
   getTask,
+  listSummaryCards,
   listUnfoldedDoneIds,
   reassignTasksToCard,
   setChecked,
@@ -83,6 +86,29 @@ test("**archived=0 なのに古いカードIDが残った行も畳み直せる**
   const card = createSummaryCard();
   assert.deepEqual(claimTasksForCard([id], card.id), [id], "壊れた行を畳み直せていない");
   assert.deepEqual(tasksOfCard(card.id).map((t) => t.id), [id]);
+  // **古いカードの索引からも外れていること。**外さないと同じIDが2枚に載り (実測: stale:[1] fresh:[1])、
+  // UIの件数が二重になるうえ、rollUpOldCards / compactArchive が古い索引から拾い直す
+  assert.deepEqual(getSummaryCard(stale.id)?.taskIds ?? [], [], "古いカードの索引にIDが残っている");
+});
+
+test("カードの作成と claim は同時に起きる — 空カードを残さない (#195)", () => {
+  // カード作成が claim の外にあると、作った直後や「0件だったので消す」前に
+  // プロセスが止まったときに**空のカードが残る**。この札が塞ごうとしている事故そのものを
+  // 自分の実装で作っていた (Codexレビュー指摘)
+  const before = listSummaryCards().length;
+
+  // 畳めるものが1つも無い指定 (review のまま)
+  const notDone = createTask("まだ検収待ち", "review").id;
+  assert.equal(createCardWithClaimedTasks([notDone]), null, "畳めないのに結果が返っている");
+  assert.equal(listSummaryCards().length, before, "空のカードが残っている");
+
+  // 畳めるものがあればカードごと返る
+  const done = makeDoneTask("畳めるDone");
+  const result = createCardWithClaimedTasks([done]);
+  assert.ok(result, "畳めるのに null が返っている");
+  assert.deepEqual(result!.claimed, [done]);
+  assert.deepEqual(tasksOfCard(result!.card.id).map((t) => t.id), [done]);
+  assert.equal(listSummaryCards().length, before + 1);
 });
 
 test("押さえられたものだけを返す (#195)", () => {

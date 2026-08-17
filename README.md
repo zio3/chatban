@@ -107,25 +107,35 @@ LLMの接続先は <OpenAI / Anthropic / Ollama> を使う。
 
 ### 手順
 
+**1〜4 はすべてリポジトリのルートから始めます**(各行の最後で元の場所に戻します)。
+
 ```powershell
 # 1. 依存関係
-cd backend; npm install; cd ../frontend; npm install; cd ..
+cd backend; npm install; cd ..\frontend; npm install; cd ..
 
 # 2. LLMの設定 — 使うプロバイダの見本を1枚コピーしてキーを書く
 copy backend\examples\config.openai.json backend\config.json
 
 # 3. 疎通確認 (用途別の3モデルすべてに1回ずつ投げます)
-cd backend; npx tsx scripts/check-config.ts
+cd backend; npx tsx scripts/check-config.ts; cd ..
 
-# 4. 起動 (Windows: DBバックアップ+両サーバー+ヘルスチェック)
+# 4. 起動 (DBバックアップ → 両サーバーを別ウィンドウで起動 → ヘルスチェック)
 .\start-dev.ps1
-
-# 手動起動の場合
-cd backend; npm run dev    # http://localhost:8787
-cd frontend; npm run dev   # http://localhost:5173 (こちらを開く。/api と /socket.io は8787へproxy)
 ```
 
-macOS / Linux では 2 が `cp backend/examples/config.openai.json backend/config.json`、4 は `start-dev.ps1` を使わず手動起動の2行になります(あのスクリプトはWindows前提で、DBバックアップとヘルスチェックを兼ねているだけです)。
+起動したら **http://localhost:5173 を開きます**(8787 はAPI側です)。
+
+`start-dev.ps1` を使わない場合は、**サーバーを2つとも動かし続ける必要がある**ので、ターミナルを2つ使います:
+
+```powershell
+# ターミナル1
+cd backend; npm run dev     # http://localhost:8787
+
+# ターミナル2 (別ウィンドウ)
+cd frontend; npm run dev    # http://localhost:5173 ← こちらを開く。/api と /socket.io は8787へproxy
+```
+
+macOS / Linux では、2 が `cp backend/examples/config.openai.json backend/config.json`、4 は `start-dev.ps1` を使わず上の2ターミナル方式になります(あのスクリプトはWindows前提で、DBバックアップとヘルスチェックを兼ねているだけです)。
 
 データは `backend/data/` に置かれます(プロジェクトごとに1つのSQLiteファイル)。初回起動時に「マイプロジェクト」が1つ作られます。
 
@@ -134,9 +144,9 @@ macOS / Linux では 2 が `cp backend/examples/config.openai.json backend/confi
 | 症状 | 原因 |
 |---|---|
 | 画面は開くが、チャットだけ失敗する | `backend/config.json` が無い。設定はLLMを使う操作で初めて要求されるので、起動そのものは通ります |
-| 起動時に設定の不備を名指しで怒られる | `apiStyle` の綴り違い、`models` の3つのどれかが空、`baseURL` がhttp://の外部宛(キーが平文で飛ぶので弾いています)。メッセージの通りに直します |
+| 設定の不備を名指しで怒られる | `apiStyle` の綴り違い、`models` の3つのどれかが空、`baseURL` がhttp://の外部宛(キーが平文で飛ぶので弾いています)。メッセージの通りに直します。**起動時ではなく、`check-config.ts` か最初のLLM操作のときに出ます**(設定は必要になってから読むので、起動そのものは通ってしまいます) |
 | `model_not_found` | モデルIDの書き方が宛先と合っていません。直接APIは接頭辞なし (`gpt-5.4-mini-2026-03-17`)、OrcaRouter経由は `provider/model` 形式 |
-| `EADDRINUSE` | 8787 か 5173 が空いていません。`PORT` を変えるか、残っているプロセスを**ツリーごと**止めます(Listenしているプロセスだけ落とすと `tsx watch` の親が残って再発します) |
+| `EADDRINUSE` | 8787 か 5173 が空いていません。**まず残っているプロセスを探して、ツリーごと止めます**(Listenしているプロセスだけ落とすと `tsx watch` の親が残って再発します)。ポート自体を変えるなら3か所セットです — backendの `PORT`、frontendの `BACKEND_URL`(proxyの宛先)、`start-dev.ps1` のポート番号(スクリプト内で直書き) |
 | Ollama構成で接続できない | `ollama serve` が動いているか、`ollama list` にそのモデルがあるかを確認します |
 
 ### 接続先とモデル
@@ -195,12 +205,16 @@ E2Eは専用ポート(backend:8799 / frontend:5199)と専用データディレ�
 
 ChatBan自体の開発タスクは、ChatBanのボードで管理しました。Claude Codeが内蔵MCPサーバー経由でタスクを拾い、実装し、Reviewに置き、人間が検収する — 「作っているツールで、作っているツールのタスクを管理する」構図です。
 
+繋ぐ先は「HTTPのMCPサーバー1本」です。**Claude Code なら `.mcp.json` がこのリポジトリに入っているので、clone した状態で既に繋がります**(プロジェクト#1向け):
+
 ```json
 // .mcp.json — プロジェクトごとにエントリを分けられる
 { "mcpServers": {
   "chatban": { "type": "http", "url": "http://localhost:8787/mcp/1" }
 } }
 ```
+
+**`.mcp.json` は Claude Code の形式です。**他のCLIは設定の置き場が違うので、繋ぐURLだけ上と同じにして、書き方はそれぞれのものに従ってください(Codex CLI なら `codex mcp add`、または `~/.codex/config.toml` / `.codex/config.toml`)。
 
 **接続URLでプロジェクトが固定される**ので、人間がUIで別プロジェクトに切り替えても、エージェントの書き込み先は変わりません。ツールの引数にプロジェクトIDは出しません(引数が増えるほどLLMは迷うため)。
 

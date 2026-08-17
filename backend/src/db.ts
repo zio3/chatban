@@ -549,17 +549,25 @@ export function reorderTasks(
 // 出す必要がない。LLMが語を並べ(判断)、コードが総当たりする(機械的処理) — #91の並べ替えと同じ形。
 //
 // アーカイブ済みも対象にする。経緯を後から辿りたい場面はDoneになった後のほうが多い。
-/** #176: `titleOnly` は「候補が広すぎたとき」の絞り込み。
+/** #176: **絞り込みの引数は持たない。**
  *
  * 複数語をORで引くのは表記ゆれを展開するためで、それ自体は正しい。問題は本文(経緯メモ)まで
  * 見ることで、**語がかすっただけのタスクが混ざる**こと。実例 (2026-08-15): 「記事 / スクショ /
  * Zenn / 提出」で引いたら #130(ダークモードの検討) や #103(検索機能の実装) が返った —
  * どちらも context に「提出」の2文字があっただけ。候補10件を読み直すことになった。
  *
- * ANDで絞る案もあったが採らない。表記ゆれの展開 (「DBを分ける」と「ファイル分離」) は
- * **どれか1つが当たればよい**ので、ANDにすると展開そのものが機能しなくなる。
- * 見る範囲を狭めるほうが、ORの意味を保ったまま効く */
-export function searchTasks(terms: string[], limit = 10, titleOnly = false) {
+ * `titleOnly` を足しかけたが**やめた** (zio: 「その方向だったら、SQL直接書いてもらう方向を
+ * 案内しようか」)。絞りたい形は「タイトルだけ」以外にもいくらでもある — 期限つきだけ、
+ * review だけ、8月に触ったものだけ、その組み合わせ。引数で並べ始めると際限が無く、
+ * **#91 でソートキーを渡す方式を作りかけて捨てたのと同じ形**になる。
+ *
+ * 絞り込みは `query_log` (読み取り専用のSQL窓口) の仕事にする。`WHERE title LIKE '%記事%'`
+ * と書けば済み、**新しい安全境界も要らない** (readonly + 許可リスト #168 で既に守ってある)。
+ * ANDも同じ理由で足さない (そもそも表記ゆれの展開は「どれか1つ当たればよい」ので、
+ * ANDにすると展開そのものが機能しなくなる)。
+ *
+ * この関数は「表記ゆれを展開して当たりを見つける」までの道具と位置づける */
+export function searchTasks(terms: string[], limit = 10) {
   const words = terms.map((t) => t.trim()).filter(Boolean).slice(0, 10);
   if (words.length === 0) return { hits: [] };
   const rows = db()
@@ -570,7 +578,7 @@ export function searchTasks(terms: string[], limit = 10, titleOnly = false) {
 
   const scored = rows
     .map((r) => {
-      const haystack = titleOnly ? String(r.title ?? "") : [r.title, r.summary, r.context].filter(Boolean).join("\n");
+      const haystack = [r.title, r.summary, r.context].filter(Boolean).join("\n");
       const lower = haystack.toLowerCase();
       const matched = words.filter((w) => lower.includes(w.toLowerCase()));
       if (matched.length === 0) return null;
@@ -589,10 +597,6 @@ export function searchTasks(terms: string[], limit = 10, titleOnly = false) {
 
   // 多くの語に当たったものほど関連が強い、という素朴な順位付けで十分
   scored.sort((a, b) => b.matched.length - a.matched.length || b.id - a.id);
-
-  // #176: タイトル限定は「絞りたい」という意思表示なので、会話ログも引かない。
-  // ここだけ広いままだと、絞ったつもりで結局同じ量を読むことになる
-  if (titleOnly) return { hits: scored.slice(0, limit), searched: words, titleOnly: true };
 
   // #106追補: 会話ログも同じ語で引く。UIを作らず「あんな話してたっけ?」をAIに拾わせる。
   // チャットは揮発させる方針(#72)なので常時プロンプトには載せない — 聞かれたときだけ掘る

@@ -4,7 +4,7 @@ import {
   BLOCKED_BY_DESCRIPTION,
   CONTEXT_WRITE_DESCRIPTION,
   DUE_DESCRIPTION,
-  SEARCH_TITLE_ONLY_DESCRIPTION,
+  SEARCH_DESCRIPTION,
   PROJECT_CONTEXT_WRITE_DESCRIPTION,
   QUERY_LOG_DESCRIPTION,
   REJECTED_DESCRIPTION,
@@ -216,14 +216,10 @@ export function buildMcpServer(onEvent: (kind: "board" | "proposals") => void): 
   server.registerTool(
     "search_tasks",
     {
-      description:
-        "タスクの本文(タイトル・現況・経緯メモ)を横断検索する。アーカイブ済みも対象。表記ゆれや言い換えは自分で展開して複数語を渡す(OR検索)",
-      inputSchema: {
-        terms: z.array(z.string()).describe("検索語(最大10)。言い換え・英日表記を並べる"),
-        title_only: flexBool.describe(SEARCH_TITLE_ONLY_DESCRIPTION),
-      },
+      description: SEARCH_DESCRIPTION,
+      inputSchema: { terms: z.array(z.string()).describe("検索語(最大10)。言い換え・英日表記を並べる") },
     },
-    async ({ terms, title_only }) => text(searchTasks(terms, undefined, !!title_only))
+    async ({ terms }) => text(searchTasks(terms))
   );
 
   // #108: 記録へのSQL窓口。チャットにしか無く、MCP越しの外部エージェントからは引けなかった。

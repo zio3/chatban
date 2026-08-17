@@ -158,10 +158,16 @@ export const CONTEXT_WRITE_DESCRIPTION =
 export const DUE_DESCRIPTION =
   "期限 YYYY-MM-DD (実在する日付。相対表現は今日の日付から解決する)。形式が違うとその指定だけ捨てて badDue で名指しで返す — 保存されたつもりにならないよう、返り値を確かめる";
 
-/** #176: 検索を絞る唯一のつまみ。OR検索は表記ゆれの展開に必要なので変えず、
- * 「見る範囲」を狭める側で絞れるようにする */
-export const SEARCH_TITLE_ONLY_DESCRIPTION =
-  "trueにすると本文(経緯メモ・会話ログ)を見ずタイトルだけを引く。候補が広すぎて読み直しになるときの絞り込み用。まずは省略して引き、ノイズが多ければこれで引き直す";
+/** #176: 検索の位置づけ。**絞り込みの引数は持たない** — 絞りたい形は際限が無いので、
+ * SQL窓口 (query_log) へ渡すよう契約側で案内する。#91 でソートキーを渡す方式を捨てたのと同じ判断。
+ * チャットとMCPで同じ文言を使う (入口ごとに書き分けると必ずズレる) */
+export const SEARCH_DESCRIPTION = [
+  "タスクの本文(タイトル・現況・経緯メモ)を横断検索する。アーカイブ済みも対象。表記ゆれや言い換えは自分で展開して複数語を渡す(OR検索・当たった語が matched で返る)。",
+  "**候補が広すぎたら、この道具で絞ろうとせず query_log でSQLを書く。**本文にその語が1度出てくるだけで当たるので、絞り込みはSQLのほうが素直に書ける:",
+  "例(タイトルだけを見る): SELECT id, title FROM live_tasks WHERE title LIKE '%記事%'",
+  "例(条件を重ねる): SELECT id, title, due FROM live_tasks WHERE status='review' AND due IS NOT NULL ORDER BY due",
+  "この道具は「表記ゆれを展開して当たりを見つける」まで、query_log は「条件で絞る」— 使い分ける。",
+].join("\n");
 
 /** 依存の契約。「順番に着手したい」を依存にしてしまう失敗が実際に起きた
  * (「DateTimeOffset化はデモの後」を blocked_by で表現していた)。
@@ -302,13 +308,13 @@ export const tools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
     type: "function",
     function: {
       name: "search_tasks",
-      description:
-        "タスクの本文(タイトル・現況・経緯メモ)と会話ログを横断検索する。アーカイブ済みも対象。会話は新しい順に最大6件返る(「あんな話してたっけ?」用)。表記ゆれや言い換えは自分で展開して複数語を渡すこと(OR検索・当たった語が返る)。例: 「なんでDB分けたんだっけ」→ terms:[\"DB\",\"データベース\",\"ファイル分離\",\"分割\",\"プロジェクト\"]",
+      // 共通の説明 + チャット側だけの補足 (会話ログも引く)。
+      // 絞り込みをSQLへ寄せる案内は共通側に入っている (#176)
+      description: `${SEARCH_DESCRIPTION}\n会話ログも同じ語で引き、新しい順に最大6件返る(「あんな話してたっけ?」用)。例: 「なんでDB分けたんだっけ」→ terms:["DB","データベース","ファイル分離","分割","プロジェクト"]`,
       parameters: {
         type: "object",
         properties: {
           terms: { type: "array", items: { type: "string" }, description: "検索語(最大10)。言い換え・英日表記を並べる" },
-          title_only: { type: "boolean", description: SEARCH_TITLE_ONLY_DESCRIPTION },
         },
         required: ["terms"],
       },
@@ -413,7 +419,7 @@ async function execTool(name: string, args: any, uiActions: UiAction[], events: 
       };
     }
     case "search_tasks": {
-      const r = searchTasks(args.terms ?? [], undefined, !!args.title_only);
+      const r = searchTasks(args.terms ?? []);
       // スニペットは「当たった箇所の周辺」でしかないので、判断の核心が範囲外にあることが多い。
       // 検索は「どのタスクか」を絞るまでの道具と位置づけ、中身は query_log で読ませる
       return {

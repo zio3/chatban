@@ -323,6 +323,21 @@ async function mcp(tool: string, args: unknown): Promise<any> {
   return JSON.parse(JSON.parse(line).result.content[0].text);
 }
 
+/** MCPの道具一覧 (契約そのもの)。同じ取り出しが3か所に書かれていたのでここへ寄せた */
+async function mcpToolList(): Promise<any[]> {
+  const res = await fetch(`${API}/mcp/1`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream" },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+  });
+  const line = (await res.text())
+    .split("\n")
+    .map((l) => l.replace(/^data: /, "").trim())
+    .filter((l) => l.startsWith("{"))
+    .pop()!;
+  return JSON.parse(line).result.tools as any[];
+}
+
 test("経緯メモの上書きは版が合うときだけ通る。状態変更は版に縛られない (#112)", async () => {
   const id = await createTask("楽観ロックの検証");
 
@@ -1662,7 +1677,7 @@ test("期限の形式が違うとその指定だけ捨てて名指しで返す (
     .toBe("2026-08-17");
 });
 
-test("search_tasks は title_only で本文のかすりを落とせる (#176)", async () => {
+test("検索の絞り込みは引数ではなくSQLへ案内する (#176)", async () => {
   const hit = await createTask("スクリーンショットを撮り直す");
   const noise = await createTask("ダークモードの検討");
   // 経緯メモに語が入っているだけのタスク (#130 で実際に起きた形)。
@@ -1671,16 +1686,30 @@ test("search_tasks は title_only で本文のかすりを落とせる (#176)", 
     updates: [{ id: noise, context_append: "提出前に見た目を揃えるかどうか。スクリーンショットの見え方も含む" }],
   });
 
+  // search_tasks は広く当てる道具のまま (本文で当たるものも返る)
   const wide = await mcp("search_tasks", { terms: ["スクリーンショット"] });
   const wideIds = wide.hits.map((h: any) => h.id);
   expect(wideIds).toContain(hit);
   expect(wideIds, "本文で当たるものが出ていない (前提が崩れている)").toContain(noise);
 
-  const narrow = await mcp("search_tasks", { terms: ["スクリーンショット"], title_only: true });
-  const narrowIds = narrow.hits.map((h: any) => h.id);
-  expect(narrowIds).toContain(hit);
-  expect(narrowIds, "タイトル限定なのに本文で当たったものが残っている").not.toContain(noise);
-  // 絞ったときは会話ログも引かない (絞ったつもりで同じ量を読むことにならないように)
-  expect(narrow.chatHits).toBeUndefined();
-  expect(narrow.titleOnly).toBe(true);
+  // **絞り込みの引数は持たない。**足しかけた title_only は撤回した (#91 と同じ判断) —
+  // 渡しても黙って無視される (=引数で絞れると思わせない) ことを固定する
+  const ignored = await mcp("search_tasks", { terms: ["スクリーンショット"], title_only: true });
+  expect(ignored.hits.map((h: any) => h.id), "絞り込みの引数が生きている").toContain(noise);
+
+  // 代わりに契約がSQLへ案内していること。案内が消えたら、絞りたいエージェントは
+  // 引数を探して見つからず、広い結果を読み直すことになる
+  const tools = await mcpToolList();
+  const desc = tools.find((t: any) => t.name === "search_tasks").description as string;
+  expect(desc).toContain("query_log");
+  expect(desc).toContain("title LIKE");
+
+  // **案内した先が実際に効くことまで確かめる。**手順を書くだけでなく通してみる
+  const narrowed = await mcp("query_log", {
+    scope: "audit",
+    sql: "SELECT id, title FROM live_tasks WHERE title LIKE '%スクリーンショット%'",
+  });
+  const narrowedIds = narrowed.rows.map((r: any) => r.id);
+  expect(narrowedIds).toContain(hit);
+  expect(narrowedIds, "SQLで絞ったのに本文で当たったものが残っている").not.toContain(noise);
 });

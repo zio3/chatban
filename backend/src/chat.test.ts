@@ -177,20 +177,30 @@ test("知らない値は列として認めない", () => {
 
 // Export は「検証のために人へ渡すファイル」「記事の一次資料」。settings を全行そのまま
 // 出していたため、セッション署名鍵が平文で入っていた (自動レビュー指摘)。
-// #180 で認証ごと廃止し、いま settings に秘密は無い。**それでもこの番人は残す** —
-// 秘密を持つ設定が増えたときに、伏字リストへの追加を忘れたら落ちる側にしておく。
+// #180 で認証ごと廃止し、いま settings に秘密は無い。
+//
+// **このテストが見ているのは2点だけ** — 認証の設定が消えていること、64桁hex (旧署名鍵の形) が
+// 素で出ていないこと。**「あらゆる秘密を伏せる」ことも「伏字の仕組みが働く」ことも保証していない**
+// (`REDACTED_SETTINGS` は空なので、伏字の分岐はいまどのキーにも当たらない)。
+// 主張をテストの実力より強く書くと、通っているのに守られていない状態になる (自動レビュー指摘)。
+// 秘密を持つ設定を足すときは、`REDACTED_SETTINGS` への追加と、その伏字を確かめるテストを一緒に足す
 
-test("Exportに秘密らしき値を素で載せない", () => {
+test("認証の設定はExportに残っていない (#180の削除漏れの番人)", () => {
   const rows = exportableSettings();
-  assert.equal(
-    rows.find((r) => r.key === "auth.sessionSecret"),
-    undefined,
-    "認証は #180 で廃止した。auth.sessionSecret が残っているなら削除が漏れている"
+  assert.deepEqual(
+    rows.filter((r) => r.key.startsWith("auth.")),
+    [],
+    "認証は #180 で廃止した。auth.* が残っているなら設定の削除が漏れている"
   );
-  for (const r of rows) assert.ok(!/^[0-9a-f]{64}$/.test(r.value), `${r.key} に64桁hexが素で載っている`);
 });
 
-test("伏せるのは鍵だけ。設定が存在したことは記録として残す", () => {
+test("旧セッション署名鍵の形 (64桁hex) が素で出ていない", () => {
+  for (const r of exportableSettings()) {
+    assert.ok(!/^[0-9a-f]{64}$/.test(r.value), `${r.key} に64桁hexが素で載っている`);
+  }
+});
+
+test("設定が存在したことは記録として残す (キーは伏せない)", () => {
   const rows = exportableSettings();
   // モデル設定などは値ごと残る (#88: どのモデルで動いていたかを追うため)
   for (const r of rows) assert.ok(typeof r.key === "string" && r.key.length > 0);

@@ -1102,9 +1102,9 @@ test("お金が動く口・外部を叩く口はGETに置かない (#180)", asyn
     const res = await fetch(`${API}${path}`);
     expect(res.status, `${path} がGETで叩ける`).toBe(404);
   }
-  // 対照: POST なら動く (塞ぎすぎて機能を殺していないこと)
-  const ok = await fetch(`${API}/api/metrics`, { method: "POST" });
-  expect(ok.status).toBe(200);
+  // **対照 (POSTなら200) は置かない。**この3本はどれも外部API (請求・モデルカタログ・LLM) を
+  // 叩くので、E2Eから呼ぶと実際の通信と課金が走る。E2Eは「LLM呼び出しなし」が原則
+  // (自動レビュー指摘。塞ぎすぎていないことは、画面が実際に動いていることで確かめている)
 });
 
 test("知らないページからのSocket接続はハンドシェイクで断る (#180)", async () => {

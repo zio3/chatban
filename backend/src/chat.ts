@@ -81,9 +81,15 @@ export const QUERY_LOG_DESCRIPTION = [
   // #175: **どの status がどちらに入るかを書く。**「生きている / 終わった」だけだと
   // review がどちらか分からず、実際に「live_tasks に review が出ないバグがある」と誤報した
   // (2026-08-15。ビューは正しく、検収済みで消えていただけ)。
-  // ビューの条件は status ではなく archived / trashed_at / done_at なので、**両方に出る瞬間がある** —
-  // そこも書かないと「重複している=おかしい」と読まれる
-  "live_tasks に入るのは **todo / inprogress / review** の3列。加えて「Doneへ確定した直後で、まだ要約カードに畳まれていないもの」も短時間だけ入る(畳まれると消える)。done_tasks は done_at が入っているものなので、その短時間は**同じタスクが両方に出る**(不整合ではない)。列で絞りたいなら status を書く: WHERE status='review'",
+  // ビューの条件は status ではなく archived / trashed_at / done_at なので、**両方に出る状態がある** —
+  // そこも書かないと「重複している=おかしい」と読まれる。
+  //
+  // **「短時間だけ」とは書かない** (Codexレビュー指摘)。畳む処理は fire-and-forget で走り
+  // (index.ts の runScoped)、`archived=1` が付くのは rollUpOldCards を待ったあと
+  // (archive.ts)。**その間にプロセスが止まればジョブは失われ、起動時に
+  // `status=done AND archived=0` を回収する処理は無い**ので、両方に出る状態は無期限に残る。
+  // 時間で消えると書くと、エージェントは「待てば直る」と判断してしまう
+  "live_tasks に入るのは **todo / inprogress / review** の3列。加えて「Doneへ確定したが、まだ要約カードに畳まれていないもの」も入る。done_tasks は done_at が入っているものなので、**畳まれるまでは同じタスクが両方に出る**(不整合ではない)。畳む処理は非同期で、失敗したりプロセスが止まればそのまま残るので、**時間が経てば消えるとは考えないこと**。列で絞りたいなら status を書く: WHERE status='review'",
   "例(いつ何件終わったか): SELECT done_day, COUNT(*) n FROM done_tasks GROUP BY 1 ORDER BY 1 DESC",
   "例(直近1週間に終わったもの): SELECT done_day, title FROM done_tasks WHERE done_day >= date('now','localtime','-7 days')",
   "SELECT * は使わない。必要な列だけ挙げる。context(経緯メモ)は1件1,000字を超えるので、一覧では length(context) か substr(context,1,120) にし、全文が要るタスクだけ id で絞って引き直す",

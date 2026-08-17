@@ -1832,7 +1832,11 @@ test("live_tasks と done_tasks に何が入るかは、契約に書いてある
   // 契約側にもその説明が書かれていること (書いていないと推測される #92/#175)
   const tools = await mcpToolList();
   const desc = tools.find((t: any) => t.name === "query_log").description as string;
-  for (const word of ["todo / inprogress / review", "両方に出る"]) {
+  for (const word of ["todo / inprogress / review", "畳まれるまでは同じタスクが両方に出る"]) {
     expect(desc, `契約に「${word}」の説明が無い`).toContain(word);
   }
+  // **「短時間」と書き戻さない。**畳む処理は fire-and-forget で、プロセスが止まれば
+  // ジョブは失われ、起動時に回収する処理も無い = 両方に出る状態は無期限に残る (Codexレビュー指摘)。
+  // 「時間で消える」と書くと、エージェントは待てば直ると判断してしまう
+  expect(desc, "「短時間」と書くと待てば直ると読まれる").not.toContain("短時間");
 });

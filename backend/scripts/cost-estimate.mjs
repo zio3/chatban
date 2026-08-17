@@ -1,7 +1,6 @@
 // llm_calls の実測トークン × /v1/models の単価 で自前概算を出し、公式の累計請求額と突き合わせる。
 // 使い方: node scripts/cost-estimate.mjs
 import Database from "better-sqlite3";
-import { join } from "node:path";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";

@@ -275,20 +275,25 @@ CREATE VIEW live_tasks AS
   // (途中で失敗しても、次の起動でもう一度そこから始められる)。
   // 列が消せないのに起動を続けると、**廃止したはずの軸がスキーマに残ったまま固定される** —
   // ログは誰も見ないので、部分適用に気づく機会が無い (自動レビュー指摘)。異常なので止める
+  // **ログは transaction の外で出す。**中で出すと、後続のDDLが失敗して巻き戻ったあとも
+  // 「削除しました」だけが残る (ログは即座にファイルへ書かれるが、DBは戻る)。
+  // 異常を調べている人に「assignee は消したはずだ」と思わせるのが一番まずい (自動レビュー指摘)
+  const dropped: string[] = [];
   db.transaction(() => {
-    dropColumn("tasks", "assignee");
-    dropColumn("tasks", "assign_reason");
+    dropColumn("tasks", "assignee", dropped);
+    dropColumn("tasks", "assign_reason", dropped);
     for (const t of ["members", "proposals", "assignment_history"]) {
-      const existed = !!db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name = ?").get(t);
+      if (!db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name = ?").get(t)) continue;
       db.exec(`DROP TABLE IF EXISTS ${t}`);
-      // 消えたときだけ記録する。起動のたびに出しても意味がない
-      if (existed) log("schema", `${t} を削除しました (#179 担当者の廃止)`);
+      dropped.push(t);
     }
   })();
+  // 消えたときだけ記録する。起動のたびに出しても意味がない
+  if (dropped.length > 0) log("schema", `${dropped.join(" / ")} を削除しました (#179 担当者の廃止)`);
 
   /** 列が実在するときだけ DROP し、**消えたことを確かめる**。
    * 無ければ何もしない (適用済み) / 消せなければ投げる (黙って通さない) */
-  function dropColumn(table: string, column: string): void {
+  function dropColumn(table: string, column: string, out: string[]): void {
     const has = () => (db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).some((c) => c.name === column);
     if (!has()) return;
     try {
@@ -300,7 +305,7 @@ CREATE VIEW live_tasks AS
       );
     }
     if (has()) throw new Error(`${table}.${column} の削除が反映されていません (#179 担当者の廃止)`);
-    log("schema", `${table}.${column} を削除しました (#179 担当者の廃止)`);
+    out.push(`${table}.${column}`);
   }
 }
 

@@ -40,7 +40,7 @@
 | ルーティング | なし (`location.pathname` を読むだけ) | `/p/<id>` の1形式しかないのでReact Routerは過剰 |
 | バック | Express + tsx watch | 最小構成、ホットリロード |
 | DB | better-sqlite3 (プロジェクトごとに1ファイル) | 同期APIで簡潔。マイグレーションはALTER+try/catch流儀 |
-| LLM | OpenAI SDK → OrcaRouter | OpenAI互換。モデルIDは `provider/model` 形式必須 |
+| LLM | OpenAI SDK (+ Anthropic Messages形式) | 接続先は `backend/config.json`。モデルIDの書き方は宛先次第 (直接APIは接頭辞なし、OrcaRouterは `provider/model` 形式) |
 | MCP | @modelcontextprotocol/sdk | Streamable HTTP (stateless、リクエスト毎に接続構築) |
 | E2E | Playwright | 専用ポート8799/5199+専用データディレクトリで開発サーバーと共存 |
 

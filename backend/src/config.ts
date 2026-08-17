@@ -30,30 +30,79 @@ export const CONFIG_PATH = process.env.CHATBAN_CONFIG ?? path.join(process.cwd()
 /** .gitignore に載っていてほしい行。**リポジトリは公開なので、ここが唯一の事故経路** */
 export const IGNORE_ENTRY = "backend/config.json";
 
+/** ループバック宛か。**HTTPを許すのはここだけ。**
+ * ローカルLLM (Ollama等) は http://localhost:11434 で待ち受けるので http を塞げないが、
+ * 外向きの http はキーが平文で流れる */
+function isLoopbackHost(host: string): boolean {
+  const h = host.toLowerCase().replace(/^\[|\]$/g, "");
+  return h === "localhost" || h === "127.0.0.1" || h === "::1" || h.endsWith(".localhost");
+}
+
+/** 宛先URLとして受け付けてよいか。**駄目な理由を返す (良ければ null)。**
+ *
+ * `z.string().url()` だけでは足りない理由が3つある:
+ *  - `new URL("localhost:11434")` は成功する (`localhost:` をプロトコルと解釈する)
+ *  - **http:// を任意のホストに許すと、APIキーが平文でネットワークに出る。**
+ *    Authorization ヘッダも x-api-key も暗号化されない (Codexレビュー指摘)
+ *  - userinfo (`https://user:pass@host`) や query を許すと、**キーがURLに混ざり、
+ *    ログや画面表示にそのまま出る**。宛先の指定にこれらは要らない */
+export function baseUrlProblem(v: string): string | null {
+  let u: URL;
+  try {
+    u = new URL(v);
+  } catch {
+    return "URLとして読めません";
+  }
+  if (u.protocol !== "https:" && u.protocol !== "http:") return "http:// または https:// で始める必要があります";
+  if (u.protocol === "http:" && !isLoopbackHost(u.hostname)) {
+    return `http:// はローカル宛 (localhost / 127.0.0.1 / ::1) のときだけ使えます。外部の宛先には https:// を使ってください`;
+  }
+  if (u.username || u.password) return "URLにユーザー名やパスワードを含めないでください (キーは apiKey / apiKeyFile に書きます)";
+  if (u.search) return "URLにクエリを含めないでください";
+  if (u.hash) return "URLに # 以降を含めないでください";
+  return null;
+}
+
+/** 空白だけの値を弾く。`min(1)` はスペース1文字を通してしまう */
+const nonBlank = (what: string) => z.string().trim().min(1, `${what}が空です`);
+
 const schema = z
   .object({
-    apiKey: z.string().min(1).optional(),
+    apiKey: nonBlank("apiKey").optional(),
     /** キーを設定と同じファイルに置きたくないとき用。設定を人に見せる場面 (記事・スクショ) で効く */
-    apiKeyFile: z.string().min(1).optional(),
-    // **`z.string().url()` だけでは足りない。**`new URL("localhost:11434")` は成功する
-    // (`localhost:` をプロトコルと解釈する) ので、Ollama の宛先を http:// なしで書いた設定が
-    // 起動時に通ってしまい、最初のLLM呼び出しまで気づけない
-    baseURL: z
-      .string()
-      .url()
-      .refine((v) => /^https?:\/\//i.test(v), { message: "http:// または https:// で始める必要があります" }),
+    apiKeyFile: nonBlank("apiKeyFile").optional(),
+    baseURL: z.string().superRefine((v, ctx) => {
+      const problem = baseUrlProblem(v);
+      if (problem) ctx.addIssue({ code: z.ZodIssueCode.custom, message: problem });
+    }),
     // **推測しない。**サンプルを丸ごとコピーする導線なので省略されることがない。
     // baseURL から推測する実装も考えたが、OrcaRouter のように両方を持つ宛先があるので原理的に当たらない
     apiStyle: z.enum(["chat", "messages"]),
     models: z.object({
-      main: z.string().min(1),
-      archive: z.string().min(1),
-      cheap: z.string().min(1),
+      main: nonBlank("main"),
+      archive: nonBlank("archive"),
+      cheap: nonBlank("cheap"),
     }),
   })
   .refine((c) => Boolean(c.apiKey || c.apiKeyFile), {
     message: "apiKey か apiKeyFile のどちらかが要ります",
   });
+
+/** 文字列から秘密を伏せる。**上流のエラー本文をそのまま出さないための最後の砦。**
+ *
+ * 互換宛先の中には、認証に失敗したとき**受け取ったキーをエラー本文に含めて返すもの**がある
+ * (Codexレビューで `messages 401: invalid key: sk-...` を再現)。その本文は
+ * ログにもHTTP応答にも流れるので、出口で伏せる。
+ *
+ * 短い値は伏せない — 3文字のキーのようなものを伏字にすると、無関係な文字列まで壊れる */
+export function redactSecrets(text: string, secrets: (string | undefined | null)[]): string {
+  let out = text;
+  for (const s of secrets) {
+    if (!s || s.length < 8) continue;
+    out = out.split(s).join("***");
+  }
+  return out;
+}
 
 /** `~/...` をホームディレクトリへ展開する。設定ファイルに絶対パスを書かせないため */
 export function expandHome(p: string, home: string = homedir()): string {
@@ -104,25 +153,39 @@ export function isGitignored(gitignoreText: string, entry: string = IGNORE_ENTRY
     .some((l) => l === entry || l === `/${entry}`);
 }
 
+/** その設定ファイルについて .gitignore に書かれているべき行。**リポジトリの外なら null。**
+ *
+ * CHATBAN_CONFIG で別のパスを指せるので、**固定の `backend/config.json` だけを見ると
+ * 見落とす** (Codexレビュー指摘: 既定行が .gitignore にある限り、リポジトリ内の
+ * 別名の設定ファイルが追跡対象でも警告されない)。実際に使うパスから逆算する */
+export function ignoreEntryFor(configPath: string, repoRoot: string): string | null {
+  const rel = path.relative(repoRoot, configPath);
+  if (!rel || rel.startsWith("..") || path.isAbsolute(rel)) return null; // リポジトリ外なのでgitの管轄外
+  return rel.split(/[\\/]/).join("/"); // .gitignore は常に / 区切り
+}
+
 /** 起動時に一度だけ。**設定ファイルがあるのに .gitignore に載っていなければ警告する。**
  *
  * 公開リポジトリでキーが漏れる経路は実質これ1つ (gitignoreを書き忘れて `git add .`) なので、
  * ファイルを1枚読むだけの確認で塞いでおく。「あとで消す」は履歴に残るので効かない */
 export function warnIfConfigNotIgnored(
   configPath: string = CONFIG_PATH,
-  repoRoot: string = path.join(process.cwd(), "..")
+  repoRoot: string = path.join(process.cwd(), ".."),
+  emit: (msg: string) => void = (m) => log("config", m)
 ): void {
   if (!fs.existsSync(configPath)) return;
+  const entry = ignoreEntryFor(configPath, repoRoot);
+  if (entry === null) return; // リポジトリ外に置いてあるなら、そもそもコミットされない
   const gitignore = path.join(repoRoot, ".gitignore");
   let text = "";
   try {
     text = fs.readFileSync(gitignore, "utf8");
   } catch {
-    log("config", `!! ${gitignore} を読めませんでした。${IGNORE_ENTRY} が無視されるか確認してください`);
+    emit(`!! ${gitignore} を読めませんでした。${entry} が無視されるか確認してください`);
     return;
   }
-  if (!isGitignored(text)) {
-    log("config", `!! ${configPath} が .gitignore に載っていません。APIキーがコミットされる恐れがあります (${IGNORE_ENTRY} を追加してください)`);
+  if (!isGitignored(text, entry)) {
+    emit(`!! ${configPath} が .gitignore に載っていません。APIキーがコミットされる恐れがあります (${entry} を追加してください)`);
   }
 }
 

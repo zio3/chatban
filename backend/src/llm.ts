@@ -3,7 +3,7 @@ import path from "node:path";
 import OpenAI from "openai";
 import { currentProjectId } from "./store.js";
 import { log } from "./log.js";
-import { llmConfig } from "./config.js";
+import { llmConfig, redactSecrets } from "./config.js";
 import { messagesCompletion } from "./messagesRoute.js";
 
 // #181: 計測系を撤去した。ここにあったもの:
@@ -164,6 +164,12 @@ export async function chatCompletion(
       );
     }
   } catch (e: any) {
+    // **上流のエラー本文に秘密が混ざりうるので、ここで伏せる。**
+    // 互換宛先の中には認証失敗時に**受け取ったキーをそのままエラーに含めて返すもの**がある
+    // (Codexレビューで再現)。この本文はログにもHTTP応答 (index.ts) にも流れるので、
+    // **入口ではなく出口の1か所**で伏字にする。e.message を書き換えるのは、
+    // status など他のプロパティを保ったまま呼び出し側にも伝えるため
+    if (typeof e?.message === "string") e.message = redactSecrets(e.message, [cfg.apiKey]);
     // 中断は失敗ではない (#162: チャットが始まったので提案の生成を譲っただけ)。
     // FAILED として残すと、監査ログ上は上流のエラーと見分けが付かなくなる
     if (opts?.signal?.aborted) {

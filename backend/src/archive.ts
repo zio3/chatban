@@ -13,7 +13,8 @@ import {
   type SummaryCard,
   type SummaryElement,
 } from "./db.js";
-import { chatCompletion, getModel } from "./llm.js";
+import { chatCompletion } from "./llm.js";
+import { getModel } from "./config.js";
 import { log } from "./log.js";
 
 // Doneアーカイブ+要約常駐 (docs/done-archive-design.md + zio設計判断)

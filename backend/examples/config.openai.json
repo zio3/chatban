@@ -1,0 +1,16 @@
+{
+  "_readme": [
+    "OpenAI直。このファイルを backend/config.json としてコピーして使ってください。",
+    "キーは https://platform.openai.com/api-keys で作り、~/.openai/apikey.txt に1行で保存します。",
+    "設定ファイルに直接書きたい場合は apiKeyFile を消して \"apiKey\": \"sk-...\" にしてください。",
+    "2026-08-17 実測: この構成でチャット・要約・タイトル生成が動くことを確認しています。"
+  ],
+  "apiKeyFile": "~/.openai/apikey.txt",
+  "baseURL": "https://api.openai.com/v1",
+  "apiStyle": "chat",
+  "models": {
+    "main": "gpt-5.4-mini-2026-03-17",
+    "archive": "gpt-5.6-luna",
+    "cheap": "gpt-5.6-luna"
+  }
+}

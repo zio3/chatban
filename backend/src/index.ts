@@ -5,6 +5,7 @@ import express from "express";
 import { Server } from "socket.io";
 import { onTaskReopened, onTasksCompleted } from "./archive.js";
 import { generateSuggestions, runChatTurn } from "./chat.js";
+import { warnIfConfigNotIgnored } from "./config.js";
 import { archiveState, hooks } from "./hooks.js";
 import { log } from "./log.js";
 import { buildMcpServer } from "./mcp.js";
@@ -53,6 +54,9 @@ const PORT = Number(process.env.PORT ?? 8787);
 
 // #108: DBに触る前にタイムゾーンを確かめる。ずれたまま書き込むと元に戻せない
 assertTimezone();
+// #182: 設定ファイル自体は遅延で読む (LLMを使わない起動を止めないため) が、
+// **キーがコミットされる恐れだけは起動時に言う。**リポジトリは公開なので「あとで消す」が効かない
+warnIfConfigNotIgnored();
 ensureInitialProject();
 reportOrphanFiles();
 
@@ -418,7 +422,7 @@ app.post("/api/tasks/:id/chat", async (req, res) => {
 //  - GET  /api/audit/export — 全ログExport (#83)
 //  - POST /api/models — 単価つきモデルカタログ (182件)
 //  - GET/POST /api/settings/models — 用途別モデルの実行時切り替え (#88)
-// デバッグは backend/logs/ で足りる。モデルは env が供給元 (llm.ts の MODEL_DEFAULTS)
+// デバッグは backend/logs/ で足りる。モデルの供給元は backend/config.json (#182、config.ts)
 
 // AI提案チップ (#75): ボードの文脈から「いま価値のある操作」を最大3つ。失敗時は空配列 (固定チップが保険)
 // #180: **POST にしてあるのは副作用があるから。**ここは有料のLLM呼び出しを起こす。
@@ -516,9 +520,11 @@ app.delete("/api/projects/:id", (req, res) => {
 //
 // #181: モデル設定 (/api/settings/models) と候補一覧 (/api/models) も撤去した。
 // 実行時切り替え (#88) は「182件のカタログから選ぶUI」が前提で、カタログごと消えたため
-// 供給元を失う。設定は env (llm.ts の MODEL_DEFAULTS) に一本化した —
-// **画面から変えられない値をDBに残すと「消したのに効き続ける」**ので、settings の
-// model.* 行も起動時に削除している (store.ts)
+// 供給元を失う。**画面から変えられない値をDBに残すと「消したのに効き続ける」**ので、
+// settings の model.* 行も起動時に削除している (store.ts)。
+// #182: 供給元は backend/config.json (config.ts)。env から設定ファイルへ移した —
+// 宛先・キー・APIの形式・モデル3つは常にセットで動くので、1枚にまとめて
+// examples/ から丸ごとコピーさせれば、間違った組み合わせが作れなくなる
 
 // プロジェクト前提情報の閲覧 (#73)。編集はチャット経由のみ (update_project_context)
 app.get("/api/project-context", (_req, res) => {

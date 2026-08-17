@@ -32,8 +32,10 @@ cd backend; npx tsc --noEmit           # 型チェック (frontendも同様)
 
 ## APIキー・モデル
 
-- OrcaRouter APIキー: 環境変数 `ORCAROUTER_API_KEY` または `~\.orcarouter\apikey.txt` (1行)。**キーの値をチャットやログに出さない**
-- モデルは用途別: 対話=`openai/gpt-5.4-mini-2026-03-17` / 要約分解=`openai/gpt-5.6-luna` / 定型=`openai/gpt-5.6-luna`。**供給元は env だけ** (`ORCA_MODEL_MAIN` / `ORCA_MODEL_ARCHIVE` / `ORCA_MODEL_CHEAP`)、変更したら再起動。#88の⚙設定タブからの実行時切り替えは #181 で撤去 (選択肢の供給元が単価つきカタログだったため)
+- **接続設定は `backend/config.json` 1枚** (#182)。宛先(`baseURL`)・キー・API形式(`apiStyle`)・用途別モデル3つがセット。見本は `backend/examples/config.*.json`。変更したら再起動。疎通確認は `cd backend; npx tsx scripts/check-config.ts`
+- **キーの値をチャットやログに出さない**。`config.json` は gitignore 済み (起動時に確認して警告が出る)。キーを別ファイルに逃がすなら `apiKeyFile`
+- いまの構成は **OpenAI直** (対話=`gpt-5.4-mini-2026-03-17` / 要約分解=`gpt-5.6-luna` / 定型=`gpt-5.6-luna`、キーは `~\.openai\apikey.txt`)。OrcaRouterは「プロバイダの1つ」に格下げ。#88の⚙設定タブからの実行時切り替えは #181 で撤去 (選択肢の供給元が単価つきカタログだったため)
+- **`apiStyle` はプロバイダ名ではなくAPIの形式** (`chat`=OpenAI互換 / `messages`=Anthropic)。モデルIDの接頭辞では判定しない (#182でその判定を廃止)
 - 対話モデルは**日付つきスナップショットIDで固定する**。プロンプトキャッシュはモデルごとに別物なので、エイリアスや`orcarouter/auto`だとキャッシュが乗らない (「プレフィックスを安定させる」だけでは足りず「モデルを固定する」が対になる)
 - モデルIDは `provider/model` 形式必須 (`gpt-4o-mini` 等は model_not_found)
 

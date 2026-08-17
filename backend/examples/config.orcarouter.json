@@ -1,0 +1,24 @@
+{
+  "_readme": [
+    "OrcaRouter (OpenAI互換の中継)。1つのキーで多くのプロバイダのモデルを呼べます。",
+    "キーは https://www.orcarouter.ai で作り、~/.orcarouter/apikey.txt に1行で保存します。",
+    "モデルIDは provider/model 形式です (接頭辞なしの `gpt-4o-mini` などは model_not_found になります)。",
+    "",
+    "無料モデル (`-free` で終わるもの) も選べますが、**常用はできません**。",
+    "2026-08-17 の実測では qwen/qwen3.8-27b-free・deepseek/deepseek-v4-flash-free・tencent/hy3-free の",
+    "いずれも 24回中0回成功でした (429 free_rate_limited)。これは自分の使用量ではなく",
+    "**無料プール全体の空き待ち**なので、混んでいる時間帯は120msで即座に拒否されます。",
+    "試すだけなら models を \"qwen/qwen3.8-27b-free\" などに書き換えてください。",
+    "",
+    "Anthropic系のモデルを使う場合は apiStyle を \"messages\" にするとプロンプトキャッシュが効きます",
+    "(OrcaRouter は /v1/chat/completions と /v1/messages の両方を持っています)。"
+  ],
+  "apiKeyFile": "~/.orcarouter/apikey.txt",
+  "baseURL": "https://api.orcarouter.ai/v1",
+  "apiStyle": "chat",
+  "models": {
+    "main": "openai/gpt-5.4-mini-2026-03-17",
+    "archive": "openai/gpt-5.6-luna",
+    "cheap": "openai/gpt-5.6-luna"
+  }
+}

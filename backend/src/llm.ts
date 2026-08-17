@@ -1,30 +1,15 @@
-import fs, { readFileSync } from "node:fs";
-import path, { join } from "node:path";
-import { homedir } from "node:os";
+import fs from "node:fs";
+import path from "node:path";
 import OpenAI from "openai";
 import { currentProjectId } from "./store.js";
 import { log } from "./log.js";
-import { messagesCompletion, usesMessagesApi } from "./messagesRoute.js";
-
-function loadApiKey(): string {
-  if (process.env.ORCAROUTER_API_KEY) return process.env.ORCAROUTER_API_KEY;
-  try {
-    return readFileSync(join(homedir(), ".orcarouter", "apikey.txt"), "utf8").trim();
-  } catch {
-    throw new Error("ORCAROUTER_API_KEY 未設定 (env または ~/.orcarouter/apikey.txt)");
-  }
-}
-
-/** 問い合わせ先。OpenAI互換 (/chat/completions) と Messages API (/messages) で共有する —
- * OrcaRouter は同じ baseURL に両方を持っている (#172) */
-const BASE_URL = process.env.ORCA_BASE_URL ?? "https://www.orcarouter.ai/v1";
-
-export const client = new OpenAI({ apiKey: loadApiKey(), baseURL: BASE_URL });
+import { llmConfig } from "./config.js";
+import { messagesCompletion } from "./messagesRoute.js";
 
 // #181: 計測系を撤去した。ここにあったもの:
 //  - fetchBillingUsage() — OrcaRouter専用の課金サマリーAPI (残高表示)
 //  - fetchModelCatalog() — 182件の単価つきカタログ (10分キャッシュ)。**単価を返すのは
-//    OrcaRouterの独自拡張**で、OpenAI/Anthropic の /v1/models は返さない (#182で直接APIへ移る)
+//    OrcaRouterの独自拡張**で、OpenAI/Anthropic の /v1/models は返さない
 //  - priceOf / costOf / estimateCallCost / キャッシュ割引率の仮定値
 //
 // **副産物: LLM呼び出しごとのカタログ依存が消えた。**単価を打刻するために毎回
@@ -32,40 +17,32 @@ export const client = new OpenAI({ apiKey: loadApiKey(), baseURL: BASE_URL });
 // トークン・キャッシュ・レイテンシは backend/logs/ に残る (`tokens=8208/23 cached=3200 1555ms`) ので、
 // 速度やキャッシュ効きの確認はログでできる。個人利用に requestごとの単価計算は要らない
 
-// 用途別モデル戦略 (Day2の実測比較で決定。切り替えはモデルID1行 — ルーターの利点):
-//  - 対話(main): OpenAI系は自動プロンプトキャッシュがOrcaRouter経由でも効く(実測: 2回目以降の入力85-95%が0.1x課金)。
+// #182: 宛先・キー・用途別モデルは config.json へ移した (config.ts)。ここには残らない。
+//
+// **どのモデルを選ぶかの実測記録は、設定が外に出ても価値があるので残す** (2026-08-11、OrcaRouter経由):
+//  - 対話(main): OpenAI系は自動プロンプトキャッシュが効く (2回目以降の入力85-95%が0.1x課金)。
 //    Anthropicは cache_control 明示方式で、OpenAI互換経由では指定する場所が無い。
-//    #172 で Messages API (/v1/messages) 経由なら効くと分かった (cache_read 25,083 を実測) ので、
-//    anthropic/ のモデルはそちらへ流す。既定は実績のある gpt-5.4-mini のまま
-//  - 要約の要素分解(archive): 品質が肝 + 非同期でレイテンシ許容 → ルーティングに委任
-//  - 定型(cheap): タイトル生成など → コスト優先ルーティング
+//    #172 で Messages API 経由なら効くと分かった (cache_read 25,083 を実測) → apiStyle: "messages"
+//  - 要約の要素分解(archive): `orcarouter/auto` から `gpt-5.6-luna` へ変えて 40〜80秒(最大110秒) が
+//    4〜12秒になった。auto を外した理由は「品質が要らない」ではなく行き先が毎回変わって体験が安定しないこと。
+//    遅さの正体は思考トークンで、要素5個に qwen3.7-plus が3,000〜4,600tk、deepseek-v4-flash が
+//    14,153tk 使っていた (luna は831〜981tk)。質は3パターン(2/9/15件)で比較して luna が最も安定 —
+//    要素数の上限を守り、却下の扱いを間違えず、経緯メモの未検証項目まで拾う
+//  - 定型(cheap): fusion-mini(コスト優先ルーティング)が qwen3.7-flash を引き、入力215字で
+//    「20字のラベルを1つ」返すのに 29.7秒・出力3,446tk 使っていた。ラベル生成に思考は要らない
+//
+// **共通する教訓: 思考トークンを吐くモデルを定型処理に使わない。**行き先が変わる方式 (auto/fusion) は、
+// 遅いモデルを引いた回だけ極端に待たされるので、体験が安定しない
 
-export type ModelSlot = "main" | "archive" | "cheap";
-
-/** 用途別モデル。#181 で ⚙設定タブ (#88 の実行時切り替え) を撤去したので、**env だけが供給元**。
- * 選択UIはカタログ (182件) から選ばせる形だったが、カタログごと消えたため供給元を失った。
- * 個人利用なら env か設定ファイルで足りる (Claude Code から直接書ける) */
-export const MODEL_DEFAULTS: Record<ModelSlot, string> = {
-  main: process.env.ORCA_MODEL_MAIN ?? "openai/gpt-5.4-mini-2026-03-17",
-  // 2026-08-11: orcarouter/auto から gpt-5.6-luna へ。実測40〜80秒(最大110秒)が4〜12秒になった。
-  // auto を外した理由は「品質が要らない」ではなく、行き先が毎回変わって体験が安定しないこと。
-  // 遅さの正体は思考トークンで、要素5個を書くのに qwen3.7-plus が3,000〜4,600tk、
-  // deepseek-v4-flash は14,153tk 使っていた (luna は831〜981tk)。
-  // 質は3パターン(2/9/15件)で比較して luna がいちばん安定していた —
-  // 要素数の上限を守り、却下の扱いを間違えず、経緯メモの未検証項目まで拾う。
-  // 詳細は scripts/compare-archive-models.ts で再現できる
-  archive: process.env.ORCA_MODEL_ARCHIVE ?? "openai/gpt-5.6-luna",
-  // 2026-08-11: archive を直したら、今度はタイトル生成が本体より遅くなった。
-  // fusion-mini(コスト優先ルーティング)が qwen3.7-flash を引き、入力215字で
-  // 「20字のラベルを1つ」返すのに 29.7秒・出力3,446tk 使っていた。
-  // ラベル生成に思考は要らないので、ここも行き先の決まったモデルにする
-  cheap: process.env.ORCA_MODEL_CHEAP ?? "openai/gpt-5.6-luna",
-};
-
-/** 実効モデルID。#181 以降は env (または既定値) だけ。
- * かつては settings の `model.<slot>` を先に見て、再起動なしの切り替えを効かせていた (#88) */
-export function getModel(slot: ModelSlot): string {
-  return MODEL_DEFAULTS[slot];
+let client: OpenAI | null = null;
+/** OpenAI互換クライアント。**遅延生成** — 設定が無い環境でも起動だけはできるようにする
+ * (E2EはLLMを呼ばないし、cloneした直後にまず画面を見たい人もいる) */
+function openai(): OpenAI {
+  if (!client) {
+    const c = llmConfig();
+    client = new OpenAI({ apiKey: c.apiKey, baseURL: c.baseURL });
+  }
+  return client;
 }
 
 /** gpt-5.6-luna は function tools と reasoning_effort を併用できず400を返す
@@ -162,22 +139,26 @@ export async function chatCompletion(
   opts?: { timeoutMs?: number; signal?: AbortSignal }
 ) {
   const t0 = Date.now();
+  const cfg = llmConfig();
   log("llm", `-> ${purpose} model=${model} messages=${params.messages.length}`);
   dumpRequest(purpose, model, params);
   // SDKのReasoningEffort型に 'none' が無いためキャストして通す (OrcaRouter/OpenAI側は受け付ける)
   const extra = params.tools?.length && NEEDS_REASONING_NONE.test(model) ? ({ reasoning_effort: "none" } as any) : {};
   let res;
   try {
-    if (usesMessagesApi(model)) {
+    if (cfg.apiStyle === "messages") {
       // #172: Anthropic系は Messages API 形式で投げる。OpenAI互換だと cache_control を
-      // 置く場所が無く、25,000トークンの前置きを毎回フルで払うことになる
-      res = (await messagesCompletion(BASE_URL, loadApiKey(), model, params, opts)) as any;
+      // 置く場所が無く、前置きを毎回フルで払うことになる。
+      // #182: 経路の判定は**モデルIDではなく宛先の設定**から引く。以前は `anthropic/` 接頭辞を
+      // 見ていたが、それは OrcaRouter が `provider/model` 形式を要求することに乗った判定で、
+      // 直接APIのモデルIDには接頭辞が無い (`claude-...` / `gpt-...`)
+      res = (await messagesCompletion(cfg.baseURL, cfg.apiKey, model, params, opts)) as any;
     } else {
       const reqOpts = {
         ...(opts?.timeoutMs ? { timeout: opts.timeoutMs } : {}),
         ...(opts?.signal ? { signal: opts.signal } : {}),
       };
-      res = await client.chat.completions.create(
+      res = await openai().chat.completions.create(
         { ...params, ...extra, model },
         Object.keys(reqOpts).length > 0 ? reqOpts : undefined
       );

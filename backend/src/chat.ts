@@ -78,6 +78,18 @@ export const QUERY_LOG_DESCRIPTION = [
   "日付の列を取り違えない。created_at=登録日 / updated_at=最終更新(その後の編集でも動く) / done_at=Doneへ確定した日 / checked_at=人が確かめた日。完了の集計には done_at を使う(created_at だと登録日を数えてしまう)。summary_cards.created_at も完了日ではない — 日次まとめで統合されると最初のカードの日付を引き継ぐ",
   "done_at のうち 2026-08-10 以前のものは、列を作る前に終わったぶんを updated_at から埋めた近似値(完了後に触っていなければ最終更新=完了日時)。日単位の集計には使えるが、分単位の議論には使わない",
   "done_tasks ビューを使う。完了したもの(done_at が入っているもの)だけを、完了が新しい順に抜いたもの。日付は done_day 列に入っているので date() を書かなくてよい。live_tasks の対で、生きている=live_tasks / 終わった=done_tasks",
+  // #175: **どの status がどちらに入るかを書く。**「生きている / 終わった」だけだと
+  // review がどちらか分からず、実際に「live_tasks に review が出ないバグがある」と誤報した
+  // (2026-08-15。ビューは正しく、検収済みで消えていただけ)。
+  // ビューの条件は status ではなく archived / trashed_at / done_at なので、**両方に出る状態がある** —
+  // そこも書かないと「重複している=おかしい」と読まれる。
+  //
+  // **「短時間だけ」とは書かない** (Codexレビュー指摘)。畳む処理は fire-and-forget で走り
+  // (index.ts の runScoped)、`archived=1` が付くのは rollUpOldCards を待ったあと
+  // (archive.ts)。**その間にプロセスが止まればジョブは失われ、起動時に
+  // `status=done AND archived=0` を回収する処理は無い**ので、両方に出る状態は無期限に残る。
+  // 時間で消えると書くと、エージェントは「待てば直る」と判断してしまう
+  "live_tasks に入るのは **todo / inprogress / review** の3列。加えて「Doneへ確定したが、まだ要約カードに畳まれていないもの」も入る。done_tasks は done_at が入っているものなので、**畳まれるまでは同じタスクが両方に出る**(不整合ではない)。畳む処理は非同期で、失敗したりプロセスが止まればそのまま残るので、**時間が経てば消えるとは考えないこと**。列で絞りたいなら status を書く: WHERE status='review'",
   "例(いつ何件終わったか): SELECT done_day, COUNT(*) n FROM done_tasks GROUP BY 1 ORDER BY 1 DESC",
   "例(直近1週間に終わったもの): SELECT done_day, title FROM done_tasks WHERE done_day >= date('now','localtime','-7 days')",
   "SELECT * は使わない。必要な列だけ挙げる。context(経緯メモ)は1件1,000字を超えるので、一覧では length(context) か substr(context,1,120) にし、全文が要るタスクだけ id で絞って引き直す",

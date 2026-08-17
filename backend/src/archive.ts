@@ -149,10 +149,27 @@ export async function regenerateCard(cardId: number, dateLabel?: string): Promis
   const startedWith = tasks.map((t) => t.id);
 
   // 要素分解 (品質が肝・非同期なのでレイテンシ許容): ルーティング委任
-  const res = await chatCompletion("archive-decompose", getModel("archive"), { messages });
-  const newTexts = extractJsonArray(res.choices[0].message.content ?? "") ?? [
-    `${tasks.length}件の完了: ${tasks.map((t) => `#${t.id}`).join(", ")}`,
-  ];
+  // 応答が読めなかったときに使う代替。**中身が空のカードを残さないためのもの**で、
+  // これがあれば「何が畳まれたか」はIDから辿れる
+  const fallback = [`${tasks.length}件の完了: ${tasks.map((t) => `#${t.id}`).join(", ")}`];
+
+  // #191: **上流が落ちても空のカードを残さない (失効キーで実測)。**
+  // onTasksCompleted は「カード作成 → タスクをアーカイブ → ここで要約」の順なので、
+  // ここで例外が飛ぶと**前の2つはコミット済み**。検収した成果がボードから消えたうえで、
+  // 中身が空のカードだけが残っていた。しかもUIは空のカードを「要約を生成中…」と
+  // 表示するので、**二度と動かないものを待たせる**ことになる。
+  //
+  // 代替要素は「応答が壊れていたとき」用に既にあったので、**例外にも同じものを使う**。
+  // 失敗したことも1行足す — 静かに劣化させると、あとで見た人が「これで全部」と読む
+  let newTexts: string[];
+  try {
+    const res = await chatCompletion("archive-decompose", getModel("archive"), { messages });
+    newTexts = extractJsonArray(res.choices[0].message.content ?? "") ?? fallback;
+  } catch (e: any) {
+    // e.message は chatCompletion の出口で伏字済み (キーは載らない)
+    log("archive", `card#${cardId} の要約生成が失敗: ${e?.message ?? e} — 代替の要素で埋めます`);
+    newTexts = [...fallback, `(要約の生成に失敗しました。もう一度畳み直すと作り直します)`];
+  }
   const elements: SummaryElement[] = [...checkedElements, ...newTexts.map((text) => ({ text, checked: false }))];
 
   // 生成中にカードの顔ぶれが変わっていたら、この結果は捨てる。

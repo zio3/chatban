@@ -97,14 +97,45 @@ const schema = z
  * 素通りさせていたが、**設定は短いキーを許すので、短いキーだけ伏字にならない**という穴になった
  * (Codexレビュー指摘: `apiKey="abc123"` が漏れる)。ローカルLLM向けのダミー (`"ollama"` など) が
  * 伏字になっても実害は無い — ログに `***` と出るだけで、意味を取り違える情報ではない。
- * **伏せすぎて困ることより、伏せ損ねて困ることのほうが取り返しがつかない。** */
+ * **伏せすぎて困ることより、伏せ損ねて困ることのほうが取り返しがつかない。**
+ *
+ * #191: **完全一致だけでは足りなかった (失効キーで実測)。**上流が中間をマスクして返すことがあり、
+ * OpenAI は `Incorrect API key provided: sk-ant-a****…IgAA` の形で返す。
+ * 元のキーと文字列が違うので置換が発火せず、**先頭7文字と末尾4文字がログとHTTP応答に残った**
+ * (当日のログで3行)。そこで3段構えにする:
+ *
+ *   1. 完全一致 (これまで通り)
+ *   2. **知っているキーの先頭8文字で始まるトークン** — 上流がどう崩しても、
+ *      前半は自分が送った値そのままなので捕まる。プロバイダの接頭辞の慣習に依存しない
+ *      (OrcaRouterのような `sk-` で始まらないキーにも効く)
+ *   3. `sk-` で始まる長いトークン — 設定に無いキーが本文に混ざった場合の保険 */
+const KEY_ISH = "[A-Za-z0-9_*.\\-]"; // マスク文字 `*` を含める (上流が中間を埋めた形を丸ごと捕まえる)
+
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/** 伏字に置き換える。**末尾に食い込んだ句読点は返す** — キーには `.` が入りうるので
+ * 文字クラスに含めているが、そのままだと `...provided: sk-xxx. You can find` の句点まで
+ * 消えて文が繋がってしまう (ユニットテストが拾った)。読める文のまま伏せる */
+function mask(matched: string): string {
+  const trail = matched.match(/[.,;:!?]+$/)?.[0] ?? "";
+  return `***${trail}`;
+}
+
 export function redactSecrets(text: string, secrets: (string | undefined | null)[]): string {
   let out = text;
   for (const s of secrets) {
     if (!s) continue; // 空文字だけは除く (全ての位置に一致してしまう)
     out = out.split(s).join("***");
+    // 部分マスクされた形。先頭8文字は「自分が送った値」なので、短いキーでは使わない
+    // (8文字未満のダミーで前方一致を張ると、無関係な語まで巻き込む)
+    if (s.length >= 8) {
+      out = out.replace(new RegExp(`${escapeRegExp(s.slice(0, 8))}${KEY_ISH}*`, "g"), mask);
+    }
   }
-  return out;
+  // 設定に無いキーの保険。`sk-` + 12文字以上を伏せる (モデルIDやrequest_idには当たらない長さ)
+  return out.replace(new RegExp(`\\bsk-${KEY_ISH}{12,}`, "g"), mask);
 }
 
 /** `~/...` をホームディレクトリへ展開する。設定ファイルに絶対パスを書かせないため */

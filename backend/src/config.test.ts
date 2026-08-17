@@ -268,3 +268,39 @@ test("短いAPIキーも伏せられる (長さで手加減しない)", () => {
 test("空の値は伏字にしない (すべての位置に一致してしまう)", () => {
   assert.equal(redactSecrets("some error", [undefined, null, ""]), "some error");
 });
+
+// #191: **上流が中間をマスクして返す形が漏れていた (失効キーで実測)。**
+// OpenAI は 401 の本文にキーを部分マスクで載せる:
+//   Incorrect API key provided: sk-ant-a****…IgAA
+// 元のキーと文字列が違うので完全一致の置換が発火せず、**先頭7文字と末尾4文字が
+// ログとHTTP応答に残った** (当日のログで3行)。
+
+test("部分マスクされたキーも伏せる (完全一致では捕まらない形)", () => {
+  const key = "sk-ant-api03-REALSECRETVALUE-abcdefghijklmnop-IgAA";
+  const masked = "sk-ant-a" + "*".repeat(40) + "IgAA"; // 上流が中間を埋めて返した形
+  const out = redactSecrets(`401 Incorrect API key provided: ${masked}. You can find...`, [key]);
+  assert.equal(out, "401 Incorrect API key provided: ***. You can find...");
+  // 断片が1つも残っていないこと (先頭も末尾も)
+  assert.ok(!out.includes("sk-ant-a"), "先頭が残っている");
+  assert.ok(!out.includes("IgAA"), "末尾が残っている");
+});
+
+test("設定に無いキーでも sk- の形なら伏せる (保険)", () => {
+  const out = redactSecrets("upstream said: sk-proj-AbCdEfGhIjKlMnOpQrStUv is invalid", []);
+  assert.equal(out, "upstream said: *** is invalid");
+});
+
+test("伏せすぎない — モデルIDやrequest_idは残す (診断の材料を消さない)", () => {
+  const key = "sk-ant-api03-REALSECRETVALUE-abcdefghijklmnop-IgAA";
+  const text = "model gpt-5.4-mini-2026-03-17 request_id=req_011CQ8xYz failed with 401";
+  assert.equal(redactSecrets(text, [key]), text);
+});
+
+test("短いダミーキーでは前方一致を使わない (無関係な語を巻き込まない)", () => {
+  // "ollama" は8文字未満なので、前方一致 (先頭8文字) の規則は適用しない。
+  // 完全一致だけが効くので、"ollama-server-v2" のような語まで丸ごと消えたりしない
+  assert.equal(
+    redactSecrets("connect to ollama-server-v2 failed", ["ollama"]),
+    "connect to ***-server-v2 failed"
+  );
+});

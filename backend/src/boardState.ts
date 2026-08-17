@@ -27,11 +27,15 @@ const MAX_CHANGES = 40;
 export interface TaskFacts {
   title: string;
   status: string;
+  /** #179 で担当者を廃止したらこの項目ごと消える。それまでは変更を見逃さないために持つ */
+  assignee: string | null;
   summary: string | null;
   due: string | null;
   blockedBy: number[] | null;
   rejected: boolean;
   contextVersion: number;
+  /** 並び順。reorder_tasks で動く。1件動かすと周りも連動して変わるので、差分では1行にまとめる */
+  sort: number;
 }
 
 export interface BoardSnapshot {
@@ -49,8 +53,20 @@ let counter = 0;
 
 const snapshots = new Map<number, BoardSnapshot[]>();
 
+/** 要約カードの索引。**区切り文字で連結しない** — 要素に同じ文字列を書けるので、
+ * ['B / C'] と ['B', 'C'] が同じ索引になり、カードの分割・編集を見逃す (自動レビュー指摘) */
 function cardIndex(title: string, elements: string[]): string {
-  return `${title} :: ${elements.join(" / ")}`;
+  return JSON.stringify([title, elements]);
+}
+
+/** 索引から人が読める形へ戻す。差分の文面に出すのは連結した見た目のほうでよい */
+function cardLabel(index: string): string {
+  try {
+    const [title, elements] = JSON.parse(index) as [string, string[]];
+    return `${title} :: ${elements.join(" / ")}`;
+  } catch {
+    return index;
+  }
 }
 
 /** いまのボードを写し取る。DBに触るのはここだけで、差分計算(diffBoards)は純粋関数にしてある */
@@ -61,11 +77,13 @@ export function captureBoard(): Omit<BoardSnapshot, "stateId" | "takenAt"> {
       {
         title: t.title,
         status: t.status,
+        assignee: t.assignee,
         summary: t.summary ?? null,
         due: t.due,
         blockedBy: t.blockedBy,
         rejected: t.rejected,
         contextVersion: t.contextVersion,
+        sort: t.sort,
       },
     ])
   );
@@ -86,6 +104,7 @@ function fieldChanges(prev: TaskFacts, cur: TaskFacts): string[] {
   const out: string[] = [];
   if (prev.status !== cur.status) out.push(`status: ${prev.status} -> ${cur.status}`);
   if (prev.title !== cur.title) out.push(`title: 「${prev.title}」-> 「${cur.title}」`);
+  if (prev.assignee !== cur.assignee) out.push(`担当: ${prev.assignee ?? "なし"} -> ${cur.assignee ?? "なし"}`);
   if (prev.rejected !== cur.rejected) out.push(cur.rejected ? "却下された" : "却下を取り消した");
   if (prev.due !== cur.due) out.push(`期限: ${prev.due ?? "なし"} -> ${cur.due ?? "なし"}`);
   if (!sameDeps(prev.blockedBy, cur.blockedBy))
@@ -107,9 +126,13 @@ export function diffBoards(
   cur: Pick<BoardSnapshot, "tasks" | "cards" | "projectContext">
 ): string[] {
   const changes: string[] = [];
+  // 並べ替えは1件動かすと周りの sort も連動して変わる。1タスク1行にすると差分が
+  // 「並び順が変わった」だけで埋まり、本当に見てほしい status の変化が埋もれるのでまとめる
+  const reordered: number[] = [];
 
   for (const [id, t] of cur.tasks) {
     const before = prev.tasks.get(id);
+    if (before && before.sort !== t.sort) reordered.push(id);
     if (!before) {
       // 追加はIDだけでは何か分からないので内容ごと載せる
       changes.push(
@@ -129,13 +152,17 @@ export function diffBoards(
     }
   }
 
+  if (reordered.length > 0) {
+    changes.push(`並び順が変わった (${reordered.map((id) => `#${id}`).join(", ")})`);
+  }
+
   for (const [id, idx] of cur.cards) {
     const before = prev.cards.get(id);
-    if (!before) changes.push(`+ 要約カード#${id} が追加された (${idx})`);
-    else if (before !== idx) changes.push(`~ 要約カード#${id} が更新された (${idx})`);
+    if (!before) changes.push(`+ 要約カード#${id} が追加された (${cardLabel(idx)})`);
+    else if (before !== idx) changes.push(`~ 要約カード#${id} が更新された (${cardLabel(idx)})`);
   }
   for (const [id, idx] of prev.cards) {
-    if (!cur.cards.has(id)) changes.push(`- 要約カード#${id} が統合され消滅した (${idx})`);
+    if (!cur.cards.has(id)) changes.push(`- 要約カード#${id} が統合され消滅した (${cardLabel(idx)})`);
   }
 
   if (prev.projectContext !== cur.projectContext) changes.push("プロジェクトの前提情報が更新された");

@@ -72,9 +72,12 @@ const SINCE_ON_WRITE = z
 function boardUpdate(since?: string) {
   const d = boardDelta(since);
   if (!d.full) return { stateId: d.stateId, ...(d.changes?.length ? { changesSince: d.changes } : {}) };
+  if (!since) return { stateId: d.stateId };
+  // 差分を返せなかったとき、**新しい状況IDを渡さない。**
+  // 渡すとエージェントはそれを次の since に使い、「変化なし」が返って
+  // 全件を一度も見ないまま古い認識のまま進む (自動レビュー指摘)
   return {
-    stateId: d.stateId,
-    ...(since ? { note: `${d.note ?? "差分を返せなかった"}。全体を見るなら get_board を呼ぶこと` } : {}),
+    note: `${d.note ?? "差分を返せなかった"}。since を付けずに get_board を呼び、全体を取り直すこと`,
   };
 }
 

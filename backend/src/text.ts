@@ -22,14 +22,12 @@ export function decodeUnicodeEscapes<T extends string | undefined | null>(v: T):
   ) as T;
 }
 
-/** 発言者ラベルが本文として書き写されたときの保険 (#95)。プロンプトは漏れるがツール契約は漏れない。
- * 先頭だけでなく行頭のどこに出ても落とす (経緯メモに段落として混ざる例があった) */
-export function stripSpeakerLabel<T extends string | undefined | null>(v: T): T {
-  if (typeof v !== "string") return v;
-  return v.replace(/^\s*\[発言者:[^\]]*\]\s*/gm, "") as T;
-}
-
-/** エージェントから来た本文の共通処理。書き込みの入口で必ず通す */
+/** エージェントから来た本文の共通処理。書き込みの入口で必ず通す。
+ *
+ * #95 では発言者ラベル (`[発言者: xxx]`) が本文へ書き写されるのを落としていたが、
+ * #180 で発言者という概念ごと廃止したので**その除去も外した** (Codexレビュー指摘)。
+ * ラベルを作る側が居なくなったのに削る側だけ残ると、**利用者が自分で書いた
+ * `[発言者: ...]` という文字列を黙って壊す**変換になる。生成元が消えたら番人も引き上げる */
 export function cleanAgentText<T extends string | undefined | null>(v: T): T {
-  return stripSpeakerLabel(decodeUnicodeEscapes(v));
+  return decodeUnicodeEscapes(v);
 }

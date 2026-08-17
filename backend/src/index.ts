@@ -9,6 +9,7 @@ import { generateSuggestions, runChatTurn } from "./chat.js";
 import { archiveState, hooks } from "./hooks.js";
 import { log } from "./log.js";
 import { buildMcpServer } from "./mcp.js";
+import { isAllowedOrigin } from "./origin.js";
 import { resetPromptState } from "./promptState.js";
 import { assertTimezone } from "./timezone.js";
 import {
@@ -63,9 +64,8 @@ ensureInitialProject();
 reportOrphanFiles();
 
 const app = express();
-// #180: 認証を廃止したので Cookie は載らない。それでも**任意のオリジンは反射しない** —
-// ボードの中身を他サイトのページから読ませないため。待ち受けを 127.0.0.1 に固定した (PR #28) のと
-// 同じ線で、「ローカルの持ち主だけが触れる」を保つ。
+// #180: 認証を廃止したので Cookie は載らない。守りは「待ち受けを 127.0.0.1 に固定 (PR #28)」と
+// 「知らないページからの呼び出しを断る」の2つだけになった。
 // Originヘッダの無い呼び出し (curl・同一オリジン・MCP) は通す
 const ALLOWED_ORIGINS = (process.env.CHATBAN_ALLOWED_ORIGINS ?? "http://localhost:5173,http://localhost:5199")
   .split(",")
@@ -73,9 +73,19 @@ const ALLOWED_ORIGINS = (process.env.CHATBAN_ALLOWED_ORIGINS ?? "http://localhos
   .filter(Boolean);
 app.use(
   cors({
-    origin: (origin, cb) => cb(null, !origin || ALLOWED_ORIGINS.includes(origin)),
+    origin: (origin, cb) => cb(null, isAllowedOrigin(origin, ALLOWED_ORIGINS)),
   })
 );
+// **cors() だけでは止まらない** (Codexレビュー指摘・実測)。許可しない Origin に対して
+// cors は ACAO ヘッダを付けないだけで、リクエストはハンドラまで届き、状態も変わる
+// (実測: `Origin: https://evil.example` で `POST /api/projects/1/activate` が 200)。
+// ブラウザが遮るのは「レスポンスを読むこと」だけなので、書き込みは通ってしまう。
+// 認証が無い以上ここが最後の砦なので、**明示的に 403 で断る**
+app.use((req, res, next) => {
+  if (isAllowedOrigin(req.header("Origin"), ALLOWED_ORIGINS)) return next();
+  log("api", `許可していないOriginからの要求を拒否しました: ${req.header("Origin")} ${req.method} ${req.path}`);
+  res.status(403).json({ error: "forbidden origin" });
+});
 app.use(express.json({ limit: "25mb" })); // #68: 添付(画像/PDFのbase64)を受けるため拡大
 
 // #97: どのプロジェクトへの操作かはクライアントがヘッダで明示する (UIはURL /p/<id> が持つ)。
@@ -95,9 +105,17 @@ app.use((req, res, next) => {
 
 const server = http.createServer(app);
 // #113 → #180: ボードの中身は Socket.IO で流れるので、RESTだけ締めても意味がない。
-// origin:"*" のままだと他サイトのページから繋いで board:changed を受け取れてしまうため、
-// CORSは express と同じ許可リストを使う。認証は廃止したのでハンドシェイクでの本人確認は無い
-const io = new Server(server, { cors: { origin: ALLOWED_ORIGINS } });
+// **WebSocketのハンドシェイクは CORS の対象外**なので、`cors` オプションは接続の可否に効かない
+// (実測: 許可していない Origin から CONNECTED になった。Codexレビュー指摘)。
+// 断るのは allowRequest の仕事。cors は polling 経路のヘッダ用に残す
+const io = new Server(server, {
+  cors: { origin: ALLOWED_ORIGINS },
+  allowRequest: (req, cb) => {
+    const ok = isAllowedOrigin(req.headers.origin, ALLOWED_ORIGINS);
+    if (!ok) log("api", `許可していないOriginからのSocket接続を拒否しました: ${req.headers.origin}`);
+    cb(null, ok);
+  },
+});
 
 // #99: 配信はプロジェクト単位のroomへ。全クライアントへの一斉送信だと、
 // タブごとに別プロジェクトを開けるようにした瞬間(#97)に他プロジェクトの更新で画面が壊れる。

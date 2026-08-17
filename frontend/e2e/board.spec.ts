@@ -1059,6 +1059,39 @@ test("存在しないプロジェクトを指定したSocketは、既定プロ�
   ok.close();
 });
 
+// #180: 認証を廃止したので、残る境界は「待ち受け 127.0.0.1」と「知らないページを断る」だけ。
+// cors() の許可リストは境界にならない — 許可しない Origin には ACAO を付けないだけで、
+// リクエストはハンドラまで届いて状態が変わる (Codexレビューの実測で 200 + 状態変更)。
+// ブラウザが遮るのはレスポンスを読むことだけ。ここは実際に断れているかを見る
+
+test("知らないページからのRESTは403で断る (認証が無い以上ここが最後の砦 #180)", async () => {
+  const res = await fetch(`${API}/api/projects/1/activate`, {
+    method: "POST",
+    headers: { Origin: "https://evil.example" },
+  });
+  expect(res.status).toBe(403);
+
+  // 対照: 許可しているページからは通る (塞ぎすぎていない)
+  const ok = await fetch(`${API}/api/board`, { headers: { Origin: "http://localhost:5199" } });
+  expect(ok.status).toBe(200);
+  // 対照: Origin の無い呼び出し (curl・MCP・スクリプト) も通る
+  const noOrigin = await fetch(`${API}/api/board`);
+  expect(noOrigin.status).toBe(200);
+});
+
+test("知らないページからのSocket接続はハンドシェイクで断る (#180)", async () => {
+  // WebSocketのハンドシェイクは CORS の対象外なので、cors 設定では止まらない。
+  // 止めるのは allowRequest。ここが開いていると board:changed を外部ページに配信してしまう
+  const evil = io(API, { transports: ["websocket"], extraHeaders: { Origin: "https://evil.example" } });
+  const outcome = await new Promise<string>((resolve) => {
+    evil.on("connect", () => resolve("connected"));
+    evil.on("connect_error", () => resolve("rejected"));
+    setTimeout(() => resolve("timeout"), 3000);
+  });
+  evil.close();
+  expect(outcome).toBe("rejected");
+});
+
 test("ゴミ箱のタスクはプロジェクトの未完了件数に数えない", async () => {
   // ボードから消えているのに件数が減らないと、どれが残っているのか分からなくなる
   const before = await (await fetch(`${API}/api/projects`)).json();

@@ -6,6 +6,35 @@ import { readFileSync } from "node:fs";
 import { tools } from "./chat.js";
 import { DONE_GATE_RULE, exportableSettings, isTaskStatus, mayEnterDone } from "./db.js";
 import { AGENT_STATUS_VALUES } from "./chat.js";
+import { isAllowedOrigin } from "./origin.js";
+
+// #180: 認証を廃止したので、境界は「待ち受けを閉じる」と「知らないページを断る」だけ。
+// **cors() の許可リストは境界にならない** — 許可しない Origin には ACAO を付けないだけで
+// リクエストはハンドラまで届き、状態も変わる (Codexレビュー実測: POST が 200)。
+// ブラウザが遮るのはレスポンスを読むことだけなので、書き込みは通る。
+// 判定はRESTとSocket.IOで共有する (入口ごとに書き分けると必ずズレる)
+
+const ORIGINS = ["http://localhost:5173", "http://localhost:5199"];
+
+test("許可リストに載っているページからは通す", () => {
+  assert.equal(isAllowedOrigin("http://localhost:5173", ORIGINS), true);
+});
+
+test("知らないページからは断る", () => {
+  assert.equal(isAllowedOrigin("https://evil.example", ORIGINS), false);
+  // ポート違い・スキーム違いは別オリジン。前方一致で緩めない
+  assert.equal(isAllowedOrigin("http://localhost:5174", ORIGINS), false);
+  assert.equal(isAllowedOrigin("https://localhost:5173", ORIGINS), false);
+  assert.equal(isAllowedOrigin("http://localhost:5173.evil.example", ORIGINS), false);
+});
+
+test("Originが無い呼び出しは通す (curl・スクリプト・MCP)", () => {
+  // ブラウザは必ず Origin を付けるので、ここを開けてもページからの攻撃は増えない。
+  // 塞ぐと Claude Code から /mcp に繋がらなくなる
+  assert.equal(isAllowedOrigin(undefined, ORIGINS), true);
+  assert.equal(isAllowedOrigin("", ORIGINS), true);
+  assert.equal(isAllowedOrigin(null, ORIGINS), true);
+});
 
 // 返信ボタンの記法 [[選択肢]] の取り出し。
 // ここはLLMを介さずに固定できる唯一の部分なので (発火するかどうかはモデル次第でも、

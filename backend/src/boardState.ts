@@ -34,6 +34,10 @@ export interface TaskFacts {
   blockedBy: number[] | null;
   rejected: boolean;
   contextVersion: number;
+  /** 人が実物で確かめた日時。**この機能が拾いたいものの本体。**
+   * 2026-08-15 の事故は「人間が検収したことをエージェントが知らなかった」ために起きた。
+   * setChecked は updated_at を動かさないので、タイムスタンプ方式では二重に拾えない (自動レビュー指摘) */
+  checkedAt: string | null;
   /** 並び順。reorder_tasks で動く。1件動かすと周りも連動して変わるので、差分では1行にまとめる */
   sort: number;
 }
@@ -83,6 +87,7 @@ export function captureBoard(): Omit<BoardSnapshot, "stateId" | "takenAt"> {
         blockedBy: t.blockedBy,
         rejected: t.rejected,
         contextVersion: t.contextVersion,
+        checkedAt: t.checkedAt ?? null,
         sort: t.sort,
       },
     ])
@@ -91,6 +96,46 @@ export function captureBoard(): Omit<BoardSnapshot, "stateId" | "takenAt"> {
     listSummaryCards().map((c) => [c.id, cardIndex(c.title, c.elements.map((e) => e.text))])
   );
   return { tasks, cards, projectContext: getProjectContext() ?? "" };
+}
+
+/** 列ごとの「並んでいるIDの列」。sort の数値ではなくこの並びを比べる。
+ * only を渡すと、そこに含まれるIDだけで並びを作る (追加・消滅による見かけの変化を除くため)。
+ * sort が同値のときは id で決める — 実データは listTasks の ORDER BY sort, id 順で入るので、
+ * 比較関数にも同じ規則を書いておく (暗黙の安定性に寄りかからない) */
+function columnLists(tasks: Map<number, TaskFacts>, only?: Set<number>): Map<string, number[]> {
+  const byStatus = new Map<string, { id: number; sort: number }[]>();
+  for (const [id, t] of tasks) {
+    if (only && !only.has(id)) continue;
+    const list = byStatus.get(t.status) ?? [];
+    list.push({ id, sort: t.sort });
+    byStatus.set(t.status, list);
+  }
+  const out = new Map<string, number[]>();
+  for (const [status, list] of byStatus) {
+    out.set(
+      status,
+      list.sort((a, b) => a.sort - b.sort || a.id - b.id).map((x) => x.id)
+    );
+  }
+  return out;
+}
+
+function columnOrders(tasks: Map<number, TaskFacts>, only?: Set<number>): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const [status, ids] of columnLists(tasks, only)) out.set(status, ids.map((id) => `#${id}`).join(","));
+  return out;
+}
+
+/** 列の中でそのタスクがどこに居るか。**追加行にこれが要る** —
+ * ゴミ箱からの復元は sort を保ったまま戻るので列の途中に入りうるが、
+ * 「追加」は並び順の判定 (居続けたIDの比較) から外れるため、ここで言わないと位置が分からない (自動レビュー指摘) */
+function positionIn(lists: Map<string, number[]>, status: string, id: number): string {
+  const ids = lists.get(status) ?? [];
+  const at = ids.indexOf(id);
+  if (at < 0 || ids.length <= 1) return `${status} の先頭`;
+  if (at === 0) return `${status} の先頭 (次が #${ids[1]})`;
+  if (at === ids.length - 1) return `${status} の末尾 (前が #${ids[at - 1]})`;
+  return `${status} の #${ids[at - 1]} と #${ids[at + 1]} の間`;
 }
 
 function sameDeps(a: number[] | null, b: number[] | null): boolean {
@@ -110,6 +155,8 @@ function fieldChanges(prev: TaskFacts, cur: TaskFacts): string[] {
   if (!sameDeps(prev.blockedBy, cur.blockedBy))
     out.push(`依存: [${(prev.blockedBy ?? []).join(",")}] -> [${(cur.blockedBy ?? []).join(",")}]`);
   if (prev.summary !== cur.summary) out.push(`現況: ${cur.summary ?? "(消去)"}`);
+  if (prev.checkedAt !== cur.checkedAt)
+    out.push(cur.checkedAt ? `人が検収の印を付けた (${cur.checkedAt})` : "検収の印が外れた");
   // 経緯メモは本文を載せると差分が膨らむので、変わったことだけ伝えて中身は取りに行かせる
   if (prev.contextVersion !== cur.contextVersion) out.push(`経緯メモが更新された (v${cur.contextVersion})`);
   return out;
@@ -126,18 +173,21 @@ export function diffBoards(
   cur: Pick<BoardSnapshot, "tasks" | "cards" | "projectContext">
 ): string[] {
   const changes: string[] = [];
-  // 並べ替えは1件動かすと周りの sort も連動して変わる。1タスク1行にすると差分が
-  // 「並び順が変わった」だけで埋まり、本当に見てほしい status の変化が埋もれるのでまとめる
-  const reordered: number[] = [];
+  const curLists = columnLists(cur.tasks);
 
   for (const [id, t] of cur.tasks) {
     const before = prev.tasks.get(id);
-    if (before && before.sort !== t.sort) reordered.push(id);
     if (!before) {
-      // 追加はIDだけでは何か分からないので内容ごと載せる
-      changes.push(
-        `+ #${id}「${t.title}」が追加された (${t.status}${t.due ? `, 期限 ${t.due}` : ""}${t.rejected ? ", 却下" : ""})`
-      );
+      // 追加はIDだけでは何か分からないので内容ごと載せる。
+      // **検収済みかどうかもここに要る** — ゴミ箱からの復元は checked_at を保ったまま
+      // 「追加」として現れるので、fieldChanges を通らずに検収状態が抜け落ちる (自動レビュー指摘)
+      const marks = [
+        positionIn(curLists, t.status, id),
+        ...(t.due ? [`期限 ${t.due}`] : []),
+        ...(t.rejected ? ["却下"] : []),
+        ...(t.checkedAt ? ["検収済み"] : []),
+      ];
+      changes.push(`+ #${id}「${t.title}」が追加された (${marks.join(", ")})`);
       continue;
     }
     const fields = fieldChanges(before, t);
@@ -152,8 +202,38 @@ export function diffBoards(
     }
   }
 
-  if (reordered.length > 0) {
-    changes.push(`並び順が変わった (${reordered.map((id) => `#${id}`).join(", ")})`);
+  // **見るのは sort の数値ではなく、列に並んだIDの順そのもの。**
+  // 数値で比べると両側に穴があった (自動レビュー指摘):
+  //   - 列をまたいで動かすと sort が変わらないことがある (UIは移動先の先頭要素の sort-1 を振るので、
+  //     0 の前に入れると 0 のまま)。数値が同じなので「並びが変わった」を出せない
+  //   - 逆に sort を 0,1 -> 5,9 に振り直しただけで、見た目の順が同じでも「変わった」と出る
+  //
+  // 判定に使うのは**その列に居続けたIDの相対順序**。全IDで比べると、1件足すたび・
+  // 1件動かすたびに「並び順が変わった」が付いてくる (出入りは + / - / status の行がもう伝えている)。
+  // ただし列を移ってきたものは、**どこに入ったか**が status の行では分からないので、
+  // 並びが2件以上ある列に限って現在順を出す
+  const stayed = new Set(
+    [...cur.tasks.entries()].filter(([id, t]) => prev.tasks.get(id)?.status === t.status).map(([id]) => id)
+  );
+  const prevOrder = columnOrders(prev.tasks, stayed);
+  const curOrder = columnOrders(cur.tasks, stayed);
+  const arrived = new Set(
+    [...cur.tasks.entries()]
+      .filter(([id, t]) => {
+        const p = prev.tasks.get(id);
+        return p !== undefined && p.status !== t.status;
+      })
+      .map(([, t]) => t.status)
+  );
+  const shown = columnOrders(cur.tasks);
+  const countIn = (status: string) => (shown.get(status) ? shown.get(status)!.split(",").length : 0);
+  const movedColumns = [...new Set([...prevOrder.keys(), ...curOrder.keys(), ...arrived])].filter((status) =>
+    prevOrder.get(status) !== curOrder.get(status) ? true : arrived.has(status) && countIn(status) > 1
+  );
+  if (movedColumns.length > 0) {
+    // 出すのは**全部入りの現在順**。判定から外した新入りも、いま何番目に居るかは知りたい
+    const lines = movedColumns.map((status) => `${status}: ${shown.get(status) || "(空)"}`);
+    changes.push(`並び順が変わった。現在の順は ${lines.join(" / ")}`);
   }
 
   for (const [id, idx] of cur.cards) {
@@ -217,6 +297,22 @@ export interface BoardDelta {
  * - 見つかれば、そこからの差分だけ返す
  * - 差分が MAX_CHANGES を超えたら、読ませる負担が上回るので全件に切り替える
  */
+/**
+ * 書き込み応答に混ぜるボード部分を組み立てる。**boardDelta と分けてあるのはテストのため** —
+ * ここはDBに触らない純粋関数なので、キーの取り違えを単体で固定できる。
+ *
+ * note ではなく boardNote を使うのが肝。書き込み側が返す note (「#9999 は存在しません。
+ * 古い一覧を見ている可能性があります」等の**警告**) と同じキーにすると、spread の順で警告が消える。
+ */
+export function formatBoardUpdate(d: BoardDelta, since?: string): Record<string, unknown> {
+  if (!d.full) return { stateId: d.stateId, ...(d.changes?.length ? { changesSince: d.changes } : {}) };
+  if (!since) return { stateId: d.stateId };
+  // 差分を返せなかったとき、**新しい状況IDを渡さない。**
+  // 渡すとエージェントはそれを次の since に使い、「変化なし」が返って
+  // 全件を一度も見ないまま古い認識のまま進む
+  return { boardNote: `${d.note ?? "差分を返せなかった"}。since を付けずに get_board を呼び、全体を取り直すこと` };
+}
+
 export function boardDelta(since?: string): BoardDelta {
   const snap = takeSnapshot();
   const base = since ? findSnapshot(since) : null;

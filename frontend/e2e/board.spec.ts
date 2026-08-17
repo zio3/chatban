@@ -1665,6 +1665,8 @@ test("ゴミ箱に入れると検収の印が落ちる (古い確認のままDon
   expect(dup.ok, "同じIDが成功と失敗の両方になっている").toBe(true);
   expect(dup.restored).toHaveLength(1);
   expect(dup.notRestored).toBeUndefined();
+  // 応答は要点だけ。**経緯メモを載せない** — チャット経路ではこれが次のLLM入力へ再投入される
+  expect(Object.keys(dup.restored[0]).sort()).toEqual(["id", "status", "title"]);
   // 復元したら検収の印が外れることを応答でも言う (境界はコードで守るが、報告しないと
   // エージェントは「さっき検収されていた」前提のまま話を進める)
   expect(dup.note).toContain("検収");

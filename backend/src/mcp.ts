@@ -212,10 +212,11 @@ export function buildMcpServer(onEvent: (kind: "board" | "proposals") => void): 
       inputSchema: { ids: z.array(z.number().int()) },
     },
     async ({ ids }) => {
-      // #161: 判定と報告は agentWrite に集約 (入口ごとに ok の意味が違わないように)
-      const { restored, ...rest } = restoreTasksAsAgent(ids);
+      // #161: 判定と報告は agentWrite に集約 (入口ごとに ok の意味が違わないように)。
+      // 返す形も共通側で絞ってあるので、ここで brief() を通す必要はない —
+      // **チャットとMCPで応答の形まで同じ**になる (以前は片方だけ要約していた)
       onEvent("board");
-      return text({ ...rest, restored: restored.map((t) => brief(t)) });
+      return text(restoreTasksAsAgent(ids));
     }
   );
 

@@ -143,13 +143,19 @@ export function createTasksAsAgent(tasks: AgentTaskInput[]): {
  * 「さっき検収されていたから確定できる」という前提のまま話を進めてしまう */
 export function restoreTasksAsAgent(ids: number[]): {
   ok: boolean;
-  restored: NonNullable<ReturnType<typeof getTask>>[];
+  /** 戻したものの要点だけ。**Task をそのまま載せない** — `context` (1件1,000字超) が
+   * 応答に乗り、チャットではそれが次のLLM入力とtraceへ再投入される (#108 と同じ無駄)。
+   * ここで絞っておけば入口ごとに要約する必要がなく、経路差も生まれない (Codexレビュー指摘) */
+  restored: { id: number; title: string; status: string }[];
   notRestored?: number[];
   note?: string;
 } {
   const unique = [...new Set(ids)];
   const results = unique.map((id) => ({ id, task: restoreTask(id) }));
-  const restored = results.map((r) => r.task).filter((t): t is NonNullable<typeof t> => !!t);
+  const restored = results
+    .map((r) => r.task)
+    .filter((t): t is NonNullable<typeof t> => !!t)
+    .map((t) => ({ id: t.id, title: t.title, status: t.status }));
   const notRestored = results.filter((r) => !r.task).map((r) => r.id);
   const notes = [
     restored.length > 0 ? RESTORE_CHECKED_NOTE : "",

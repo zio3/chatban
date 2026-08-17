@@ -1,11 +1,16 @@
 import type OpenAI from "openai";
-import { CONTEXT_APPEND_DESCRIPTION, createTasksAsAgent, updateTasksAsAgent } from "./agentWrite.js";
+import {
+  CONTEXT_APPEND_DESCRIPTION,
+  createTasksAsAgent,
+  RESTORE_DESCRIPTION,
+  restoreTasksAsAgent,
+  updateTasksAsAgent,
+} from "./agentWrite.js";
 import { cleanAgentText } from "./text.js";
 import { compactArchive } from "./archive.js";
 import { getBoardPromptSection } from "./promptState.js";
 import {
   createTask,
-  restoreTask,
   trashTask,
   getTask,
   listSummaryCards,
@@ -261,7 +266,7 @@ export const tools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
     type: "function",
     function: {
       name: "restore_tasks",
-      description: "ゴミ箱に入れたタスクを元に戻す(複数可)",
+      description: RESTORE_DESCRIPTION,
       parameters: {
         type: "object",
         properties: { ids: { type: "array", items: { type: "integer" } } },
@@ -401,9 +406,12 @@ async function execTool(name: string, args: any, uiActions: UiAction[], events: 
       // unknown tool を返していた (自動レビュー指摘)。画面が「チャットで戻せる」と
       // 案内しているのに成立しない状態。MCP側には実装があり、**入口ごとに機能が違っていた**
       // (#92 #108 #114 #125 #126 と同じ形。契約だけ公開して実装を書き忘れる、が新しい)
-      const results = (args.ids as number[]).map((id) => ({ id, restored: !!restoreTask(id) }));
+      // #161: 判定と報告は agentWrite に集約。以前はここだけ **常に ok:true** で、
+      // MCPは「1件でも戻せなければ ok:false」だった — ok だけを見るエージェントは
+      // 入口によって失敗を見落とす (Codexレビュー指摘)
+      const r = restoreTasksAsAgent(args.ids as number[]);
       events.add("board");
-      return { ok: true, results };
+      return r;
     }
     case "update_task_context": {
       // #112/#114: 経緯メモの上書きも agentWrite を通す (版の確認を1箇所に集約)

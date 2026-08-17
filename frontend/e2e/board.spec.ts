@@ -1652,6 +1652,23 @@ test("ゴミ箱に入れると検収の印が落ちる (古い確認のままDon
   expect(again.notRestored).toContain(id);
   expect(again.restored, "戻していないのに restored に載っている").toHaveLength(0);
 
+  // RESTは理由で応答を分ける。**実在するタスクを「無い」と言わない**
+  const already = await fetch(`${API}/api/tasks/${id}/restore`, { method: "POST" });
+  expect(already.status, "実在するのに404を返している").toBe(409);
+  const missing = await fetch(`${API}/api/tasks/99999999/restore`, { method: "POST" });
+  expect(missing.status).toBe(404);
+
+  // 同じIDを2つ渡しても、片方が成功・片方が失敗にならない (先に重複を落とす)
+  const dupTarget = await createTask("重複指定で戻すタスク");
+  await mcp("delete_tasks", { ids: [dupTarget] });
+  const dup = await mcp("restore_tasks", { ids: [dupTarget, dupTarget] });
+  expect(dup.ok, "同じIDが成功と失敗の両方になっている").toBe(true);
+  expect(dup.restored).toHaveLength(1);
+  expect(dup.notRestored).toBeUndefined();
+  // 復元したら検収の印が外れることを応答でも言う (境界はコードで守るが、報告しないと
+  // エージェントは「さっき検収されていた」前提のまま話を進める)
+  expect(dup.note).toContain("検収");
+
   // 印が無いので確定も通らない。setChecked はRESTにしか無いので、AIはここから先へ進めない
   const res = await fetch(`${API}/api/tasks/approve`, {
     method: "POST",

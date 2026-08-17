@@ -329,8 +329,15 @@ app.get("/api/trash", (_req, res) => {
 });
 
 app.post("/api/tasks/:id/restore", (req, res) => {
-  const task = restoreTask(Number(req.params.id));
-  if (!task) return res.status(404).json({ error: "not found" });
+  const id = Number(req.params.id);
+  const task = restoreTask(id);
+  // #161: restoreTask はゴミ箱に無ければ undefined を返す。**理由で応答を分ける** —
+  // 「そんなIDは無い」と「実在するがゴミ箱に無い」を同じ 404 にすると、
+  // 実在するタスクを不存在と報告することになる (Codexレビュー指摘)
+  if (!task) {
+    if (!getTask(id)) return res.status(404).json({ error: "not found" });
+    return res.status(409).json({ error: "ゴミ箱に無いので戻せません (すでにボード上にあります)" });
+  }
   broadcastBoard();
   res.json(task);
 });

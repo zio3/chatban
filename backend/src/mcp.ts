@@ -1,5 +1,11 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { CONTEXT_APPEND_DESCRIPTION, createTasksAsAgent, updateTasksAsAgent } from "./agentWrite.js";
+import {
+  CONTEXT_APPEND_DESCRIPTION,
+  createTasksAsAgent,
+  RESTORE_DESCRIPTION,
+  restoreTasksAsAgent,
+  updateTasksAsAgent,
+} from "./agentWrite.js";
 import {
   BLOCKED_BY_DESCRIPTION,
   CONTEXT_WRITE_DESCRIPTION,
@@ -21,7 +27,6 @@ import {
   queryProjectData,
   reorderTasks,
   createTask,
-  restoreTask,
   trashTask,
   getProjectContextRow,
   getTask,
@@ -203,27 +208,14 @@ export function buildMcpServer(onEvent: (kind: "board" | "proposals") => void): 
   server.registerTool(
     "restore_tasks",
     {
-      description: "ゴミ箱に入れたタスクを元に戻す(複数可)",
+      description: RESTORE_DESCRIPTION,
       inputSchema: { ids: z.array(z.number().int()) },
     },
     async ({ ids }) => {
-      // #161: **戻せなかったものを成功に混ぜない。**restoreTask はゴミ箱に無いIDでは
-      // undefined を返すので、以前の形だと restored に null が並び (=#124 で嫌った内部事情の漏れ)、
-      // しかも ok:true のままだった。名指しで返して、何が起きなかったかを言う
-      const results = ids.map((id) => ({ id, task: restoreTask(id) }));
-      const restored = results.filter((r) => r.task).map((r) => brief(r.task));
-      const notRestored = results.filter((r) => !r.task).map((r) => r.id);
+      // #161: 判定と報告は agentWrite に集約 (入口ごとに ok の意味が違わないように)
+      const { restored, ...rest } = restoreTasksAsAgent(ids);
       onEvent("board");
-      return text({
-        ok: notRestored.length === 0,
-        restored,
-        ...(notRestored.length > 0
-          ? {
-              notRestored,
-              note: `#${notRestored.join(", #")} はゴミ箱に無いので戻していません (既にボードにあるか、存在しないIDです)。その旨をユーザーにも伝えてください`,
-            }
-          : {}),
-      });
+      return text({ ...rest, restored: restored.map((t) => brief(t)) });
     }
   );
 

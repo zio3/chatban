@@ -4,6 +4,7 @@ import {
   DUE_FORMAT_RULE,
   getTask,
   isDueDate,
+  restoreTask,
   updateTask,
   updateTasks,
   type TaskPatch,
@@ -126,6 +127,49 @@ export function createTasksAsAgent(tasks: AgentTaskInput[]): {
     ...(badDue.length > 0 ? { badDue } : {}),
   };
 }
+
+/** #161: 復元の契約。**チャットとMCPで結果の読み方を揃えるために、ここに集約する。**
+ *
+ * 前の周までは各入口が restoreTask を直接呼んでいて、MCPは「1件でも戻せなければ ok:false」、
+ * チャットは「常に ok:true」になっていた (Codexレビュー指摘)。**ok だけを見るエージェントは
+ * 入口によって失敗を見落とす** — 同じ道具の名前で結果の意味が違うのが一番たちが悪い。
+ *
+ * 重複IDも先に落とす。[N, N] を渡すと1回目は成功・2回目は0件更新になり、
+ * **同じNが restored と notRestored の両方に載って ok:false** になっていた
+ * (approveChecked が同じ理由で先に dedupe しているのに合わせる)。
+ *
+ * 復元は検収の印を落とすので、**それを note で言う**。境界はコードで守られているが、
+ * 戻したエージェントが「検収状態が変わった」ことを知る手段が無いと、
+ * 「さっき検収されていたから確定できる」という前提のまま話を進めてしまう */
+export function restoreTasksAsAgent(ids: number[]): {
+  ok: boolean;
+  restored: NonNullable<ReturnType<typeof getTask>>[];
+  notRestored?: number[];
+  note?: string;
+} {
+  const unique = [...new Set(ids)];
+  const results = unique.map((id) => ({ id, task: restoreTask(id) }));
+  const restored = results.map((r) => r.task).filter((t): t is NonNullable<typeof t> => !!t);
+  const notRestored = results.filter((r) => !r.task).map((r) => r.id);
+  const notes = [
+    restored.length > 0 ? RESTORE_CHECKED_NOTE : "",
+    notRestored.length > 0
+      ? `#${notRestored.join(", #")} はゴミ箱に無いので戻していません (既にボードにあるか、存在しないIDです)。その旨をユーザーにも伝えてください`
+      : "",
+  ].filter(Boolean);
+  return {
+    ok: notRestored.length === 0,
+    restored,
+    ...(notRestored.length > 0 ? { notRestored } : {}),
+    ...(notes.length > 0 ? { note: notes.join(" / ") } : {}),
+  };
+}
+
+/** 復元したときに必ず言うこと。ツールの説明 (RESTORE_DESCRIPTION) と応答の両方で使う */
+export const RESTORE_CHECKED_NOTE =
+  "戻したタスクの検収の印は外れています (ゴミ箱を通る間に人間の確認は挟まっていないため)。Doneへ確定するには、人間がもう一度ボードで検収チェックを付ける必要があります";
+
+export const RESTORE_DESCRIPTION = `ゴミ箱に入れたタスクを元に戻す(複数可)。**戻すと検収の印は外れる** — ${DONE_GATE_RULE}。戻せなかったIDは notRestored で名指しで返る`;
 
 export function updateTasksAsAgent(updates: AgentTaskUpdate[]): {
   ok: boolean;

@@ -185,18 +185,18 @@ test("知らない値は列として認めない", () => {
 // そこまで固定するには LLM 呼び出しを差し替えられる形にする必要があり、それは別の改修になる。
 // いま呼び出し0回を保証しているものは無い — 判定の正しさと、E2Eの「OFFなら空で返る」までが範囲
 
-test("OFFなら呼ばない (最優先)", () => {
+test("提案の生成を諦める判定: OFFが最優先で off を返す", () => {
   assert.equal(suggestSkipReason({ enabled: false, chatBusy: false, emptyBoard: false }), "off");
-  // 他の条件が「呼んでよい」と言っていてもOFFが勝つ
+  // 他の条件が「生成してよい」と言っていてもOFFが勝つ
   assert.equal(suggestSkipReason({ enabled: false, chatBusy: true, emptyBoard: true }), "off");
 });
 
-test("会話中は譲る。空ボードでは読む文脈が無いので呼ばない", () => {
+test("提案の生成を諦める判定: 会話中は chat-busy、空ボードは empty-board", () => {
   assert.equal(suggestSkipReason({ enabled: true, chatBusy: true, emptyBoard: false }), "chat-busy");
   assert.equal(suggestSkipReason({ enabled: true, chatBusy: false, emptyBoard: true }), "empty-board");
 });
 
-test("ONで、会話中でもなく、ボードに中身があるときだけ呼ぶ", () => {
+test("提案の生成を諦める判定: ON・会話中でない・中身があるときだけ null (生成へ進む)", () => {
   assert.equal(suggestSkipReason({ enabled: true, chatBusy: false, emptyBoard: false }), null);
 });
 

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { diffBoards, type TaskFacts } from "./boardState.js";
+import { diffBoards, formatBoardUpdate, type TaskFacts } from "./boardState.js";
 
 /** #150: ボード状況の差分。
  *
@@ -126,7 +126,7 @@ test("並べ替えは1行にまとめ、その1行から現在の順を復元で
   assert.match(changes[0], /todo: #3,#1,#2/);
 });
 
-test("同じIDが動いても、並びが違えば違う文面になる", () => {
+test("入れ替われば現在の並びを出す", () => {
   const before = board([
     [1, task({ sort: 0 })],
     [2, task({ sort: 1 })],
@@ -135,18 +135,68 @@ test("同じIDが動いても、並びが違えば違う文面になる", () => 
     [1, task({ sort: 1 })],
     [2, task({ sort: 0 })],
   ]);
-  const shifted = board([
+
+  assert.match(diffBoards(before, swapped)[0], /todo: #2,#1/);
+});
+
+test("sort の数値だけ振り直され、並びが同じなら何も言わない", () => {
+  // 0,1 -> 5,9 は数値が変わっても見た目の順は #1,#2 のまま。
+  // sort の数値差で判定すると、ここで「並び順が変わった」と嘘をつく (自動レビュー指摘)
+  const before = board([
+    [1, task({ sort: 0 })],
+    [2, task({ sort: 1 })],
+  ]);
+  const renumbered = board([
     [1, task({ sort: 5 })],
     [2, task({ sort: 9 })],
   ]);
 
-  // 動いたIDの集合はどちらも {1,2} だが、結果の並びは違う
-  assert.notEqual(diffBoards(before, swapped)[0], diffBoards(before, shifted)[0]);
-  assert.match(diffBoards(before, swapped)[0], /todo: #2,#1/);
-  assert.match(diffBoards(before, shifted)[0], /todo: #1,#2/);
+  assert.deepEqual(diffBoards(before, renumbered), []);
 });
 
-test("列をまたいで動いたら、抜けたほうの列の並びも出す", () => {
+test("列を移っても sort の数値が変わらないケースを拾う", () => {
+  // UIは移動先の先頭要素の sort-1 を振るので、先頭が 0 の列の先頭へ入れると sort は 0 のまま。
+  // 数値を比べていると status の行しか出ず、移動先の現在順を返せなかった (自動レビュー指摘)
+  const before = board([
+    [1, task({ status: "todo", sort: 0 })],
+    [2, task({ status: "review", sort: 1 })],
+    [3, task({ status: "review", sort: 2 })],
+  ]);
+  const after = board([
+    [1, task({ status: "review", sort: 0 })],
+    [2, task({ status: "review", sort: 1 })],
+    [3, task({ status: "review", sort: 2 })],
+  ]);
+
+  const changes = diffBoards(before, after);
+  assert.ok(
+    changes.some((c) => c.includes("status: todo -> review")),
+    "列の移動そのものは出る"
+  );
+  const order = changes.find((c) => c.startsWith("並び順"));
+  assert.ok(order, "移動先の現在順も出る");
+  assert.match(order!, /review: #1,#2,#3/);
+});
+
+test("ゴミ箱からの復元は、追加行に検収済みが載る", () => {
+  // restoreTask は checked_at を保ったまま戻すので、「追加」として現れる。
+  // 追加行は fieldChanges を通らないため、ここに書かないと検収状態が抜け落ちる (自動レビュー指摘)
+  const changes = diffBoards(
+    board(),
+    board([[5, task({ status: "review", title: "戻ってきた仕事", checkedAt: "2026-08-17 10:00:00" })]])
+  );
+
+  const added = changes.find((c) => c.startsWith("+"));
+  assert.ok(added);
+  assert.match(added!, /検収済み/);
+});
+
+test("通常の新規追加には検収済みが付かない", () => {
+  const changes = diffBoards(board(), board([[6, task({ title: "新しい仕事" })]]));
+  assert.ok(!changes[0].includes("検収済み"));
+});
+
+test("列をまたいで動いたら、入った先の並びを出す (抜けたほうは出さない)", () => {
   const before = board([
     [1, task({ status: "todo", sort: 0 })],
     [2, task({ status: "todo", sort: 1 })],
@@ -159,9 +209,10 @@ test("列をまたいで動いたら、抜けたほうの列の並びも出す",
   ]);
 
   const line = diffBoards(before, after).find((c) => c.startsWith("並び順"));
-  assert.ok(line, "並び順の行が出る");
+  assert.ok(line, "入った先の並びは出る");
   assert.match(line!, /review: #3,#1/);
-  assert.match(line!, /todo: #2/);
+  // 抜けたほうは「#1 が review へ移った」で足りる。残りの並びまで出すとノイズになる
+  assert.ok(!line!.includes("todo:"));
 });
 
 test("人の検収の印を拾う (setChecked は updated_at を動かさないので差分でしか気づけない)", () => {
@@ -238,4 +289,51 @@ test("複数の変化がまとめて返る", () => {
   assert.equal(changes.filter((c) => c.startsWith("~")).length, 1);
   assert.equal(changes.filter((c) => c.startsWith("+")).length, 1);
   assert.equal(changes.filter((c) => c.startsWith("-")).length, 1);
+});
+
+/** 書き込み応答に混ぜるボード部分。**キーの取り違えはここでしか捕まらない** —
+ * 実際、boardNote を note という名前で返していたときは、書き込み側の警告
+ * (「#9999 は存在しません。古い一覧を見ている可能性があります」) を spread で消していた。
+ * diffBoards のテストでは検出できず、実機で気づいた */
+
+test("差分が返せたときは状況IDと変化を返す", () => {
+  const r = formatBoardUpdate({ stateId: "p1-run-2", since: "p1-run-1", changes: ["~ #4 status: todo -> review"] }, "p1-run-1");
+  assert.equal(r.stateId, "p1-run-2");
+  assert.deepEqual(r.changesSince, ["~ #4 status: todo -> review"]);
+  assert.ok(!("note" in r), "書き込み側の警告と同じキーを使わない");
+  assert.ok(!("boardNote" in r));
+});
+
+test("変化が無ければ changesSince を付けない (空配列を読ませない)", () => {
+  const r = formatBoardUpdate({ stateId: "p1-run-2", since: "p1-run-1", changes: [] }, "p1-run-1");
+  assert.equal(r.stateId, "p1-run-2");
+  assert.ok(!("changesSince" in r));
+});
+
+test("since を渡していなければ、次回のための状況IDだけ返す", () => {
+  const r = formatBoardUpdate({ stateId: "p1-run-1", full: true });
+  assert.deepEqual(r, { stateId: "p1-run-1" });
+});
+
+test("差分を返せなかったときは状況IDを返さず、note とも衝突しない", () => {
+  const r = formatBoardUpdate({ stateId: "p1-run-9", full: true, note: "状況IDが失効していた" }, "p1-dead-1");
+
+  // 返すとエージェントが次の since に使い、空差分が返って全件を見ないまま進む
+  assert.ok(!("stateId" in r), "新しい状況IDを渡さない");
+  // 書き込み側の警告 (note) を潰さないよう、別のキーに入れる
+  assert.ok(!("note" in r));
+  assert.match(String(r.boardNote), /状況IDが失効していた/);
+  assert.match(String(r.boardNote), /since を付けずに get_board/);
+});
+
+test("書き込み側の警告と同時に返しても、どちらも消えない", () => {
+  // 実際の応答は { ...書き込み結果, ...boardUpdate() } の順で spread される
+  const writeResult = { ok: false, note: "#9999 は存在しません (古い一覧を見ている可能性があります)" };
+  const merged: Record<string, unknown> = {
+    ...writeResult,
+    ...formatBoardUpdate({ stateId: "p1-run-9", full: true, note: "失効" }, "p1-dead-1"),
+  };
+
+  assert.match(String(merged.note), /#9999 は存在しません/);
+  assert.match(String(merged.boardNote), /失効/);
 });

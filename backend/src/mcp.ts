@@ -35,7 +35,7 @@ import {
   setProjectContext,
   updateTasks,
 } from "./db.js";
-import { boardDelta } from "./boardState.js";
+import { boardDelta, formatBoardUpdate } from "./boardState.js";
 import { archiveState } from "./hooks.js";
 import { contextReference, contextTemplateHint, currentProjectId, getProject } from "./store.js";
 import type { TaskStatus } from "./types.js";
@@ -69,20 +69,10 @@ const SINCE_ON_WRITE = z
       "**いま自分が書き換えたぶんも含まれる**ので、updated / created と重なる行がある"
   );
 
-/** 書き込み応答に載せるボードの動き。全件が要るほど変わっていたら get_board へ誘導する (応答を重くしない) */
+/** 書き込み応答に載せるボードの動き。全件が要るほど変わっていたら get_board へ誘導する (応答を重くしない)。
+ * 組み立て自体は formatBoardUpdate (純粋関数) にあり、そちらでキーの取り違えを試験している */
 function boardUpdate(since?: string) {
-  const d = boardDelta(since);
-  if (!d.full) return { stateId: d.stateId, ...(d.changes?.length ? { changesSince: d.changes } : {}) };
-  if (!since) return { stateId: d.stateId };
-  // 差分を返せなかったとき、**新しい状況IDを渡さない。**
-  // 渡すとエージェントはそれを次の since に使い、「変化なし」が返って
-  // 全件を一度も見ないまま古い認識のまま進む (自動レビュー指摘)
-  //
-  // キーが `note` でないのは、書き込み側が返す note (「done は指定できないので review に置いた」等の
-  // **警告**) を後から spread して消していたため。意味の違うものを同じキーに入れない (自動レビュー指摘)
-  return {
-    boardNote: `${d.note ?? "差分を返せなかった"}。since を付けずに get_board を呼び、全体を取り直すこと`,
-  };
+  return formatBoardUpdate(boardDelta(since), since);
 }
 
 /** #108: 更新結果は要点だけ返す。以前は context を含む全フィールドが返っており、

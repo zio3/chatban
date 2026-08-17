@@ -285,6 +285,32 @@ test("部分マスクされたキーも伏せる (完全一致では捕まらな
   assert.ok(!out.includes("IgAA"), "末尾が残っている");
 });
 
+// **マスク文字は列挙できない** (Codexレビュー指摘)。最初の実装は `*` と `.` だけを
+// 続きとみなしていたので、`…`(Unicode省略記号) で一致が止まり `***…IgAA` になって
+// **末尾4文字が残った**。実物のOpenAIは ASCII の `*` なので実測では気づけなかった —
+// 「実測で通ったから正しい」ではなく、**知らないマスク文字が来ても効くか**で見る
+test("マスクの文字が何であっても、トークンの終わりまで伏せる", () => {
+  const key = "sk-ant-api03-REALSECRETVALUE-abcdefghijklmnop-IgAA";
+  for (const middle of ["*".repeat(40), "…", "...", "xxxx", "•••", "＊＊", "▒▒▒"]) {
+    const out = redactSecrets(`key: sk-ant-a${middle}IgAA failed`, [key]);
+    assert.equal(out, "key: *** failed", `マスクが ${middle} のとき`);
+    assert.ok(!out.includes("IgAA"), `末尾が残っている (マスク=${middle})`);
+  }
+});
+
+test("設定を知らなくても、sk- で始まるトークンは形が崩れていても伏せる", () => {
+  // 規則3 (保険)。マスクが早く始まっても素通りさせない
+  assert.equal(redactSecrets("upstream: sk-proj-abcd1234…WXYZ bad", []), "upstream: *** bad");
+});
+
+test("JSONや引用符の中でも、周りの構造を壊さずに値だけ伏せる", () => {
+  const key = "sk-ant-api03-REALSECRETVALUE-abcdefghijklmnop-IgAA";
+  assert.equal(
+    redactSecrets(`{"error":"invalid key sk-ant-a****IgAA"}`, [key]),
+    `{"error":"invalid key ***"}`
+  );
+});
+
 test("設定に無いキーでも sk- の形なら伏せる (保険)", () => {
   const out = redactSecrets("upstream said: sk-proj-AbCdEfGhIjKlMnOpQrStUv is invalid", []);
   assert.equal(out, "upstream said: *** is invalid");

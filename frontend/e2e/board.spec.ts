@@ -1448,11 +1448,12 @@ test("AI提案チップはプロジェクトごとにOFFにできる。OFFの間
   // 切ったのは1だけ。他のプロジェクトは巻き込まれない
   expect(await enabledOf(otherId)).toBe(true);
 
-  // OFFなら空で返る。**「LLMを呼んでいないこと」はここでは確かめない** —
+  // OFFなら空で返る。**「LLMを呼んでいないこと」は誰も確かめていない** —
   // #181 まで使っていた llm_calls の件数差はテーブルごと撤去され、共有ログの行数で数える形は
   // 開発サーバーの書き込みで誤判定しうる (自動レビュー指摘)。
-  // 呼ばないことの保証は `suggestSkipReason` のユニットテストが持っている (backend/src/chat.test.ts)。
-  // ここはOFFが**この経路まで効いていること** (設定→API応答) を見る
+  // いま在るのは `suggestSkipReason` のユニットテスト (判定結果は正しい) と、ここ (設定→API応答まで
+  // OFFが効いている) の2つで、**呼び出し0回そのものは範囲外**。固定するには
+  // LLM呼び出しを差し替えられる形にする必要があり、それは別の改修
   const s = (await (await fetch(`${API}/api/suggestions`, { method: "POST" })).json()) as any;
   expect(s.suggestions).toEqual([]);
 

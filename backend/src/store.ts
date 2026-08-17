@@ -35,7 +35,7 @@ function open(path: string): Database.Database {
   return db;
 }
 
-/** 管理DBのスキーマ。プロジェクト一覧・アプリ全体の設定・全LLM呼び出し */
+/** 管理DBのスキーマ。プロジェクト一覧とアプリ全体の設定だけ (#181で計測系を落とした) */
 function ensureAdminSchema(db: Database.Database) {
   db.exec(`
 CREATE TABLE IF NOT EXISTS projects (
@@ -282,6 +282,33 @@ CREATE VIEW live_tasks AS
   })();
   // 消えたときだけ記録する。起動のたびに出しても意味がない
   if (dropped.length > 0) log("schema", `${dropped.join(" / ")} を削除しました (#179 担当者の廃止 / #180 認証の廃止)`);
+
+  // #181: 会話ログの usage から、撤去したトークン・キャッシュ・ルーティング先を落とす。
+  //
+  // **列は残す** (いまも所要時間とラウンド数を入れている)。落とすのは中身の余分な項目。
+  // 過去行をそのままにすると、**query_log から旧トークン情報が引けるのに
+  // ツール契約は「usage は所要時間とラウンド数だけ」と言っている**状態になる (自動レビュー指摘)。
+  // 「読まないだけにして残す」を採らないのは #179 / #180 と同じ理由 — 残っていれば誰かが集計に使う。
+  // 当時の値は backend/logs/ のログ行に残っているので、記録が消えるわけではない
+  const legacyUsage = db
+    .prepare("SELECT id, usage FROM chat_messages WHERE usage IS NOT NULL AND usage LIKE '%Tokens%'")
+    .all() as { id: number; usage: string }[];
+  if (legacyUsage.length > 0) {
+    const upd = db.prepare("UPDATE chat_messages SET usage = ? WHERE id = ?");
+    let normalized = 0;
+    db.transaction(() => {
+      for (const row of legacyUsage) {
+        try {
+          const u = JSON.parse(row.usage) as { rounds?: number; elapsedMs?: number };
+          upd.run(JSON.stringify({ rounds: u.rounds ?? 0, elapsedMs: u.elapsedMs ?? 0 }), row.id);
+          normalized++;
+        } catch {
+          // 壊れたJSONは触らない (読めないものを書き換えると、元が何だったか分からなくなる)
+        }
+      }
+    })();
+    log("schema", `会話ログ ${normalized}件の usage からトークン情報を落としました (#181 計測系の撤去)`);
+  }
 
   /** 列が実在するときだけ DROP し、**消えたことを確かめる**。
    * 無ければ何もしない (適用済み) / 消せなければ投げる (黙って通さない) */

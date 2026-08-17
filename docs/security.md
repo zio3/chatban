@@ -153,8 +153,10 @@ context に `<img src=x onerror=...>` を入れて登録 → **すべて文字�
 
 削除にあたって、**セッション署名鍵 (`auth.sessionSecret`) と許可リストは設定テーブルから消しました**
 (起動時のマイグレーション)。使う側が消えたあとに秘密だけ残るのが、いちばんよくある漏れ方だからです。
-会話ログの `speaker_email` (ログイン済みのときだけ入っていた本人確認済みアドレス) も列ごと落としました。
-いま `speaker` に入るのは**自己申告の表示名**だけで、検証されたものではありません。
+会話ログの発言者 (`speaker` / `speaker_email`) も列ごと落としました。**個人利用に特化した以上、
+話しかけてくるのは常に持ち主ひとり**で、記録しても情報が増えないためです
+(実測でも `null` 554件 / `"zio"` 100件の2値しかありませんでした)。
+`role='user'` が持ち主、`role='assistant'` がアシスタント — 区別はこれで足ります。
 
 > 認証を実装していた当時の設計 (Googleの公開鍵でのIDトークン検証、HMAC署名 + HttpOnly Cookie、
 > 許可リスト、設定APIの保護) は、この文書の履歴と `docs/review/` のレビュー記録に残っています。
@@ -201,6 +203,5 @@ context に `<img src=x onerror=...>` を入れて登録 → **すべて文字�
 | AIの書き込みが通る唯一の経路 | `backend/src/agentWrite.ts` |
 | SQL窓口の守り | `backend/src/db.ts` の `runReadonly` |
 | 待ち受けをローカルに閉じている場所 | `backend/src/index.ts` の `server.listen` |
-| 発言者の決め方 (自己申告の正規化) | `backend/src/speaker.ts` |
 | タイムゾーンの起動時チェック | `backend/src/timezone.ts` |
 | 上記の挙動を固定したテスト | `frontend/e2e/board.spec.ts` |

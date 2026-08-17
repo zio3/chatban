@@ -36,16 +36,12 @@ export default function App() {
   // #93: チャットは常設なので、いま見ている画面をメタ情報としてLLMへ渡す (発言者と同じ扱い)
   const viewRef = useRef(view);
   viewRef.current = view;
-  // #14 → #90: なりきりの切替UIは撤去。デモでは人フィルタが見えれば足りると判断した。
-  // 発言者(speaker)の配線自体は残してあるので、localStorage の chatban.currentUser を
-  // 書き換えれば別人として発言できる (音声入力#20と同じく「入口だけ外す」扱い)
-  const currentUser = localStorage.getItem("chatban.currentUser") || "zio";
-  const currentUserRef = useRef(currentUser);
-  currentUserRef.current = currentUser;
+  // #14 → #90 → #180: なりきりの切替UIを撤去したあとも発言者(speaker)の配線だけ残していたが、
+  // 個人利用に特化したので概念ごと外した (話しかけてくるのは常に持ち主ひとり)
 
   // メインチャット: ライフサイクル(送信/考え中/停止/タイムアウト/再送)は共有フックに集約 (#23/#28/#29/#30)
   const mainChat = useChatTurn({
-    request: (m, h, signal, attachments) => api.chat(m, h, signal, currentUserRef.current, attachments, viewRef.current),
+    request: (m, h, signal, attachments) => api.chat(m, h, signal, attachments, viewRef.current),
     onResponse: (res) => {
       for (const a of res.uiActions) {
         if (a.type === "ask") setAskOptions(a.options);
@@ -419,7 +415,6 @@ export default function App() {
         <TaskDetailPanel
           task={detailTask}
           archived={detailArchived}
-          currentUser={currentUser}
           onClose={() => {
             setDetailTaskId(null);
             lastDetailTaskRef.current = undefined;

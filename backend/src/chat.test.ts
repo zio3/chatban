@@ -3,7 +3,6 @@ import { test } from "node:test";
 import { extractChoices } from "./chat.js";
 import { differs } from "./archive.js";
 import { readFileSync } from "node:fs";
-import { pickSpeaker } from "./speaker.js";
 import { tools } from "./chat.js";
 import { DONE_GATE_RULE, exportableSettings, isTaskStatus, mayEnterDone } from "./db.js";
 import { AGENT_STATUS_VALUES } from "./chat.js";
@@ -71,27 +70,9 @@ test("同じ件数でも中身が違えば捨てる", () => {
   assert.equal(differs([1, 3], [1, 2]), true);
 });
 
-// #126 → #180: 発言者はシステムが決める。以前はメインチャットとタスクチャットで
-// 決め方が別々で、片方は保存すらしていなかった。判断を1か所 (pickSpeaker) に寄せてある。
-// 認証を廃止したので中身は「自己申告の正規化」だけになったが、**入口が2つあることは変わらない**
-// ので関数は残す (入口ごとに書き分けると必ずズレる #92 #108 #114 #125)。
-
-test("名乗っていればそれを使う", () => {
-  assert.deepEqual(pickSpeaker("田中"), { name: "田中" });
-});
-
-test("名乗りが無ければ発言者なし", () => {
-  assert.deepEqual(pickSpeaker(undefined), { name: null });
-  assert.deepEqual(pickSpeaker(""), { name: null });
-  assert.deepEqual(pickSpeaker("   "), { name: null });
-});
-
-test("文字列でないものは名乗りとして扱わない", () => {
-  // JSONで何を送られても落ちない。オブジェクトをそのまま名前にすると [object Object] が記録に残る
-  assert.deepEqual(pickSpeaker({ name: "偽" }), { name: null });
-  assert.deepEqual(pickSpeaker(42), { name: null });
-  assert.deepEqual(pickSpeaker(null), { name: null });
-});
+// #126 → #180: 発言者を決める pickSpeaker のテストがここにあった。
+// 個人利用に特化して「誰が言ったか」を持たなくなったので、判断そのものが無くなった
+// (話しかけてくるのは常に持ち主ひとり。実測でも null 554件 / "zio" 100件だった)。
 
 // Doneへ入れる条件。PR #1 では検収API (approveChecked) だけが持っていたため、
 // PATCH /api/tasks/:id に status:"done" を投げれば素通りしていた (自動レビュー指摘)。

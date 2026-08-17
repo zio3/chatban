@@ -102,20 +102,18 @@ export const api = {
     message: string,
     history: { role: "user" | "assistant"; content: string }[],
     signal?: AbortSignal,
-    speaker?: string,
     attachments?: { kind: "image" | "pdf"; name: string; dataUrl: string }[]
   ) =>
     apiFetch(`/api/tasks/${taskId}/chat`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message, history, speaker, attachments }),
+      body: JSON.stringify({ message, history, attachments }),
       signal,
     }).then((r) => json<ChatResponse>(r)),
   chat: (
     message: string,
     history: { role: "user" | "assistant"; content: string }[],
     signal?: AbortSignal,
-    speaker?: string,
     attachments?: { kind: "image" | "pdf"; name: string; dataUrl: string }[],
     /** #93: いま見ている画面。曖昧な指示語をタブの文脈で解決するためのメタ情報 */
     view?: string
@@ -123,7 +121,7 @@ export const api = {
     apiFetch("/api/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message, history, speaker, attachments, view }),
+      body: JSON.stringify({ message, history, attachments, view }),
       signal,
     }).then((r) => json<ChatResponse>(r)),
 };

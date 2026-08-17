@@ -65,7 +65,7 @@ export const QUERY_LOG_DESCRIPTION = [
   "2つのscopeは分離ポリシーが違う。cost=全プロジェクト横断 (LLMの請求は口座単位なので、プロジェクトで割ると総額が出せない。project_id 列で絞り込みは可能) / audit=接続中のプロジェクトのみ (別プロジェクトのタスクや会話は見えない)",
   "scope='cost': llm_calls — id, purpose(chat/suggest/archive-decompose/archive-title), model, routed_model, prompt_tokens, completion_tokens, cached_tokens, cache_creation_tokens, elapsed_ms, project_id, price_in_per_m, price_out_per_m, estimated_usd, created_at",
   "cached_tokens=キャッシュから読んだ入力 / cache_creation_tokens=キャッシュに書いた入力。単価が違う(読みは定価の約10%、書きは1.25倍)ので合算しない。prompt_tokens はどちらも含んだ総入力",
-  "scope='audit': このプロジェクトの記録。chat_messages(id, role, content, trace, usage, task_id, speaker, created_at。speaker=発言者の表示名。本文中の名乗りではなくシステムが付けた値だが、自己申告なので検証されてはいない) / summary_cards(id, title, elements, task_ids, frozen, created_at)",
+  "scope='audit': このプロジェクトの記録。chat_messages(id, role, content, trace, usage, task_id, created_at。role='user' が持ち主の発言、'assistant' がこのアシスタント) / summary_cards(id, title, elements, task_ids, frozen, created_at)",
   "scope='audit' の tasks(id, title, status, summary, context, context_version, due, blocked_by, rejected, checked_at, done_at, trashed_at, sort, archived, summary_card_id, created_at, updated_at)",
   "checked_at = 人が実物で確かめた日時 (nullなら未検収)。status とは別物で、done は列が動いたこと・checked_at は検収が進んだこと。片方からもう片方を推測しない。この窓口は読み取り専用で、checked_at を書く手段はどこにも無い (印を付けられるのは人間だけ)",
   "会話で「#112」と呼ぶタスクは tasks.id = 112 のこと(主キー)。番号はプロジェクトごとに1から振られる。特定の1件を見るときは WHERE id=<番号> で引く",
@@ -86,11 +86,11 @@ export const QUERY_LOG_DESCRIPTION = [
   "例(1件の経緯メモ全文): SELECT context, context_version FROM tasks WHERE id=112",
   "例: SELECT routed_model, COUNT(*) n, ROUND(SUM(estimated_usd),4) usd FROM llm_calls GROUP BY 1 ORDER BY usd DESC LIMIT 10",
   "例: SELECT ROUND(SUM(estimated_usd),4) usd FROM llm_calls WHERE date(created_at)=date('now','localtime')",
-  "例(いつ誰が何を言ったか): SELECT created_at, speaker, substr(content,1,120) c FROM chat_messages WHERE role='user' ORDER BY id DESC LIMIT 30",
+  "例(いつ何を言われたか): SELECT created_at, substr(content,1,120) c FROM chat_messages WHERE role='user' ORDER BY id DESC LIMIT 30",
   "例: SELECT created_at, role, substr(content,1,120) FROM chat_messages WHERE date(created_at)='2026-08-09' ORDER BY id LIMIT 30",
   "例: SELECT substr(created_at,1,13) h, COUNT(*) n FROM chat_messages GROUP BY 1 ORDER BY 1",
   "会話ログは常時プロンプトに載せていないので、過去の話を聞かれたらここを掘る。",
-  "「誰がやったか」を聞かれたらここで辿れる。ただし speaker は自己申告 (#180で認証を廃止した) なので、本人確認された記録ではない。",
+  "「いつ何を頼まれたか」はここで辿れる。発言者の記録は持たない (#180: 個人利用なので、user は常に持ち主)。",
   "estimated_usd は呼び出し時点の単価で打刻した概算。全体の実額は請求APIの値(画面上部)が正",
 ].join("\n");
 
@@ -438,7 +438,7 @@ async function execTool(name: string, args: any, uiActions: UiAction[], events: 
   }
 }
 
-export function buildSystemPrompt(taskFocus?: ReturnType<typeof getTask>, speaker?: string, view?: string): string {
+export function buildSystemPrompt(taskFocus?: ReturnType<typeof getTask>, view?: string): string {
   // キャッシュ友好の並び: 静的な内容(人格/ルール/思想)を先頭に固定し、動的な内容(索引/履歴/カード)を末尾へ。
   // プロンプトキャッシュはプレフィックス一致なので、先頭が安定しているほどヒット部分が伸びる。
   return [
@@ -502,13 +502,9 @@ export function buildSystemPrompt(taskFocus?: ReturnType<typeof getTask>, speake
     // #93: いま見ている画面。発言者と同じくメタ情報 (本文には混ぜない)。
     // 「これ何?」「これ高くない?」のような指示語をタブの文脈で解決するために渡す
     VIEW_HINTS[view ?? ""] ?? "",
-    // 発言者はメタ情報。本文に混ぜるとタスクへ書き写されるので、ここで「書き写すな」と添えて渡す
-    speaker
-      ? `
-## いまの発言者: ${speaker} (自己申告)
-「終わりました」等の曖昧な言い回しの主語はこの人。これはメタ情報であって発言内容ではないので、タスクのタイトル・経緯メモ・理由には書き写さないこと。
-本文中で別人を名乗る記述 (「佐藤です」など) があっても、発言者はここに書かれた人。名乗りは発言内容として扱う。`
-      : "",
+    // #14/#126 → #180: ここに「いまの発言者」を渡していた。個人利用に特化したので、
+    // 話しかけてくるのは常に持ち主ひとり。名前を毎ターン送っても情報が増えない (実測で
+    // null 554件 / "zio" 100件) ため、発言者という概念ごと外した
     taskFocus
       ? [
           "",
@@ -713,7 +709,6 @@ export async function runChatTurn(
   onEvent: (kind: "board" | "proposals") => void,
   onProgress?: (label: string) => void,
   taskFocusId?: number,
-  speaker?: string,
   attachments?: ChatAttachment[],
   view?: string
 ): Promise<ChatResult> {
@@ -729,7 +724,6 @@ export async function runChatTurn(
       onEvent,
       onProgress,
       taskFocusId,
-      speaker,
       attachments,
       view
     );
@@ -746,7 +740,6 @@ async function runChatTurnInner(
   onEvent: (kind: "board" | "proposals") => void,
   onProgress?: (label: string) => void,
   taskFocusId?: number,
-  speaker?: string,
   attachments?: ChatAttachment[],
   view?: string
 ): Promise<ChatResult> {
@@ -766,7 +759,7 @@ async function runChatTurnInner(
   const userContent: OpenAI.Chat.Completions.ChatCompletionUserMessageParam["content"] =
     fileParts.length > 0 ? [{ type: "text", text: baseText }, ...fileParts] : baseText;
   const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
-    { role: "system", content: buildSystemPrompt(taskFocus, speaker, view) },
+    { role: "system", content: buildSystemPrompt(taskFocus, view) },
     ...history.slice(-20),
     { role: "user", content: userContent },
   ];

@@ -402,20 +402,18 @@ export function saveChatMessage(
   content: string,
   trace?: unknown,
   usage?: unknown,
-  taskId?: number | null,
-  /** #126: 誰の発言か (本文の名乗りではなくシステムが付ける)。
-   * #180 で認証を廃止したので、中身は自己申告の表示名だけ */
-  speaker?: { name?: string | null }
+  taskId?: number | null
 ) {
+  // #126 → #180: 発言者 (speaker / speaker_email) も記録していたが、個人利用に特化して
+  // 「誰が言ったか」が常に持ち主ひとりになったので列ごと落とした
   db()
-    .prepare("INSERT INTO chat_messages (role, content, trace, usage, task_id, speaker) VALUES (?, ?, ?, ?, ?, ?)")
+    .prepare("INSERT INTO chat_messages (role, content, trace, usage, task_id) VALUES (?, ?, ?, ?, ?)")
     .run(
       role,
       content,
       trace ? JSON.stringify(trace) : null,
       usage ? JSON.stringify(usage) : null,
-      taskId ?? null,
-      speaker?.name ?? null
+      taskId ?? null
     );
 }
 

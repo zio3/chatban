@@ -13,7 +13,6 @@ import type { ChatEntry, Task } from "../types";
 export default function TaskDetailPanel({
   task,
   archived,
-  currentUser,
   onClose,
   onJumpToBoard,
   onRestored,
@@ -23,8 +22,6 @@ export default function TaskDetailPanel({
   task: Task;
   /** true: タスクは完了→アーカイブ済み (表示は最後のスナップショット) */
   archived?: boolean;
-  /** なりすまし中のユーザー名 (#14)。タスクチャットの発言に記名される */
-  currentUser?: string;
   onClose: () => void;
   onJumpToBoard: (id: number) => void;
   /** #102: ゴミ箱から戻したあとの再読み込み */
@@ -52,7 +49,7 @@ export default function TaskDetailPanel({
 
   // タスク専用チャット (#24)。ライフサイクルは共有フック (#23/#28/#29/#30)
   const chat = useChatTurn({
-    request: (m, h, signal, attachments) => api.taskChat(task.id, m, h, signal, currentUser, attachments),
+    request: (m, h, signal, attachments) => api.taskChat(task.id, m, h, signal, attachments),
     progressTaskId: task.id,
   });
   const { setLog } = chat;

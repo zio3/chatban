@@ -214,10 +214,9 @@ CREATE TABLE IF NOT EXISTS summary_cards (
   }
   addColumn("ALTER TABLE summary_cards ADD COLUMN frozen INTEGER NOT NULL DEFAULT 0");
   addColumn("ALTER TABLE chat_messages ADD COLUMN task_id INTEGER");
-  // #126: 誰の発言かを記録する。speaker=表示名 (自己申告)。
-  // かつては speaker_email (ログイン済みのときだけ入る本人確認済みアドレス) も持っていたが、
-  // 認証を廃止した #180 で列ごと落とした (下の削除マイグレーション)
-  addColumn("ALTER TABLE chat_messages ADD COLUMN speaker TEXT");
+  // #126 → #180: ここで speaker / speaker_email (誰の発言か) を足していた。
+  // 個人利用に特化して発言者という概念ごと廃止したので、追加もしないし既存も落とす
+  // (下の削除マイグレーション)
 
   // 「生きているタスク」をVIEWにする。外部エージェントからの指摘 —
   // 「archived=0 AND trashed_at IS NULL ORDER BY COALESCE(sort,id), id を毎回コピーしている。
@@ -294,10 +293,13 @@ CREATE VIEW live_tasks AS
       db.exec(`DROP TABLE IF EXISTS ${t}`);
       dropped.push(t);
     }
-    // #180: 本人確認済みのメールアドレス。認証が無くなれば埋まる経路も無い。
-    // 「認証を戻したときのために取っておく」をしない — 戻さないと決めたのが #180 なので、
-    // 列だけ残すと「いつか入るかもしれない欄」になり、空欄の意味を説明し続けることになる
+    // #180: 発言者。speaker_email は本人確認済みアドレスで、認証が無くなれば埋まる経路も無い。
+    // speaker (自己申告の表示名) も一緒に落とす — 話しかけてくるのが持ち主ひとりなら、
+    // 「誰が言ったか」の欄は常に同じ値か空になる (実測 null 554件 / "zio" 100件)。
+    // 「認証を戻したときのために取っておく」もしない。戻さないと決めたのが #180 で、
+    // 列だけ残すと「いつか入るかもしれない欄」になり、空欄の意味を説明し続けることになる (#92の教訓)
     dropColumn("chat_messages", "speaker_email", dropped);
+    dropColumn("chat_messages", "speaker", dropped);
   })();
   // 消えたときだけ記録する。起動のたびに出しても意味がない
   if (dropped.length > 0) log("schema", `${dropped.join(" / ")} を削除しました (#179 担当者の廃止 / #180 認証の廃止)`);

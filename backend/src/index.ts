@@ -8,7 +8,6 @@ import { estimateCallCost, fetchBillingUsage, fetchModelCatalog, getModel, MODEL
 import { generateSuggestions, runChatTurn } from "./chat.js";
 import { archiveState, hooks } from "./hooks.js";
 import { log } from "./log.js";
-import { pickSpeaker } from "./speaker.js";
 import { buildMcpServer } from "./mcp.js";
 import { resetPromptState } from "./promptState.js";
 import { assertTimezone } from "./timezone.js";
@@ -309,14 +308,13 @@ let chatSeq = 0;
 
 
 app.post("/api/chat", async (req, res) => {
-  const { message, history, speaker, attachments, view } = req.body ?? {};
+  const { message, history, attachments, view } = req.body ?? {};
   if (!message) return res.status(400).json({ error: "message required" });
   const id = ++chatSeq;
   const t0 = Date.now();
-  const who = pickSpeaker(speaker);
   log(
     "chat",
-    `#${id} REQ${who.name ? ` [${who.name}]` : ""} "${String(message).slice(0, 120)}" (history=${history?.length ?? 0}${attachments?.length ? ` attachments=${attachments.length}` : ""})`
+    `#${id} REQ "${String(message).slice(0, 120)}" (history=${history?.length ?? 0}${attachments?.length ? ` attachments=${attachments.length}` : ""})`
   );
   // クライアント切断もログに残す (再起動巻き添え・ブラウザ側中断の追跡用)
   res.on("close", () => {
@@ -331,20 +329,15 @@ app.post("/api/chat", async (req, res) => {
           },
       (label) => io.to(room(currentProjectId())).emit("chat:progress", { label }), // 応答完了前の逐次フィードバック
       undefined,
-      who.name ?? undefined,
       attachments,
       view
     );
     // 会話ログはサーバーに永続化する (添付は原本を保存せず名前だけ記録 #68)
     saveChatMessage(
       "user",
-      message + (attachments?.length ? ` [添付: ${attachments.map((a: any) => a.name).join(", ")}]` : ""),
-      undefined,
-      undefined,
-      null,
-      who
+      message + (attachments?.length ? ` [添付: ${attachments.map((a: any) => a.name).join(", ")}]` : "")
     );
-    saveChatMessage("assistant", result.reply, result.trace, result.usage, null, who);
+    saveChatMessage("assistant", result.reply, result.trace, result.usage);
     log(
       "chat",
       `#${id} OK ${Date.now() - t0}ms rounds=${result.usage.rounds} tools=[${result.trace.map((t) => t.tool).join(",")}] reply=${result.reply.length}ch`
@@ -364,7 +357,7 @@ app.get("/api/chat/log", (req, res) => {
 // タスク専用チャット (#24): 対象タスクの全詳細をシステムプロンプトに注入し、会話はtask_id付きで分離保存
 app.post("/api/tasks/:id/chat", async (req, res) => {
   const taskId = Number(req.params.id);
-  const { message, history, speaker, attachments, view } = req.body ?? {};
+  const { message, history, attachments, view } = req.body ?? {};
   if (!message) return res.status(400).json({ error: "message required" });
   // 対象が居ないなら、LLMを呼ぶ前に断る。以前は存在確認が無く、taskFocus が undefined のまま
   // 通常チャットに近い状態で有料の呼び出しが走り、存在しないIDの会話ログまで残っていた
@@ -373,12 +366,7 @@ app.post("/api/tasks/:id/chat", async (req, res) => {
   if (!getTask(taskId)) return res.status(404).json({ error: `task #${req.params.id} not found` });
   const id = ++chatSeq;
   const t0 = Date.now();
-  // メインチャットと同じ経路で発言者を決める (入口ごとに書き分けない #126)
-  const who = pickSpeaker(speaker);
-  log(
-    "chat",
-    `#${id} TASK-CHAT(task=${taskId})${who.name ? ` [${who.name}]` : ""} REQ "${String(message).slice(0, 120)}"`
-  );
+  log("chat", `#${id} TASK-CHAT(task=${taskId}) REQ "${String(message).slice(0, 120)}"`);
   try {
     const result = await runChatTurn(
       message,
@@ -388,20 +376,17 @@ app.post("/api/tasks/:id/chat", async (req, res) => {
           },
       (label) => io.to(room(currentProjectId())).emit("chat:progress", { label, taskId }),
       taskId,
-      who.name ?? undefined,
       attachments,
       view
     );
-    // タスクチャットの会話ログにも発言者を残す (メインチャットと同じ形にしておく)
     saveChatMessage(
       "user",
       message + (attachments?.length ? ` [添付: ${attachments.map((a: any) => a.name).join(", ")}]` : ""),
       undefined,
       undefined,
-      taskId,
-      who
+      taskId
     );
-    saveChatMessage("assistant", result.reply, result.trace, result.usage, taskId, who);
+    saveChatMessage("assistant", result.reply, result.trace, result.usage, taskId);
     log("chat", `#${id} OK ${Date.now() - t0}ms rounds=${result.usage.rounds} tools=[${result.trace.map((t) => t.tool).join(",")}]`);
     res.json(result);
   } catch (e: any) {

@@ -55,7 +55,7 @@ export function DepChip({
 }) {
   const label = dep
     ? `#${id} ${dep.title}
-${STATUS_LABELS[dep.status]?.label ?? dep.status}${dep.assignee ? ` / ${dep.assignee}` : ""}${dep.summary ? `
+${STATUS_LABELS[dep.status]?.label ?? dep.status}${dep.summary ? `
 ${dep.summary}` : ""}
 (クリックで詳細)`
     : `#${id} 完了してアーカイブ済み (クリックで詳細)`;
@@ -107,7 +107,7 @@ function TaskCard({
       onClick={() => onOpen?.(task.id)}
       className={`rounded-lg border bg-white p-2.5 shadow-sm ${approved ? "border-emerald-400 ring-1 ring-emerald-300" : "border-slate-200"} ${overlay ? "rotate-2 shadow-lg" : ""} ${onOpen ? "cursor-pointer hover:border-indigo-300" : ""}`}
     >
-      {/* 1行目: ID + タイトル + 担当。以前はここに却下/期限/依存のバッジも混ざっていて、
+      {/* 1行目: ID + タイトル。以前はここに却下/期限/依存のバッジも混ざっていて、
           付いているカードほどタイトルが右下へ押し出され、列を縦に流し読みできなかった。
           (3人のデザイナーが独立に同じ箇所を問題視した)。
           IDを固定幅にしてタイトルの左端を全カードで揃える案も試したが、1桁と3桁で
@@ -117,13 +117,6 @@ function TaskCard({
           <span className="mr-1 text-xs text-slate-400">#{task.id}</span>
           {task.title}
         </span>
-        {task.assignee && (
-          // 全カードに必ず出る情報なので、毎枚主張させない (C案の判断)。
-          // 担当で絞りたいときはヘッダーの人フィルタが本来の導線
-          <span className="shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600">
-            {task.assignee}
-          </span>
-        )}
       </div>
       {/* 2行目: 状態のチップ。検収OKもここに畳む (以前はカード幅いっぱいの独立行で、
           Review列のカードだけ背が高かった)。何も無ければ行ごと出ない */}

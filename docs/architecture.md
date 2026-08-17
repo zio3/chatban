@@ -51,8 +51,7 @@
 ```
 backend/data/
   chatban-admin.db          projects / settings / llm_calls(+project_id)
-  projects/<id>-<名前>.db   tasks / summary_cards / chat_messages / proposals /
-                            assignment_history / project_context / members
+  projects/<id>-<名前>.db   tasks / summary_cards / chat_messages / project_context
   trash/                    削除したプロジェクトの退避先 (実体は消さない)
 ```
 
@@ -113,20 +112,23 @@ Socket.IOの配信もプロジェクト単位のroomへ送る。
 
 ## データモデル (プロジェクトDB)
 
-- `tasks`: title / status(todo・inprogress・review・done固定4列) / assignee /
-  **assign_reason**(なぜこの担当か) / **summary**(いまどうなっているか。カードに出る) /
+- `tasks`: title / status(todo・inprogress・review・done固定4列) /
+  **summary**(いまどうなっているか。カードに出る) /
   context(経緯メモ) / **context_version**(経緯メモの楽観ロック) / due / blocked_by(依存) / rejected(却下) /
   sort / archived / summary_card_id / **trashed_at**(ゴミ箱)
 - `summary_cards`: Done要約カード (elements JSON, settled=過去ログ化済み)
 - `chat_messages`: 会話永続化 (task_id NULLがメイン、値ありがタスクチャット)
-- `proposals` + `assignment_history`: 割り振り提案とその履歴 (レコメンド根拠の学習素材)
-- `project_context`: チーム共通の前提 (プロンプトに常駐)
-- `members`: そのプロジェクトの参加者。**0人なら「一人用」として割り振り導線が消える** (#101)
+- `project_context`: そのプロジェクトの前提 (プロンプトに常駐)
 
-`assign_reason` と `summary` を分けているのは、以前 `reason` 1つに「なぜこの担当か」と
+#179 で担当者・割り振りを廃止し (個人利用に特化)、`tasks.assignee` / `assign_reason` と
+`members` / `proposals` / `assignment_history` は**列・テーブルごと落とした**。
+読まないだけにして残すと、SQL窓口を広げた誰かが集計に使い、廃止したはずの軸が復活する。
+
+かつて `assign_reason` と `summary` を分けていたのは、以前 `reason` 1つに「なぜこの担当か」と
 「実装完了 (commit xxx)」が混ざり、カードが読めなくなったため。
 原因はMCP側のツール契約に `reason` の説明が無く、**エージェントから見て用途不明の文字列欄**
-だったこと。ツール契約のdescriptionはエージェントにとってのUIラベルにあたる。
+だったこと。担当者ごと消えたので欄も無くなったが、教訓のほうは残る —
+ツール契約のdescriptionはエージェントにとってのUIラベルにあたる。
 
 ## 状態フロー (退場ゲートは1つ)
 
@@ -242,10 +244,16 @@ DateTimeOffset に相当する型が無く (TEXT/INTEGER/REAL/BLOB/NULL のみ)�
 } }
 ```
 
-ツール (10、個人用プロジェクトは9): `create_tasks` / `update_tasks` / `delete_tasks` /
+ツール (10): `sync_board` / `create_tasks` / `update_tasks` / `delete_tasks` /
 `restore_tasks` / `reorder_tasks` / `search_tasks` /
 `query_log` / `get_project_context` / `update_project_context`
 
+- `sync_board` が手持ちの認識を最新に合わせる口 (#150/#187)。**同期トークン**を渡すと
+  そこからの差分だけが返り、渡さなければ全件。トークンが失効していても失敗せず、黙って全件に落ちる。
+  書き込み系にも `sync_token` を渡せて、その応答に `boardChanges` が相乗りする —
+  **間違えているエージェントは差分を取りに行こうと思っていない**ので、必ず通る書き込みに載せる
+- プロジェクトの前提情報は `projectContextVersion` (版) だけが返る。本文は `get_project_context`。
+  3,000字級の本文がボードを取るたびに乗っていた (#186/#187)
 - プロジェクト未指定 (`POST /mcp`) は **400**。フォールバックすると事故の原因が残り続けるため。
   MCPの接続失敗はクライアント側で潰れて見えなくなるので、直し方と利用可能プロジェクト一覧を
   サーバーログとレスポンスの両方に出す

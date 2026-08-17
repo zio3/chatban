@@ -15,12 +15,10 @@ interface Audit {
     elapsedMs: number;
     createdAt: string;
   }[];
-  assignments: { id: number; taskTitle: string; assignee: string; note: string | null; createdAt: string }[];
 }
 
 const TABS = [
   { key: "chat", label: "💬 会話" },
-  { key: "assignments", label: "👥 割り振り履歴" },
   { key: "llm", label: "🤖 LLM呼び出し" },
 ] as const;
 
@@ -100,20 +98,6 @@ export default function AuditView() {
               </span>
               {c.taskId != null && <span className="mr-2 text-[10px] text-amber-600">task#{c.taskId}</span>}
               <span className="text-slate-700">{c.content}</span>
-            </li>
-          ))}
-        </ul>
-      )}
-
-      {tab === "assignments" && (
-        <ul className="space-y-1.5">
-          {data.assignments.map((a) => (
-            <li key={a.id} className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs">
-              <span className="mr-2 text-slate-400">{a.createdAt}</span>
-              <span className="font-medium">{a.taskTitle}</span>
-              <span className="mx-1.5 text-slate-400">→</span>
-              <span className="rounded-full bg-indigo-100 px-2 py-0.5 text-[10px] font-medium text-indigo-700">{a.assignee}</span>
-              {a.note && <p className="mt-1 text-slate-500">💡 {a.note}</p>}
             </li>
           ))}
         </ul>

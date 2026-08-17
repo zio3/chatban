@@ -80,7 +80,6 @@ export function buildDecomposeMessages(tasks: ReturnType<typeof tasksOfCard>, ch
   const base = (t: ReturnType<typeof tasksOfCard>[number]) => ({
     id: t.id,
     title: t.title,
-    assignee: t.assignee,
     ...(t.context ? { context: t.context.slice(0, 800) } : {}),
   });
 
@@ -92,9 +91,10 @@ export function buildDecomposeMessages(tasks: ReturnType<typeof tasksOfCard>, ch
   // 分けてしまえば、却下が無いときは却下タスクのキーごと出ないので、
   // 【却下】を付ける材料が存在しない。判断させずに構造で決める。
   const doneTasks = tasks.filter((t) => !t.rejected).map(base);
-  const rejectedTasks = tasks
-    .filter((t) => t.rejected)
-    .map((t) => ({ ...base(t), 却下理由: t.assignReason }));
+  // #179: 却下理由は assign_reason に入れていたが、担当理由と同じ列を使い回していた。
+  // いまの契約 (REJECTED_DESCRIPTION) では却下理由は summary と経緯メモに書くので、
+  // context を渡している base だけで足りる
+  const rejectedTasks = tasks.filter((t) => t.rejected).map(base);
 
   const messages = [
     {
@@ -108,7 +108,7 @@ export function buildDecomposeMessages(tasks: ReturnType<typeof tasksOfCard>, ch
         "- 却下タスク … やらないと決めたもの。**このキーが無いときは、却下されたタスクは1件も無い**",
         "",
         "ルール:",
-        "- 単なる件数ではなく、決定事項・担当の偏り・成果の内容が残る形に凝縮する",
+        "- 単なる件数ではなく、決定事項・成果の内容が残る形に凝縮する",
         "- context(経緯メモ)には「なぜそうしたか」「何を検討して何を捨てたか」が書かれている。タイトルの言い換えで終わらせず、そこにしかない判断を要素文に残す (例: 「並べ替えを実装」ではなく「並べ替えはソートキー方式を捨て、LLMが決めた順番を受け取る方式にした」)",
         "- まだ決まっていないこと(検討中・保留・候補を挙げた段階)は、決まったように書かない。材料にそう書いてあるとおりに「保留」「未定」と書く",
         "- 完了タスクは、関連するものをまとめて1要素にする。タスクIDを #n 形式で含める",

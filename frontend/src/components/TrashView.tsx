@@ -51,7 +51,6 @@ export default function TrashView() {
             <li key={t.id} className="flex flex-wrap items-center gap-2 p-3">
               <span className="font-mono text-xs text-slate-400">#{t.id}</span>
               <span className="text-sm">{t.title}</span>
-              {t.assignee && <span className="text-xs text-slate-400">{t.assignee}</span>}
               <span className="ml-auto flex gap-1.5">
                 <button
                   onClick={() => api.restoreTask(t.id).then(load)}

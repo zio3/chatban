@@ -27,18 +27,17 @@ import { resetPromptState } from "./promptState.js";
 import { assertTimezone } from "./timezone.js";
 import {
   activeProjectId,
-  createProjectWithMembers,
+  createProject,
   currentProjectId,
   getProject,
   listProjects,
-  migrateLegacyDbIfNeeded,
   projectSummaries,
   renameProject,
+  ensureInitialProject,
   reportOrphanFiles,
   setActiveProjectId,
   setProjectArchived,
   setSuggestEnabled,
-  setProjectMembers,
   trashProject,
   withProject,
 } from "./store.js";
@@ -57,7 +56,6 @@ import {
   getProjectContextRow,
   getTask,
   listChatMessages,
-  listMembers,
   listSummaryCards,
   listTasks,
   metrics,
@@ -73,11 +71,9 @@ import {
 
 const PORT = Number(process.env.PORT ?? 8787);
 
-// #86: 旧構成 (backend/chatban.db 単一ファイル) があればプロジェクト1として取り込む。
-// 以降は data/ 配下 (管理DB + プロジェクトDB) だけを見る。DBに触る前に必ず通す
 // #108: DBに触る前にタイムゾーンを確かめる。ずれたまま書き込むと元に戻せない
 assertTimezone();
-migrateLegacyDbIfNeeded();
+ensureInitialProject();
 reportOrphanFiles();
 
 const app = express();
@@ -225,13 +221,9 @@ function rejoinFollowers(projectId: number) {
 
 function broadcastBoard(projectId = currentProjectId()) {
   // 中身の取得もそのプロジェクトのスコープで行う (非同期フックから呼ばれる場合があるため)。
-  // members も一緒に流す — メンバーを足しても担当フィルタと割り振り提案が
-  // 再読み込みまで古いままだった (自動レビュー指摘)。/api/board が返す3点セットと
-  // 同じものを流す形にして、「初回だけ揃っていて以後ズレる」を作らない
+  // /api/board が返すものと同じ組を流す — 「初回だけ揃っていて以後ズレる」を作らない
   withProject(projectId, () =>
-    io
-      .to(room(projectId))
-      .emit("board:changed", { tasks: listTasks(), summaryCards: listSummaryCards(), members: listMembers() })
+    io.to(room(projectId)).emit("board:changed", { tasks: listTasks(), summaryCards: listSummaryCards() })
   );
 }
 
@@ -266,17 +258,16 @@ if (process.env.AUTO_ARCHIVE !== "0") {
 app.get("/api/board", (_req, res) => {
   res.json({
     tasks: listTasks(),
-    members: listMembers(),
     summaryCards: listSummaryCards(),
   });
 });
 
 app.post("/api/tasks", (req, res) => {
-  const { title, status, assignee, assignReason } = req.body ?? {};
+  const { title, status } = req.body ?? {};
   if (!title) return res.status(400).json({ error: "title required" });
   const ng = badStatus(status);
   if (ng) return res.status(400).json({ error: ng });
-  const task = createTask(title, status ?? "todo", assignee ?? null, assignReason ?? null);
+  const task = createTask(title, status ?? "todo");
   broadcastBoard();
   // 黙って別の列に入れない。指定と結果が違うことは必ず言う (#123と同じ形)
   res.json({
@@ -559,25 +550,16 @@ app.get("/api/audit/export", (_req, res) => {
  * 「途中まで適用して失敗」は一番たちが悪い — 呼んだ側は失敗として扱うのに、
  * 実際には一部が残る。#120 で「版が合わない更新は同じ行の他のフィールドも保存しない」と
  * したのと同じ考え方を、入口の検証でも通す */
-function badMembers(members: unknown): string | null {
-  if (members === undefined) return null;
-  if (!Array.isArray(members)) return "members は文字列の配列で指定してください";
-  const bad = members.find((m) => typeof m !== "string");
-  return bad === undefined ? null : `members に文字列でない値が含まれています (${JSON.stringify(bad)})`;
-}
-
 // プロジェクト (#86): SQLiteファイルごと分かれている。切り替えるとボード・チャット・
-// 前提情報・メンバーがまとめて入れ替わる (アクティブはサーバー側に1つ)
+// 前提情報がまとめて入れ替わる (アクティブはサーバー側に1つ)
 app.get("/api/projects", (_req, res) => {
   res.json({ projects: projectSummaries() });
 });
 
 app.post("/api/projects", (req, res) => {
-  const { name, members } = req.body ?? {};
+  const { name } = req.body ?? {};
   if (!name || !String(name).trim()) return res.status(400).json({ error: "name required" });
-  const ngMembers = badMembers(members);
-  if (ngMembers) return res.status(400).json({ error: ngMembers });
-  const p = createProjectWithMembers(String(name).trim(), Array.isArray(members) ? members : []);
+  const p = createProject(String(name).trim());
   // 作成だけ配信していなかったので、ヘッダーの選択肢に出るのが再読み込み後だった。
   // 画面は「ヘッダーのプロジェクト選択から移動」と案内しているのに辿れない (自動レビュー指摘)
   io.emit("project:changed", { projects: projectSummaries() });
@@ -602,19 +584,16 @@ app.patch("/api/projects/:id", (req, res) => {
   // 存在確認をしないと、更新自体は0件で静かに通ったあと broadcastBoard(id) が投げて500になる。
   // 設定を古いタブで開いたまま別タブで削除する、という普通の競合で踏む (自動レビュー指摘)
   if (!getProject(id)) return res.status(404).json({ error: `project #${req.params.id} not found` });
-  const { name, members, archived, suggestEnabled: suggest } = req.body ?? {};
+  const { name, archived, suggestEnabled: suggest } = req.body ?? {};
   // 何も書き始める前にまとめて確かめる (途中まで適用して500、を作らない)。
   // 既定プロジェクトの無効化はDB層が投げるので、ここで先に同じ判定を通す —
   // 名前を変えた後に投げると「500なのに名前だけ変わる」になる
-  const ngMembers = badMembers(members);
-  if (ngMembers) return res.status(400).json({ error: ngMembers });
   if (archived === true && id === activeProjectId())
     return res.status(409).json({
       error:
         "既定のプロジェクトは無効にできません。ヘッダ指定のない操作の行き先として使われるため、一覧から消すと辿れなくなります",
     });
   if (typeof name === "string" && name.trim()) renameProject(id, name.trim());
-  if (Array.isArray(members)) setProjectMembers(id, members);
   if (typeof archived === "boolean") setProjectArchived(id, archived);
   // #167: 提案チップのON/OFF。次の /api/suggestions から効く (再起動不要)
   if (typeof suggest === "boolean") {

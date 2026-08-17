@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { diffBoards, formatBoardUpdate, type TaskFacts } from "./boardState.js";
+import { diffBoards, formatBoardUpdate, makeSyncToken, type TaskFacts } from "./boardState.js";
 
 /** #150: ボード状況の差分。
  *
@@ -12,7 +12,6 @@ function task(over: Partial<TaskFacts> = {}): TaskFacts {
   return {
     title: "既定のタイトル",
     status: "todo",
-    assignee: null,
     summary: null,
     due: null,
     blockedBy: null,
@@ -29,8 +28,8 @@ function card(title: string, elements: string[]): string {
   return JSON.stringify([title, elements]);
 }
 
-function board(tasks: [number, TaskFacts][] = [], cards: [number, string][] = [], projectContext = "") {
-  return { tasks: new Map(tasks), cards: new Map(cards), projectContext };
+function board(tasks: [number, TaskFacts][] = [], cards: [number, string][] = [], projectContextVersion = 1) {
+  return { tasks: new Map(tasks), cards: new Map(cards), projectContextVersion };
 }
 
 test("何も変わっていなければ差分は空", () => {
@@ -100,12 +99,6 @@ test("依存は中身で比べる (null と空配列は同じ扱い)", () => {
   const changed = diffBoards(board([[1, task({ blockedBy: [2] })]]), board([[1, task({ blockedBy: null })]]));
   assert.equal(changed.length, 1);
   assert.match(changed[0], /依存: \[2\] -> \[\]/);
-});
-
-test("担当者の変更を拾う", () => {
-  const changes = diffBoards(board([[8, task()]]), board([[8, task({ assignee: "zio" })]]));
-  assert.equal(changes.length, 1);
-  assert.match(changes[0], /担当: なし -> zio/);
 });
 
 test("並べ替えは1行にまとめ、その1行から現在の順を復元できる", () => {
@@ -307,9 +300,11 @@ test("要約カードの要素に区切り文字が入っていても別物と�
   assert.match(changes[0], /~ 要約カード#5/);
 });
 
-test("前提情報の更新は本文を載せずに知らせる", () => {
-  const changes = diffBoards(board([], [], "むかしの前提"), board([], [], "いまの前提"));
-  assert.deepEqual(changes, ["プロジェクトの前提情報が更新された"]);
+test("前提情報の更新は版だけで知らせる (本文は持っていない)", () => {
+  // #187: スナップショットが持つのは版だけ。本文を持つと 3,000字級のものが
+  // 保持数ぶん (最大32枚) メモリに乗り、差分にも載せたくなる
+  const changes = diffBoards(board([], [], 6), board([], [], 7));
+  assert.deepEqual(changes, ["プロジェクトの前提情報が更新された (v7)"]);
 });
 
 test("複数の変化がまとめて返る", () => {
@@ -336,34 +331,74 @@ test("複数の変化がまとめて返る", () => {
  * (「#9999 は存在しません。古い一覧を見ている可能性があります」) を spread で消していた。
  * diffBoards のテストでは検出できず、実機で気づいた */
 
-test("差分が返せたときは状況IDと変化を返す", () => {
-  const r = formatBoardUpdate({ stateId: "p1-run-2", since: "p1-run-1", changes: ["~ #4 status: todo -> review"] }, "p1-run-1");
-  assert.equal(r.stateId, "p1-run-2");
-  assert.deepEqual(r.changesSince, ["~ #4 status: todo -> review"]);
+/** #187: 同期トークンの一意性。
+ *
+ * ここが破れると、差分機能は**黙って嘘をつく** — 旧トークンが新プロセスのスナップショットに
+ * 誤ヒットし、再起動をまたいだ変化を「変化なし」として返す。エラーにならないぶん気づけない。
+ * 一度この符丁を消して「秒までの時刻があれば十分」としたが、連番はプロセスごとに0へ戻るので
+ * 同じ秒に立て直すと完全に一致する (自動レビュー指摘) */
+test("同じ秒・同じ連番でも、プロセスが違えば別のトークンになる", () => {
+  const at = new Date(2026, 7, 17, 14, 49, 51);
+  assert.notEqual(makeSyncToken(1, at, "a1b2", 1), makeSyncToken(1, at, "c3d4", 1));
+});
+
+test("同じプロセス内では連番で分かれ、プロジェクトをまたいでも衝突しない", () => {
+  const at = new Date(2026, 7, 17, 14, 49, 51);
+  assert.notEqual(makeSyncToken(1, at, "a1b2", 1), makeSyncToken(1, at, "a1b2", 2));
+  assert.notEqual(makeSyncToken(1, at, "a1b2", 1), makeSyncToken(2, at, "a1b2", 1));
+});
+
+test("トークンを読めば、いつのものかが分かる (ログと突き合わせるため)", () => {
+  assert.equal(makeSyncToken(1, new Date(2026, 7, 17, 14, 49, 51), "a1b2", 3), "p1-20260817T144951-a1b23");
+});
+
+const TOKEN_1 = "p1-20260817T140000-1";
+const TOKEN_2 = "p1-20260817T140500-2";
+
+test("差分が返せたときは同期トークンと変化を返す", () => {
+  const r = formatBoardUpdate(
+    { syncToken: TOKEN_2, fromSyncToken: TOKEN_1, changes: ["~ #4 status: todo -> review"], projectContextVersion: 7 },
+    TOKEN_1
+  );
+  assert.equal(r.syncToken, TOKEN_2);
+  assert.deepEqual(r.boardChanges, ["~ #4 status: todo -> review"]);
   assert.ok(!("note" in r), "書き込み側の警告と同じキーを使わない");
   assert.ok(!("boardNote" in r));
 });
 
-test("変化が無ければ changesSince を付けない (空配列を読ませない)", () => {
-  const r = formatBoardUpdate({ stateId: "p1-run-2", since: "p1-run-1", changes: [] }, "p1-run-1");
-  assert.equal(r.stateId, "p1-run-2");
-  assert.ok(!("changesSince" in r));
+test("変化が無ければ boardChanges を付けない (空配列を読ませない)", () => {
+  const r = formatBoardUpdate({ syncToken: TOKEN_2, fromSyncToken: TOKEN_1, changes: [], projectContextVersion: 7 }, TOKEN_1);
+  assert.equal(r.syncToken, TOKEN_2);
+  assert.ok(!("boardChanges" in r));
 });
 
-test("since を渡していなければ、次回のための状況IDだけ返す", () => {
-  const r = formatBoardUpdate({ stateId: "p1-run-1", full: true });
-  assert.deepEqual(r, { stateId: "p1-run-1" });
+test("sync_token を渡していなければ、次回のための同期トークンだけ返す", () => {
+  const r = formatBoardUpdate({ syncToken: TOKEN_1, full: true, projectContextVersion: 7 });
+  assert.deepEqual(r, { syncToken: TOKEN_1, projectContextVersion: 7 });
 });
 
-test("差分を返せなかったときは状況IDを返さず、note とも衝突しない", () => {
-  const r = formatBoardUpdate({ stateId: "p1-run-9", full: true, note: "状況IDが失効していた" }, "p1-dead-1");
+test("前提情報の版は、差分でも全件でも必ず載る", () => {
+  // #187: 本文を返さなくなったので、**版が唯一の手がかり**。
+  // どちらか片方にしか載らないと、書き込みを続けている間に前提情報が変わったことを取り逃す
+  const diff = formatBoardUpdate({ syncToken: TOKEN_2, fromSyncToken: TOKEN_1, changes: [], projectContextVersion: 7 }, TOKEN_1);
+  const full = formatBoardUpdate({ syncToken: TOKEN_1, full: true, projectContextVersion: 7 });
 
-  // 返すとエージェントが次の since に使い、空差分が返って全件を見ないまま進む
-  assert.ok(!("stateId" in r), "新しい状況IDを渡さない");
+  assert.equal(diff.projectContextVersion, 7);
+  assert.equal(full.projectContextVersion, 7);
+});
+
+test("差分を返せなかったときは同期トークンを返さず、note とも衝突しない", () => {
+  const r = formatBoardUpdate(
+    { syncToken: TOKEN_2, full: true, note: "同期トークンが失効していた", projectContextVersion: 7 },
+    "p1-20260817T120000-9"
+  );
+
+  // 返すとエージェントが次の sync_token に使い、空差分が返って全件を見ないまま進む
+  assert.ok(!("syncToken" in r), "新しい同期トークンを渡さない");
   // 書き込み側の警告 (note) を潰さないよう、別のキーに入れる
   assert.ok(!("note" in r));
-  assert.match(String(r.boardNote), /状況IDが失効していた/);
-  assert.match(String(r.boardNote), /since を付けずに get_board/);
+  assert.match(String(r.boardNote), /同期トークンが失効していた/);
+  assert.match(String(r.boardNote), /sync_token を付けずに sync_board/);
 });
 
 test("書き込み側の警告と同時に返しても、どちらも消えない", () => {
@@ -371,7 +406,7 @@ test("書き込み側の警告と同時に返しても、どちらも消えな�
   const writeResult = { ok: false, note: "#9999 は存在しません (古い一覧を見ている可能性があります)" };
   const merged: Record<string, unknown> = {
     ...writeResult,
-    ...formatBoardUpdate({ stateId: "p1-run-9", full: true, note: "失効" }, "p1-dead-1"),
+    ...formatBoardUpdate({ syncToken: TOKEN_2, full: true, note: "失効", projectContextVersion: 7 }, "p1-dead-1"),
   };
 
   assert.match(String(merged.note), /#9999 は存在しません/);

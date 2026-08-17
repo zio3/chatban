@@ -22,7 +22,11 @@ for (const m of catalog) {
 // キャッシュ入力の割引率。OpenAI系は概ね定価の10%。カタログに欄がないので仮定値として明示する
 const CACHE_RATE = Number(process.env.CACHE_RATE ?? 0.1);
 
-const db = new Database(process.env.DB_PATH ?? "chatban.db", { readonly: true });
+// #179: llm_calls は data/chatban-admin.db (管理DB) へ移っている。
+// 旧構成の単一 chatban.db を読んでいたころの名残で、そのままでは
+// 「ファイルが無くて失敗」か「凍結された古いデータを現在値として集計」になる (自動レビュー指摘)
+const ADMIN_DB = process.env.CHATBAN_ADMIN_DB ?? join(process.env.CHATBAN_DATA_DIR ?? "data", "chatban-admin.db");
+const db = new Database(ADMIN_DB, { readonly: true });
 const rows = db
   .prepare("SELECT purpose, model, routed_model, prompt_tokens, completion_tokens, cached_tokens FROM llm_calls")
   .all();

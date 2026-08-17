@@ -1,5 +1,5 @@
 import { currentProjectHeader } from "./project";
-import type { ChatResponse, Member, SummaryCard, Task, TaskStatus } from "./types";
+import type { ChatResponse, SummaryCard, Task, TaskStatus } from "./types";
 
 async function json<T>(res: Response): Promise<T> {
   // サーバーは断る理由を {error} で返すので、それをそのまま人に見せる。
@@ -41,7 +41,6 @@ export interface Project {
   /** #107: 無効。ドロップダウンには出さないが設定画面には出る */
   archived: boolean;
   openTasks: number;
-  members: string[];
   /** #117: このプロジェクト用のMCP接続先 */
   mcpUrl: string;
   /** #167: AI提案チップを出すか。動画撮影中は毎回違うチップが出るので切れるようにした */
@@ -58,17 +57,17 @@ export const api = {
     }).then((r) => json<{ user: AuthState["user"] }>(r)),
   authLogout: () => apiFetch("/api/auth/logout", { method: "POST" }),
   projects: () => apiFetch("/api/projects").then((r) => json<{ projects: Project[] }>(r)),
-  createProject: (name: string, members: string[]) =>
+  createProject: (name: string) =>
     apiFetch("/api/projects", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name, members }),
+      body: JSON.stringify({ name }),
     }).then((r) => json<{ ok: boolean }>(r)),
   activateProject: (id: number) =>
     apiFetch(`/api/projects/${id}/activate`, { method: "POST" }).then((r) => json<{ projects: Project[] }>(r)),
   updateProject: (
     id: number,
-    patch: { name?: string; members?: string[]; archived?: boolean; suggestEnabled?: boolean }
+    patch: { name?: string; archived?: boolean; suggestEnabled?: boolean }
   ) =>
     apiFetch(`/api/projects/${id}`, {
       method: "PATCH",
@@ -83,9 +82,9 @@ export const api = {
   purgeTask: (id: number) => apiFetch(`/api/trash/${id}`, { method: "DELETE" }).then((r) => json<{ ok: boolean }>(r)),
   board: () =>
     apiFetch("/api/board").then((r) =>
-      json<{ tasks: Task[]; members: Member[]; summaryCards: SummaryCard[] }>(r)
+      json<{ tasks: Task[]; summaryCards: SummaryCard[] }>(r)
     ),
-  updateTask: (id: number, patch: Partial<Pick<Task, "title" | "assignee" | "assignReason" | "summary" | "sort">> & { status?: TaskStatus }) =>
+  updateTask: (id: number, patch: Partial<Pick<Task, "title" | "summary" | "sort">> & { status?: TaskStatus }) =>
     apiFetch(`/api/tasks/${id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },

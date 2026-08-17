@@ -153,57 +153,6 @@ test("Review列: 検収OKチェック→一括確定でdoneになる (チェッ�
   await expect.poll(() => getTaskStatus(id)).toBe("done");
 });
 
-test("担当フィルタ: 複数トグルのOR絞り込みと非表示件数の表示 (#90)", async ({ page }) => {
-  // 担当ありと担当なしを1件ずつ用意する
-  const res = await fetch(`${API}/api/tasks`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ title: "E2E: フィルタ対象(zio担当)", assignee: "zio" }),
-  });
-  const assigned = (await res.json()).id as number;
-  const unassigned = await createTask("E2E: フィルタ対象(担当なし)");
-
-  await page.goto("/");
-  await expect(page.getByTestId(`task-card-${assigned}`)).toBeVisible();
-  await expect(page.getByTestId(`task-card-${unassigned}`)).toBeVisible();
-
-  // zioで絞ると担当なしが消え、非表示件数バッジが出る
-  await page.getByRole("button", { name: "zio", exact: true }).click();
-  await expect(page.getByTestId(`task-card-${assigned}`)).toBeVisible();
-  await expect(page.getByTestId(`task-card-${unassigned}`)).toBeHidden();
-  await expect(page.getByText(/フィルタで\d+件が非表示/)).toBeVisible();
-
-  // 未割り当ても足すとOR条件になり両方見える
-  await page.getByRole("button", { name: "未割り当て", exact: true }).click();
-  await expect(page.getByTestId(`task-card-${assigned}`)).toBeVisible();
-  await expect(page.getByTestId(`task-card-${unassigned}`)).toBeVisible();
-
-  // ✕で解除するとバッジも消える
-  await page.getByTitle("フィルタ解除").click();
-  await expect(page.getByText(/フィルタで\d+件が非表示/)).toBeHidden();
-  await expect(page.getByTestId(`task-card-${unassigned}`)).toBeVisible();
-});
-
-test("担当フィルタ: メンバー未登録の担当者にもトグルが出る (全部オンで全件見える) (#90)", async ({ page }) => {
-  const res = await fetch(`${API}/api/tasks`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ title: "E2E: メンバー表にない担当者", assignee: "Claude" }),
-  });
-  const id = (await res.json()).id as number;
-
-  await page.goto("/");
-  // メンバー表に居ない担当者でもトグルが生える
-  const chip = page.getByRole("button", { name: "Claude", exact: true });
-  await expect(chip).toBeVisible();
-
-  // 他の担当者だけで絞ると隠れ、そのトグルを足せば出てくる
-  await page.getByRole("button", { name: "zio", exact: true }).click();
-  await expect(page.getByTestId(`task-card-${id}`)).toBeHidden();
-  await chip.click();
-  await expect(page.getByTestId(`task-card-${id}`)).toBeVisible();
-});
-
 test("プロジェクト: 切り替えるとボードが入れ替わり、#IDは1から振り直される (#86)", async ({ page }) => {
   const inFirst = await createTask("E2E: 元プロジェクトのタスク");
 
@@ -212,7 +161,7 @@ test("プロジェクト: 切り替えるとボードが入れ替わり、#IDは
     await fetch(`${API}/api/projects`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: "E2E: 別プロジェクト", members: ["さくら"] }),
+      body: JSON.stringify({ name: "E2E: 別プロジェクト" }),
     })
   ).json();
   const pid = created.project.id as number;
@@ -231,9 +180,6 @@ test("プロジェクト: 切り替えるとボードが入れ替わり、#IDは
   await expect(page.getByTestId("task-detail-panel")).toBeHidden();
   // 元プロジェクトのタスクは見えない (ファイルごと別なので混ざらない)
   await expect(page.getByTestId(`task-card-${inFirst}`)).toBeHidden();
-  // メンバーもプロジェクト側のものに入れ替わる
-  await expect(page.getByRole("button", { name: "さくら", exact: true })).toBeVisible();
-
   // 新プロジェクトの最初のタスクは #1 (対象プロジェクトはヘッダで明示する #97)
   const res = await fetch(`${API}/api/tasks`, {
     method: "POST",
@@ -286,7 +232,7 @@ test("配信はプロジェクト単位のroomへ届く (#99)", async () => {
       await fetch(`${API}/api/projects`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: "E2E: 配信テスト", members: [] }),
+        body: JSON.stringify({ name: "E2E: 配信テスト" }),
       })
     ).json()
   ).project.id as number;
@@ -319,7 +265,7 @@ test("タブごとに別プロジェクトを開ける。片方の更新はも�
       await fetch(`${API}/api/projects`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: "E2E: 別タブ用", members: [] }),
+        body: JSON.stringify({ name: "E2E: 別タブ用" }),
       })
     ).json()
   ).project.id as number;
@@ -439,6 +385,38 @@ test("検収の印はDBに残り、AIは読めるが付けられない (#108)", 
   expect(reopened.checkedAt).toBeFalsy();
 });
 
+test("sync_board: 同期トークンで差分が返り、他所の変更も拾える (#150/#187)", async () => {
+  // ここが効かないと、エージェントは「自分が最後に読んだ一覧」を現在だと思い込んだままになる。
+  // 実際に 2026-08-15 に誤報告が起きている (人間が検収して消えたのを「ビューのバグ」と報告した)
+  const full = await mcp("sync_board", {});
+  expect(typeof full.syncToken).toBe("string");
+  expect(typeof full.projectContextVersion).toBe("number");
+  // #187: 前提情報は版だけ。本文はここに載せない (3,000字級がボードを取るたびに乗っていた)
+  expect(full.projectContext).toBeUndefined();
+
+  // **自分以外の経路**で動かす。差分の値打ちは「自分が見ていない間に何が動いたか」にある
+  const id = await createTask("E2E: 差分で拾われるタスク");
+  await fetch(`${API}/api/tasks/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ status: "review" }),
+  });
+
+  const delta = await mcp("sync_board", { sync_token: full.syncToken });
+  expect(delta.syncToken).not.toBe(full.syncToken);
+  // 全件は返らない (差分なのでタスク配列を持たない)
+  expect(delta.tasks).toBeUndefined();
+  const line = (delta.boardChanges as string[]).find((c) => c.includes(`#${id}`));
+  expect(line).toBeTruthy();
+  // **行だけ見て現在が確定すること。**IDしか書いていない差分だと古い一覧とマージさせることになる
+  expect(line).toContain("E2E: 差分で拾われるタスク");
+
+  // 失効したトークンでも失敗させない (エラーを返すとLLMがリトライを考え始める)
+  const stale = await mcp("sync_board", { sync_token: "p1-20200101T000000-1" });
+  expect(Array.isArray(stale.tasks)).toBe(true);
+  expect(String(stale.note)).toContain("全件");
+});
+
 test("MCPの読み取りはSQL窓口1本。落とした一覧ツールは同じ内容を引ける (#108)", async () => {
   const id = await createTask("SQL窓口の検証", "review");
 
@@ -455,10 +433,12 @@ test("MCPの読み取りはSQL窓口1本。落とした一覧ツールは同じ�
       .filter((l) => l.startsWith("{"))
       .pop()!
   ).result.tools.map((t: any) => t.name);
-  for (const gone of ["list_tasks", "list_trash", "list_members", "get_metrics"]) {
+  // get_board は #187 で sync_board に置き換わった (名前と語彙を揃える契約変更)
+  for (const gone of ["list_tasks", "list_trash", "list_members", "get_metrics", "get_board"]) {
     expect(names).not.toContain(gone);
   }
   expect(names).toContain("query_log");
+  expect(names).toContain("sync_board");
 
   // 落としたぶんはSQLで引ける (接続の足場だけは get_project_context に残す)
   const board = await mcp("query_log", {
@@ -1079,16 +1059,15 @@ test("存在しないプロジェクトを指定したSocketは、既定プロ�
   ok.close();
 });
 
-test("ゴミ箱のタスクは担当負荷にもプロジェクト件数にも数えない", async () => {
-  // 担当負荷はLLMのシステムプロンプトに入って割り振り判断の材料になる。
-  // 消したタスクが乗り続けると「そのせいでAIが別の人へ振る」ことになる (自動レビュー指摘)
+test("ゴミ箱のタスクはプロジェクトの未完了件数に数えない", async () => {
+  // ボードから消えているのに件数が減らないと、どれが残っているのか分からなくなる
   const before = await (await fetch(`${API}/api/projects`)).json();
   const beforeCount = before.projects.find((p: any) => p.id === 1).openTasks as number;
 
   const res = await fetch(`${API}/api/tasks`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ title: "E2E: ゴミ箱と件数", assignee: "zio" }),
+    body: JSON.stringify({ title: "E2E: ゴミ箱と件数" }),
   });
   const id = (await res.json()).id as number;
 
@@ -1130,33 +1109,6 @@ test("完全削除はゴミ箱を通ったものだけ (取り返しのつく形
   expect((await purge(999999)).status).toBe(404);
 });
 
-test("不正なmembersは書き込む前に断る (途中まで適用して500にしない)", async () => {
-  // 配列かどうかしか見ておらず、数値やnullが混ざるとDB層の .trim() で例外になっていた。
-  // 新規作成は行とDBファイルを作った後に落ちるので一覧に作りかけが残り、
-  // 更新は名前を変えた後に落ちるので500なのに名前だけ変わる
-  const names = async () => ((await (await fetch(`${API}/api/projects`)).json()).projects as any[]).map((p) => p.name);
-  const before = await names();
-
-  const created = await fetch(`${API}/api/projects`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name: "E2E: 作りかけが残らない", members: ["zio", 1] }),
-  });
-  expect(created.status).toBe(400);
-  expect(await names()).toEqual(before); // 作りかけが残っていない
-
-  // 更新側も、名前だけ変わることがない
-  const target = (await (await fetch(`${API}/api/projects`)).json()).projects[0];
-  const patched = await fetch(`${API}/api/projects/${target.id}`, {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name: "E2E: この名前にはならない", members: [null] }),
-  });
-  expect(patched.status).toBe(400);
-  const after = (await (await fetch(`${API}/api/projects`)).json()).projects.find((p: any) => p.id === target.id);
-  expect(after.name).toBe(target.name);
-});
-
 test("既定プロジェクトは無効にできない (見えない・消せない・でも書き込まれる、を作らない)", async () => {
   // activeProjectId() は archived を見ないので、既定を無効にすると
   // ドロップダウンから消えるのに既定のまま残り、ヘッダ指定のない操作の行き先であり続ける。
@@ -1191,7 +1143,7 @@ test("既定プロジェクトは無効にできない (見えない・消せな
       await fetch(`${API}/api/projects`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: "E2E: 無効にできる側", members: [] }),
+        body: JSON.stringify({ name: "E2E: 無効にできる側" }),
       })
     ).json()
   ).project.id as number;
@@ -1219,45 +1171,6 @@ test("同じIDを2回渡しても1件として確定する (#157)", async () => 
   expect(r.updated[0].id).toBe(id);
 });
 
-test("担当フィルタで隠れても、依存の「待ち」は消えない (#41/#90)", async ({ page }) => {
-  // 描画はフィルタ後・依存の判定は全件、になっていなかった。別担当の未完了タスクに
-  // 依存しているとき、フィルタでそれが隠れた瞬間に「待ち」表示まで消え、
-  // 依存関係が実態と逆に見えた (自動レビュー指摘)。フィルタは見せ方の話で、事実は変わらない
-  const mk = async (title: string, assignee: string) =>
-    (
-      await (
-        await fetch(`${API}/api/tasks`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ title, assignee }),
-        })
-      ).json()
-    ).id as number;
-
-  const blocker = await mk("E2E: 依存先(別担当で未完了)", "フィルタ検証Bob");
-  const waiting = await mk("E2E: 依存元(表示される側)", "フィルタ検証Alice");
-  await fetch(`${API}/api/tasks/${waiting}`, {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ blockedBy: [blocker] }),
-  });
-
-  await page.goto("/");
-  const chip = page.getByTestId(`task-card-${waiting}`).getByTestId(`dep-chip-${blocker}`);
-  await expect(chip).toHaveAttribute("title", /依存先\(別担当で未完了\)/);
-
-  // Aliceだけに絞る → 依存先(Bob担当)はボードから消える
-  await page.getByRole("button", { name: "フィルタ検証Alice", exact: true }).click();
-  await expect(page.getByTestId(`task-card-${blocker}`)).toBeHidden();
-  await expect(page.getByTestId(`task-card-${waiting}`)).toBeVisible();
-
-  // それでも依存先の中身は引けたまま。「完了してアーカイブ済み」にはならない
-  await expect(chip).toHaveAttribute("title", /依存先\(別担当で未完了\)/);
-  await expect(chip).not.toHaveAttribute("title", /アーカイブ済み/);
-  // 未解決のまま = 取り消し線にならない
-  await expect(chip).not.toHaveClass(/line-through/);
-});
-
 test("無効化したプロジェクトは既定にできない (順序を変えても不可視状態を作れない)", async () => {
   // setProjectArchived 側で「既定は無効にできない」を塞いだが、順序を入れ替えれば
   // 同じ状態が作れた (先に無効化 → activate)。「既定 かつ 無効」という組み合わせ自体を作らせない
@@ -1266,7 +1179,7 @@ test("無効化したプロジェクトは既定にできない (順序を変え
       await fetch(`${API}/api/projects`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: "E2E: 無効なら既定にできない", members: [] }),
+        body: JSON.stringify({ name: "E2E: 無効なら既定にできない" }),
       })
     ).json()
   ).project.id as number;
@@ -1466,7 +1379,7 @@ test("AI提案チップはプロジェクトごとにOFFにできる。OFFの間
     await fetch(`${API}/api/projects`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: "E2E-提案OFFの巻き込まれ確認", members: [] }),
+      body: JSON.stringify({ name: "E2E-提案OFFの巻き込まれ確認" }),
     })
   ).json()) as any;
   const otherId = other.project.id as number;

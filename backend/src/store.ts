@@ -17,8 +17,10 @@ import { CONTEXT_TEMPLATE } from "./contextTemplate.js";
 //
 // 置き場所:
 //   data/chatban-admin.db          projects / settings / llm_calls (コストは口座単位なので横断)
-//   data/projects/<id>-<slug>.db   tasks / summary_cards / chat_messages / proposals /
-//                                  assignment_history / project_context / members
+//   data/projects/<id>-<slug>.db   tasks / summary_cards / chat_messages / project_context
+//
+// #179: members / proposals / assignment_history と tasks.assignee / assign_reason は
+// 作るのをやめ、既存DBからも削除する (下の ensureProjectSchema 末尾)
 
 const DATA_DIR = process.env.CHATBAN_DATA_DIR ?? "data";
 const ADMIN_PATH = join(DATA_DIR, "chatban-admin.db");
@@ -111,30 +113,8 @@ CREATE TABLE IF NOT EXISTS tasks (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   title TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'todo',
-  assignee TEXT,
-  assign_reason TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
   updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
-);
-CREATE TABLE IF NOT EXISTS members (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  name TEXT NOT NULL UNIQUE,
-  skills TEXT
-);
-CREATE TABLE IF NOT EXISTS proposals (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  task_id INTEGER NOT NULL,
-  assignee TEXT NOT NULL,
-  reason TEXT,
-  status TEXT NOT NULL DEFAULT 'pending',
-  created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
-);
-CREATE TABLE IF NOT EXISTS assignment_history (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  task_title TEXT NOT NULL,
-  assignee TEXT NOT NULL,
-  note TEXT,
-  created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
 );
 CREATE TABLE IF NOT EXISTS project_context (
   id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -182,10 +162,6 @@ CREATE TABLE IF NOT EXISTS summary_cards (
   addColumn("ALTER TABLE tasks ADD COLUMN trashed_at TEXT");
   // #92: 現況の一言 (カードに出る)。「なぜこの人か」(reason)と「いまどうなっているか」は別の情報
   addColumn("ALTER TABLE tasks ADD COLUMN summary TEXT");
-  // #92: reason → assign_reason へ改名。「reason」だけでは何の理由か分からず、
-  // MCP経由のエージェントが進捗を書き込む欄になっていた。名前で用途が分かるようにする
-  // (既存DBのみRENAMEが成功し、新規DBはCREATE時点でassign_reasonなので失敗して無視される)
-  addColumn("ALTER TABLE tasks RENAME COLUMN reason TO assign_reason");
   // #112: 楽観ロックは経緯メモ(context)にだけ効かせる。
   // エージェントは「読む→考える(数十秒)→書く」なので、その間の変更を踏み潰しうる。
   // ただし失うものが大きいのは context だけ — 全文上書きの契約なので、衝突すると
@@ -233,32 +209,6 @@ CREATE TABLE IF NOT EXISTS summary_cards (
   // speaker=表示名 / speaker_email=ログイン済みのときだけ入る本人確認済みのアドレス。
   // 両方持つのは、ログイン必須で展開する場合と、自分ひとりでログインなしで使う場合の
   // 両睨みにするため — 認証があれば確かな発言者、無ければ自己申告と分かる形で残す
-  // #126: reason を任意にする。裏付けの無い理由を作らせるくらいなら理由なしで提案させたい。
-  // 既存DBの列は NOT NULL のままなので作り直す (提案は承認/却下で消える一時データなので、
-  // pending だけ引き継げば実害がない)
-  try {
-    const notNull = (db.prepare("PRAGMA table_info(proposals)").all() as any[]).some(
-      (c) => c.name === "reason" && c.notnull === 1
-    );
-    if (notNull) {
-      db.exec(`
-CREATE TABLE proposals_new (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  task_id INTEGER NOT NULL,
-  assignee TEXT NOT NULL,
-  reason TEXT,
-  status TEXT NOT NULL DEFAULT 'pending',
-  created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
-);
-INSERT INTO proposals_new (id, task_id, assignee, reason, status, created_at)
-  SELECT id, task_id, assignee, reason, status, created_at FROM proposals;
-DROP TABLE proposals;
-ALTER TABLE proposals_new RENAME TO proposals;`);
-      log("schema", "proposals.reason を任意に作り直しました (#126)");
-    }
-  } catch (e: any) {
-    log("schema", `proposals の作り直しに失敗: ${e?.message ?? e}`);
-  }
   addColumn("ALTER TABLE chat_messages ADD COLUMN speaker TEXT");
   addColumn("ALTER TABLE chat_messages ADD COLUMN speaker_email TEXT");
 
@@ -285,7 +235,7 @@ ALTER TABLE proposals_new RENAME TO proposals;`);
   db.exec(`
 DROP VIEW IF EXISTS done_tasks;
 CREATE VIEW done_tasks AS
-  SELECT id, title, assignee, assign_reason, summary, rejected, checked_at, done_at,
+  SELECT id, title, summary, rejected, checked_at, done_at,
          date(done_at) AS done_day, summary_card_id, created_at
     FROM tasks
    WHERE done_at IS NOT NULL
@@ -294,12 +244,69 @@ CREATE VIEW done_tasks AS
   db.exec(`
 DROP VIEW IF EXISTS live_tasks;
 CREATE VIEW live_tasks AS
-  SELECT id, status, title, assignee, assign_reason, summary, context, context_version,
+  SELECT id, status, title, summary, context, context_version,
          due, blocked_by, rejected, checked_at, done_at, sort, COALESCE(sort, id) AS sort_key,
          created_at, updated_at
     FROM tasks
    WHERE archived = 0 AND trashed_at IS NULL
    ORDER BY COALESCE(sort, id), id;`);
+
+  // #179: 担当者・割り振りを廃止。**列とテーブルごと落とす。**
+  //
+  // 読まないだけにして残す案を採らなかったのは、認証 (#180) と同じ理由 —
+  // 「開けられる」が残ると、いつか開ける日が来る。スキーマに列があれば、
+  // SQL窓口 (query_log) を広げた誰かが集計に使い、廃止したはずの軸が復活する。
+  //
+  // **これは取り返しがつかない** (assignment_history は誰にどう振ったかの実録)。
+  // 消してよいと確認した上でやっている (zio 2026-08-17)。
+  // ゴミ箱 (#102) のような二段構えにはしない — 一度きりの片付けで、戻す運用が無い。
+  //
+  // **ビューの作り直しより後に置くこと。** SQLite は列がビューから参照されていると
+  // DROP COLUMN を拒む。古い定義 (assignee を SELECT していたころのもの) が残ったままだと、
+  // 列がいつまでも消えない。
+  //
+  // **addColumn は使わない。**あれは全例外を「適用済み」とみなして捨てるので、
+  // 想定外の理由 (未知のindex・trigger・view からの参照など) で失敗しても起動は成功し、
+  // 「列は残ったままテーブルだけ消えた」状態に静かに着地する。手元の13DBで成功したことは、
+  // 未知の参照を持つDBで成功する保証にならない (自動レビュー指摘)。
+  // 消えていないなら消えていないと言わせる
+  //
+  // **全部消えるか、何も消えないか。**列だけ残ってテーブルが消えた中途半端な状態を作らない
+  // (途中で失敗しても、次の起動でもう一度そこから始められる)。
+  // 列が消せないのに起動を続けると、**廃止したはずの軸がスキーマに残ったまま固定される** —
+  // ログは誰も見ないので、部分適用に気づく機会が無い (自動レビュー指摘)。異常なので止める
+  // **ログは transaction の外で出す。**中で出すと、後続のDDLが失敗して巻き戻ったあとも
+  // 「削除しました」だけが残る (ログは即座にファイルへ書かれるが、DBは戻る)。
+  // 異常を調べている人に「assignee は消したはずだ」と思わせるのが一番まずい (自動レビュー指摘)
+  const dropped: string[] = [];
+  db.transaction(() => {
+    dropColumn("tasks", "assignee", dropped);
+    dropColumn("tasks", "assign_reason", dropped);
+    for (const t of ["members", "proposals", "assignment_history"]) {
+      if (!db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name = ?").get(t)) continue;
+      db.exec(`DROP TABLE IF EXISTS ${t}`);
+      dropped.push(t);
+    }
+  })();
+  // 消えたときだけ記録する。起動のたびに出しても意味がない
+  if (dropped.length > 0) log("schema", `${dropped.join(" / ")} を削除しました (#179 担当者の廃止)`);
+
+  /** 列が実在するときだけ DROP し、**消えたことを確かめる**。
+   * 無ければ何もしない (適用済み) / 消せなければ投げる (黙って通さない) */
+  function dropColumn(table: string, column: string, out: string[]): void {
+    const has = () => (db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).some((c) => c.name === column);
+    if (!has()) return;
+    try {
+      db.exec(`ALTER TABLE ${table} DROP COLUMN ${column}`);
+    } catch (e: any) {
+      throw new Error(
+        `${table}.${column} を削除できませんでした (#179 担当者の廃止): ${e?.message ?? e}。` +
+          `この列を参照している index / trigger / view が残っている可能性があります`
+      );
+    }
+    if (has()) throw new Error(`${table}.${column} の削除が反映されていません (#179 担当者の廃止)`);
+    out.push(`${table}.${column}`);
+  }
 }
 
 export const admin = open(ADMIN_PATH);
@@ -478,7 +485,6 @@ export interface ProjectSummary {
   /** #107: 無効。ドロップダウンには出さないが設定画面には出る */
   archived: boolean;
   openTasks: number;
-  members: string[];
   /** #117: このプロジェクト用のMCP接続先 (.mcp.json に貼る) */
   mcpUrl: string;
   /** #167: AI提案チップを出すか。デモ動画の撮影中は毎回違うチップが出ると撮り直しになるため切れるようにした */
@@ -506,7 +512,6 @@ export function projectSummaries(): ProjectSummary[] {
           .prepare("SELECT COUNT(*) AS c FROM tasks WHERE archived = 0 AND status != 'done' AND trashed_at IS NULL")
           .get() as { c: number }
       ).c,
-      members: (pdb.prepare("SELECT name FROM members ORDER BY id").all() as { name: string }[]).map((m) => m.name),
       suggestEnabled: suggestEnabled(p.id),
     };
   });
@@ -543,40 +548,19 @@ export function setSuggestEnabled(projectId: number, enabled: boolean): void {
       .run(SUGGEST_KEY(projectId));
 }
 
-/** 新規プロジェクト。メンバーはこのプロジェクトのDBに入る (プロジェクトごとの参加者) */
 /** #115/#116: 新規プロジェクトの前提情報の下書き。
  * 列の意味と完了の条件はプロジェクトごとに違うのに、埋める枠が無いと誰も書かない。
  * 実例: あるプロジェクトは review=検収待ち、別のプロジェクトは review=相手待ち(返答・承認待ち)。
  * エージェントには列の enum しか見えないので、ここに書いてあることが唯一の手がかりになる。
  * 空欄のまま残っても害はない (「まだ決めていない」と読める) */
 
-export function createProjectWithMembers(name: string, memberNames: string[] = []): ProjectRow {
+export function createProject(name: string): ProjectRow {
   const p = insertProject(name);
-  const pdb = projectDb(p.id);
-  const ins = pdb.prepare("INSERT OR IGNORE INTO members (name, skills) VALUES (?, NULL)");
-  for (const n of memberNames.map((s) => s.trim()).filter(Boolean)) ins.run(n);
-  pdb.prepare("INSERT OR IGNORE INTO project_context (id, text) VALUES (1, ?)").run(CONTEXT_TEMPLATE);
-  log("project", `created #${p.id} ${name} (members: ${memberNames.join(", ") || "なし"})`);
+  projectDb(p.id).prepare("INSERT OR IGNORE INTO project_context (id, text) VALUES (1, ?)").run(CONTEXT_TEMPLATE);
+  log("project", `created #${p.id} ${name}`);
   return p;
 }
 
-export function setProjectMembers(id: number, memberNames: string[]): void {
-  const pdb = projectDb(id);
-  const names = memberNames.map((s) => s.trim()).filter(Boolean);
-  pdb.transaction(() => {
-    // 既存担当者として使われている名前は消さない (タスクのassigneeは文字列なので孤児になる)
-    const inUse = new Set(
-      (pdb.prepare("SELECT DISTINCT assignee FROM tasks WHERE assignee IS NOT NULL").all() as { assignee: string }[]).map(
-        (r) => r.assignee
-      )
-    );
-    for (const r of pdb.prepare("SELECT id, name FROM members").all() as { id: number; name: string }[]) {
-      if (!names.includes(r.name) && !inUse.has(r.name)) pdb.prepare("DELETE FROM members WHERE id = ?").run(r.id);
-    }
-    const ins = pdb.prepare("INSERT OR IGNORE INTO members (name, skills) VALUES (?, NULL)");
-    for (const n of names) ins.run(n);
-  })();
-}
 
 /** 削除はファイルを消さず data/trash/ へ退避する (実録データを扱うので取り返しがつく形にする) */
 export function trashProject(id: number): void {
@@ -596,229 +580,31 @@ export function trashProject(id: number): void {
   log("project", `trashed #${id} ${row.name} -> data/trash/`);
 }
 
-// --- 旧構成 (backend/chatban.db 単一ファイル) からの移行 -------------------
-
-/** 取り込んでよい旧DBか。空ファイル・別物・壊れたファイルを移行対象にしない。
+/** まっさらな環境なら、既定のプロジェクトを1つ作る。
  *
- * この判定を通ると、ファイルを data/projects/ へ移動し、ChatBanのスキーマを当て、
- * settings や projects を DROP する — **後戻りできない処理に進む**。
- * だから「たぶんそうだろう」で通してはいけない (外部レビュー指摘)。
+ * #179 で旧DBの移行コードを消したとき、この初期化がその関数に同居していたため
+ * 一緒に消えてしまい、**空の data ディレクトリでサーバーが起動しなくなった**
+ * (activeProjectId が「プロジェクトが1つもありません」で落ちる)。E2Eは毎回
+ * データを消してから起動するので、52件が丸ごと落ちて気づいた。
  *
- * tasks は一般的な名前で、同名の別アプリのDBも通ってしまう。
- * ChatBan固有のテーブルの組み合わせと、tasks の列まで見る。
- *
- * 本来は SQLite の application_id を打っておくのが堅実だが、
- * **すでに世に出ている旧DBには入っていない**ので識別には使えない。
- * 移行の入口はこの形で判定し、新しく作るDBに application_id を打つのは別の話 (将来) */
-// **初期コミット (2026-08-09) にあったテーブルだけを条件にする。**
-// chat_messages / project_context / summary_cards は後から足したものなので、
-// 必須にすると本物の初期版DBを「別物」と判定して取り込めなくなる (外部レビュー指摘)。
-// 足りないテーブルは ensureProjectSchema が作るので、識別の条件にする必要がない。
-//
-// 「ChatBanのDBだと分かる最小の組み合わせ」と「いま存在するテーブルの一覧」は別物。
-// 後者で判定すると、古い版を切り捨てる方向にしか動かない
-const LEGACY_REQUIRED_TABLES = ["tasks", "members", "proposals", "assignment_history"];
-// created_at / updated_at も要る。ensureProjectSchema は CREATE TABLE IF NOT EXISTS なので
-// 既存の tasks はそのまま使われ、これらが無いと後続のクエリが no such column で落ちる。
-// 「取り込んでから落ちる」より「取り込まない」ほうが安全 (原本が動かない)
-const LEGACY_REQUIRED_TASK_COLUMNS = ["title", "status", "assignee", "created_at", "updated_at"];
-
-function looksLikeChatBanDb(path: string): { ok: true } | { ok: false; why: string } {
-  if (!existsSync(path)) return { ok: false, why: "ファイルがありません" };
-  let probe: Database.Database | undefined;
-  try {
-    probe = new Database(path, { readonly: true });
-    const tables = new Set(
-      (probe.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as { name: string }[]).map(
-        (r) => r.name
-      )
-    );
-    const missing = LEGACY_REQUIRED_TABLES.filter((t) => !tables.has(t));
-    if (missing.length > 0) return { ok: false, why: `テーブルがありません: ${missing.join(", ")}` };
-    const cols = new Set(
-      (probe.prepare("SELECT name FROM pragma_table_info('tasks')").all() as { name: string }[]).map((r) => r.name)
-    );
-    const missingCols = LEGACY_REQUIRED_TASK_COLUMNS.filter((c) => !cols.has(c));
-    if (missingCols.length > 0) return { ok: false, why: `tasks に列がありません: ${missingCols.join(", ")}` };
-    return { ok: true };
-  } catch (e: any) {
-    return { ok: false, why: `開けません (${e?.message ?? e})` }; // SQLiteですらない・壊れている
-  } finally {
-    probe?.close();
-  }
-}
-
-/** テーブルが実在するか。**例外の有無で判定しない** —
- * 「無い」と「あるが列が違う」を同じ扱いにすると、後者を空として扱って DROP まで進み、
- * 記録が消える (外部レビュー指摘。実際 cached_tokens が無い初期版DBで起きる) */
-function hasTable(db: Database.Database, name: string): boolean {
-  return !!db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").get(name);
-}
-
-function columnsOf(db: Database.Database, table: string): Set<string> {
-  return new Set((db.prepare(`SELECT name FROM pragma_table_info(?)`).all(table) as { name: string }[]).map((r) => r.name));
-}
-
-/** 起動時に一度だけ: 旧 chatban.db があればプロジェクト1として取り込む。
- * llm_calls だけは管理DBへ移す (コストは口座単位で見るため) */
-export function migrateLegacyDbIfNeeded(): void {
+ * 移行と初期化は別の責務。片方を消してももう片方が残る形にしておく */
+export function ensureInitialProject(): void {
   if (listProjects().length > 0) return;
-
+  // #179: 旧構成 (単一の chatban.db) からの移行は撤去した。**取り込まないこと自体は決定事項**だが、
+  // 中身のあるDBが転がっているのに黙って空ボードを出すと、利用者からは「データが消えた」に見える。
+  // 消えていないことと、原本の場所は言う (自動レビュー指摘)
   const legacy = process.env.DB_PATH ?? "chatban.db";
-
-  // まっさらな環境: 既定のプロジェクトを1つ作るだけ
-  const startEmpty = () => {
-    const p = insertProject("マイプロジェクト");
-    projectDb(p.id);
-    setActiveProjectId(p.id);
-    log("project", `initialized empty project #${p.id}`);
-  };
-
-  // **ファイルがあるだけでは取り込まない。**中身がChatBanのDBかを先に確かめる。
-  //
-  // 実際に踏んだ: 調査中に作られた0バイトの chatban.db が置かれていただけで、
-  // 移行に入って rename を済ませたあと llm_calls の SELECT で落ち、**サーバーが起動しなくなった**。
-  // しかも rename は済んでいるので、次の起動では legacy が無く「まっさら」扱いになる —
-  // 1回だけ落ちて、症状が消える。原因に辿り着きにくい壊れ方だった。
-  //
-  // 「途中まで適用して失敗」を作らない (#120と同じ考え方)。動かす前に確かめる
-  const verdict = looksLikeChatBanDb(legacy);
-  if (!verdict.ok) {
-    if (existsSync(legacy)) log("project", `${legacy} は取り込みませんでした (${verdict.why})`);
-    startEmpty();
-    return;
-  }
-
-  // **原本には最後まで触らない。**コピーを作り、コピーに対して作業し、
-  // 全部うまくいったときだけ原本を消す (外部レビュー指摘)。
-  //
-  // 以前は「移動してから作業し、失敗したら戻す」形にしていたが、戻せていなかった:
-  // projectDb() を呼んだ時点で移動後のファイルに ensureProjectSchema が当たり、
-  // 列の追加・改名・lane列の削除まで済んでいる。ファイルの場所を戻しても中身は別物だった。
-  // 管理DB側も、途中まで upsert した settings は戻せていなかった (既存値の上書きも含む)。
-  //
-  // VACUUM INTO なら**読み取り専用の接続からコピーが作れる**ので、
-  // WALのチェックポイントすら原本に対して行わなくて済む (コピー先は畳まれた状態で出る)。
-  mkdirSync(PROJECT_DIR, { recursive: true });
-  const work = join(PROJECT_DIR, `.migrating-${process.pid}.db`);
-  if (existsSync(work)) unlinkSync(work); // 前回の異常終了の残骸
-  {
-    const ro = new Database(legacy, { readonly: true });
-    try {
-      ro.prepare("VACUUM INTO ?").run(work);
-    } finally {
-      ro.close();
-    }
-  }
-
-  let projectId: number | undefined;
-  let carried = 0;
-  let destPath = ""; // 置いた先。失敗時に catch から片付けるので外で持つ
-  try {
-    // スキーマを当てるのも読むのも、DROPするのも**コピーに対して**
-    const wdb = new Database(work);
-    let calls: { cols: string[]; rows: any[] } = { cols: [], rows: [] };
-    let settings: { key: string; value: string }[] = [];
-    try {
-      ensureProjectSchema(wdb);
-      // **例外を「テーブルが無い」の代わりにしない** (外部レビュー指摘)。
-      // 初期版のDBには cached_tokens が無いので SELECT が no such column で失敗する。
-      // それを「無い」として空で通すと DROP まで進んで**コスト記録が全部消える**。
-      // 存在は sqlite_master で確かめ、**実際にある列だけ**を移す
-      if (hasTable(wdb, "llm_calls")) {
-        const have = columnsOf(wdb, "llm_calls");
-        const cols = [
-          "purpose",
-          "model",
-          "routed_model",
-          "prompt_tokens",
-          "completion_tokens",
-          "cached_tokens",
-          "elapsed_ms",
-          "created_at",
-        ].filter((c) => have.has(c));
-        calls = { cols, rows: wdb.prepare(`SELECT ${cols.join(", ")} FROM llm_calls ORDER BY id`).all() as any[] };
-      }
-      if (hasTable(wdb, "settings")) {
-        settings = wdb.prepare("SELECT key, value FROM settings").all() as { key: string; value: string }[];
-      }
-      // 管理DBへ移したもの / プロジェクトDBに居るべきでないものを落とす
-      // (projects・project_members は project_id 方式を試した名残。空のまま残っている)
-      wdb.exec(
-        "DROP TABLE IF EXISTS llm_calls; DROP TABLE IF EXISTS settings; DROP TABLE IF EXISTS projects; DROP TABLE IF EXISTS project_members;"
-      );
-    } finally {
-      wdb.close();
-    }
-
-    // 管理DBへの書き込みも**ファイルの配置も**、まとめて1つの失敗処理の下に置く。
-    //
-    // 以前は管理DBのトランザクションを先にコミットし、そのあとで rename していた。
-    // 移動先が既にあって rename が失敗すると、**プロジェクト行だけが残る** —
-    // 次の起動は listProjects().length > 0 で移行を飛ばすので、その状態が固定される
-    // (外部レビュー指摘)。better-sqlite3 のトランザクションは同期なので、
-    // ファイル操作を中に入れれば「両方成立するか、両方無かったことになるか」にできる
-    projectId = admin.transaction(() => {
-      const p = insertProject("ChatBan開発");
-      const dest = projectFilePath(p);
-      // 先に置いてしまう。ここで失敗すれば insertProject ごと巻き戻る
-      if (existsSync(dest)) throw new Error(`移動先が既にあります: ${dest}`);
-      renameSync(work, dest);
-      destPath = dest;
-      try {
-        if (calls.rows.length > 0) {
-          const cols = [...calls.cols, "project_id"];
-          const ins = admin.prepare(
-            `INSERT INTO llm_calls (${cols.join(", ")}) VALUES (${cols.map(() => "?").join(", ")})`
-          );
-          for (const r of calls.rows) ins.run(...calls.cols.map((c) => r[c]), p.id);
-        }
-        const insS = admin.prepare(
-          "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value"
-        );
-        for (const r of settings) insS.run(r.key, r.value);
-        setActiveProjectId(p.id);
-      } catch (inner) {
-        // DBは下の throw で巻き戻るが、ファイルは自分で戻す
-        try {
-          renameSync(dest, work);
-          destPath = "";
-        } catch {
-          /* 戻せなければ catch 側で消す */
-        }
-        throw inner;
-      }
-      return p.id;
-    })();
-    carried = calls.rows.length;
-
-    // **旧DBの削除はベストエフォート。**ここまでで移行は成立しているので、
-    // 消せなかったことを失敗にはしない (消せずに失敗と言うと、成功した移行をやり直すことになる)。
-    // 残っても次の起動では listProjects().length > 0 で移行に入らないため、実害は「古い控えが残る」だけ
-    for (const f of [legacy, legacy + "-wal", legacy + "-shm"]) {
-      try {
-        if (existsSync(f)) unlinkSync(f);
-      } catch (e: any) {
-        log("project", `旧DB ${f} を消せませんでした (移行自体は成功。控えとして残ります): ${e?.message ?? e}`);
-      }
-    }
-    const dropped = calls.cols.length > 0 && calls.cols.length < 8 ? ` / この版に無い列: ${8 - calls.cols.length}個` : "";
-    log("project", `migrated legacy ${legacy} -> ${destPath} (llm_calls ${carried}件を管理DBへ${dropped})`);
-  } catch (e: any) {
-    // 作業用のコピーを捨てる。管理DBはトランザクションごと巻き戻り、**原本は一度も触っていない**。
-    // rename 済みなら work は存在しないので、置いた先も見る
-    for (const f of [work, destPath]) {
-      try {
-        if (f && existsSync(f)) unlinkSync(f);
-      } catch {
-        /* 消せなくても、下の throw で人間に見せるのが先 */
-      }
-    }
-    log("project", `${legacy} の取り込みに失敗しました (原本はそのまま): ${e?.message ?? e}`);
-    throw new Error(
-      `旧DB (${legacy}) の取り込みに失敗しました。原本には手を付けていないので、中身を確認してから起動し直してください: ${e?.message ?? e}`
+  if (existsSync(legacy)) {
+    log(
+      "project",
+      `${legacy} を見つけましたが取り込みません (#179で旧構成からの移行は廃止)。原本はそのまま残っています。` +
+        `中身が必要なら 2026-08-17 より前の版で一度起動して data/ 形式へ移してから上げ直してください`
     );
   }
+  const p = insertProject("マイプロジェクト");
+  projectDb(p.id); // ここで ensureProjectSchema が当たる
+  setActiveProjectId(p.id);
+  log("project", `initialized empty project #${p.id}`);
 }
 
 /** 起動時に孤児ファイルを拾わないための健全性チェック (ログのみ) */

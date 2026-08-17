@@ -1,6 +1,5 @@
 import http from "node:http";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import cookieParser from "cookie-parser";
 import cors from "cors";
 import express from "express";
 import { Server } from "socket.io";
@@ -9,19 +8,7 @@ import { estimateCallCost, fetchBillingUsage, fetchModelCatalog, getModel, MODEL
 import { generateSuggestions, runChatTurn } from "./chat.js";
 import { archiveState, hooks } from "./hooks.js";
 import { log } from "./log.js";
-import {
-  authEnabled,
-  canEditAuthSettings,
-  cookieMaxAge,
-  cookieName,
-  currentUser,
-  loginWithGoogle,
-  requireAuth,
-  resolveSpeaker,
-  type SessionUser,
-  stillAllowedUser,
-  userFromCookieHeader,
-} from "./auth.js";
+import { pickSpeaker } from "./speaker.js";
 import { buildMcpServer } from "./mcp.js";
 import { resetPromptState } from "./promptState.js";
 import { assertTimezone } from "./timezone.js";
@@ -77,8 +64,9 @@ ensureInitialProject();
 reportOrphanFiles();
 
 const app = express();
-// #113: Cookieセッションを載せる以上、任意のオリジンを反射してはいけない
-// (origin:true + credentials:true だと、他サイトから認証済みリクエストを投げられる)。
+// #180: 認証を廃止したので Cookie は載らない。それでも**任意のオリジンは反射しない** —
+// ボードの中身を他サイトのページから読ませないため。待ち受けを 127.0.0.1 に固定した (PR #28) のと
+// 同じ線で、「ローカルの持ち主だけが触れる」を保つ。
 // Originヘッダの無い呼び出し (curl・同一オリジン・MCP) は通す
 const ALLOWED_ORIGINS = (process.env.CHATBAN_ALLOWED_ORIGINS ?? "http://localhost:5173,http://localhost:5199")
   .split(",")
@@ -87,38 +75,9 @@ const ALLOWED_ORIGINS = (process.env.CHATBAN_ALLOWED_ORIGINS ?? "http://localhos
 app.use(
   cors({
     origin: (origin, cb) => cb(null, !origin || ALLOWED_ORIGINS.includes(origin)),
-    credentials: true,
   })
 );
-app.use(cookieParser());
 app.use(express.json({ limit: "25mb" })); // #68: 添付(画像/PDFのbase64)を受けるため拡大
-
-// #113: ログインの口。認証オフのときも動く (offなら誰も見に来ないだけ)
-app.get("/api/auth/me", (req, res) => {
-  res.json({ enabled: authEnabled(), user: currentUser(req), clientId: getSetting("auth.googleClientId") ?? "" });
-});
-
-app.post("/api/auth/google", async (req, res) => {
-  const r = await loginWithGoogle(String(req.body?.credential ?? ""));
-  if ("error" in r) return res.status(401).json(r);
-  res.cookie(cookieName, r.cookie, {
-    httpOnly: true,
-    sameSite: "lax",
-    // HTTPS で運用するときは平文で飛ばさない。ローカルのhttpでは付けられないので環境で切り替える
-    secure: process.env.CHATBAN_SECURE_COOKIE === "on",
-    maxAge: cookieMaxAge,
-  });
-  res.json({ user: r.user });
-});
-
-app.post("/api/auth/logout", (_req, res) => {
-  res.clearCookie(cookieName);
-  res.json({ ok: true });
-});
-
-// ここから下が保護対象。/mcp は下で別に定義していて、このミドルウェアを通らない
-// (ローカルのエージェント用の口なので塞がない #113)
-app.use("/api", requireAuth);
 
 // #97: どのプロジェクトへの操作かはクライアントがヘッダで明示する (UIはURL /p/<id> が持つ)。
 // 指定が無ければ既定プロジェクト (スクリプトやcurlからの素の呼び出し用)。
@@ -136,46 +95,10 @@ app.use((req, res, next) => {
 });
 
 const server = http.createServer(app);
-// #113: ボードの中身は Socket.IO で流れるので、RESTだけ締めても意味がない。
-// origin:"*" のままだと他サイトのページから繋いで board:changed を受け取れてしまう。
-// CORSは express と同じ許可リストを使い、認証onなら接続時に本人確認する
-const io = new Server(server, { cors: { origin: ALLOWED_ORIGINS, credentials: true } });
-
-// socket.io はここで投げた同期例外を捕まえない (uncaughtException になりプロセスが落ちる)。
-// 認証前の外部入力を触る場所なので、握りつぶさず「拒否」に倒す。
-// 本体は readCookie 側で防いでいるが、ここが最後の砦 (認証を通らない相手に
-// サーバーを止められるのは、認証そのものより悪い)
-io.use((socket, next) => {
-  try {
-    if (!authEnabled()) return next(); // 開発・E2Eは素通し (RESTと同じ判断)
-    const me = userFromCookieHeader(socket.handshake.headers.cookie);
-    if (!me) {
-      log("auth", "未認証のSocket.IO接続を拒否しました");
-      return next(new Error("unauthorized"));
-    }
-    socket.data.user = me;
-    next();
-  } catch (e: any) {
-    log("auth", `Socket.IOの認証で例外: ${e?.message ?? e}`);
-    next(new Error("unauthorized"));
-  }
-});
-
-/** #113: 許可リストを変えたら、いま繋がっているSocketも見直す。
- *
- * 本人確認はハンドシェイクでしか行っていないので、除名しても繋ぎっぱなしの相手には
- * board:changed が流れ続ける (自動レビュー指摘)。RESTを401にしても、ボードの中身は
- * こちらから読めるので、アクセスを取り上げたことにならない。
- * 「認証は入口で一度」ではなく「許可が変わったら現に繋がっているものも切る」 */
-function disconnectRevoked() {
-  if (!authEnabled()) return;
-  for (const socket of io.sockets.sockets.values()) {
-    const me = socket.data.user as SessionUser | undefined;
-    if (me && stillAllowedUser(me)) continue;
-    log("auth", `許可から外れた接続を切断: ${me?.email ?? "(不明)"}`);
-    socket.disconnect(true);
-  }
-}
+// #113 → #180: ボードの中身は Socket.IO で流れるので、RESTだけ締めても意味がない。
+// origin:"*" のままだと他サイトのページから繋いで board:changed を受け取れてしまうため、
+// CORSは express と同じ許可リストを使う。認証は廃止したのでハンドシェイクでの本人確認は無い
+const io = new Server(server, { cors: { origin: ALLOWED_ORIGINS } });
 
 // #99: 配信はプロジェクト単位のroomへ。全クライアントへの一斉送信だと、
 // タブごとに別プロジェクトを開けるようにした瞬間(#97)に他プロジェクトの更新で画面が壊れる。
@@ -390,10 +313,10 @@ app.post("/api/chat", async (req, res) => {
   if (!message) return res.status(400).json({ error: "message required" });
   const id = ++chatSeq;
   const t0 = Date.now();
-  const who = resolveSpeaker(req, speaker);
+  const who = pickSpeaker(speaker);
   log(
     "chat",
-    `#${id} REQ${who.name ? ` [${who.name}${who.email ? `/${who.email}` : "(自己申告)"}]` : ""} "${String(message).slice(0, 120)}" (history=${history?.length ?? 0}${attachments?.length ? ` attachments=${attachments.length}` : ""})`
+    `#${id} REQ${who.name ? ` [${who.name}]` : ""} "${String(message).slice(0, 120)}" (history=${history?.length ?? 0}${attachments?.length ? ` attachments=${attachments.length}` : ""})`
   );
   // クライアント切断もログに残す (再起動巻き添え・ブラウザ側中断の追跡用)
   res.on("close", () => {
@@ -410,8 +333,7 @@ app.post("/api/chat", async (req, res) => {
       undefined,
       who.name ?? undefined,
       attachments,
-      view,
-      !!who.email
+      view
     );
     // 会話ログはサーバーに永続化する (添付は原本を保存せず名前だけ記録 #68)
     saveChatMessage(
@@ -451,11 +373,11 @@ app.post("/api/tasks/:id/chat", async (req, res) => {
   if (!getTask(taskId)) return res.status(404).json({ error: `task #${req.params.id} not found` });
   const id = ++chatSeq;
   const t0 = Date.now();
-  // メインチャットと同じ経路で発言者を決める。リクエストの speaker をそのまま信じない
-  const who = resolveSpeaker(req, speaker);
+  // メインチャットと同じ経路で発言者を決める (入口ごとに書き分けない #126)
+  const who = pickSpeaker(speaker);
   log(
     "chat",
-    `#${id} TASK-CHAT(task=${taskId})${who.name ? ` [${who.name}${who.email ? `/${who.email}` : "(自己申告)"}]` : ""} REQ "${String(message).slice(0, 120)}"`
+    `#${id} TASK-CHAT(task=${taskId})${who.name ? ` [${who.name}]` : ""} REQ "${String(message).slice(0, 120)}"`
   );
   try {
     const result = await runChatTurn(
@@ -468,11 +390,9 @@ app.post("/api/tasks/:id/chat", async (req, res) => {
       taskId,
       who.name ?? undefined,
       attachments,
-      view,
-      !!who.email
+      view
     );
-    // タスクチャットの会話ログにも発言者を残す。ここが空だと、タスクの経緯に効いた
-    // 指示が誰のものか後から辿れない (監査ログが売りなのに穴が開く)
+    // タスクチャットの会話ログにも発言者を残す (メインチャットと同じ形にしておく)
     saveChatMessage(
       "user",
       message + (attachments?.length ? ` [添付: ${attachments.map((a: any) => a.name).join(", ")}]` : ""),
@@ -617,36 +537,8 @@ app.delete("/api/projects/:id", (req, res) => {
 
 // 管理画面 (#88): 用途別モデルの実効値と既定値。source=どこから来た値か
 const SLOTS: ModelSlot[] = ["main", "archive", "cheap"];
-// #113: ログイン設定 (GoogleクライアントIDと、通してよいメール)。
-// env ではなくDBに置くのは、⚙設定タブから再起動なしで変えられるようにするため (#88と同じ)。
-// クライアントIDは公開情報 (フロントに出る)。シークレットはこの方式では使わないので持たない
-app.get("/api/settings/auth", (req, res) => {
-  if (!canEditAuthSettings(req)) return res.status(403).json({ error: "forbidden", canEdit: false });
-  res.json({
-    clientId: getSetting("auth.googleClientId") ?? "",
-    allowedEmails: getSetting("auth.allowedEmails") ?? "",
-    enabled: authEnabled(),
-  });
-});
-
-app.post("/api/settings/auth", (req, res) => {
-  // 「これから誰を通すか」を決める口なので、認証offでも素通しにしない
-  if (!canEditAuthSettings(req))
-    return res.status(403).json({
-      error: "ログイン設定を変更できるのは、許可リストに載っているアカウントでログインした場合だけです",
-    });
-  const { clientId, allowedEmails } = req.body ?? {};
-  if (typeof clientId === "string") setSetting("auth.googleClientId", clientId.trim());
-  if (typeof allowedEmails === "string") {
-    setSetting("auth.allowedEmails", allowedEmails.trim());
-    disconnectRevoked(); // 外した相手が繋ぎっぱなしなら、その場で切る
-  }
-  res.json({
-    clientId: getSetting("auth.googleClientId") ?? "",
-    allowedEmails: getSetting("auth.allowedEmails") ?? "",
-    enabled: authEnabled(),
-  });
-});
+// #180: ログイン設定 (/api/settings/auth) は認証ごと廃止した。個人利用に特化したので、
+// 「誰を通すか」を決める窓口そのものを持たない (守るのは待ち受けアドレスとCORSの許可リスト)
 
 app.get("/api/settings/models", (_req, res) => {
   res.json({
@@ -745,10 +637,11 @@ app.post("/mcp", (_req, res) => {
 app.get(["/mcp", "/mcp/:projectId"], (_req, res) => res.status(405).json({ error: "stateless server: POST only" }));
 app.delete(["/mcp", "/mcp/:projectId"], (_req, res) => res.status(405).json({ error: "stateless server: POST only" }));
 
-// **待ち受けはループバックに限定する。**ホストを省略するとNodeの既定で全インターフェース (0.0.0.0)
-// に開くが、認証は既定オフ (CHATBAN_AUTH=on のときだけ有効 — auth.ts) なので、同じLANにいる誰でも
-// 板を読み書きでき、/mcp は認証ミドルウェアの外にある。ローカルで動かす個人用ツールに外から届く口は要らない。
-// 環境変数で開ける逃げ道は用意しない — 「開けられる」が残ると、認証が無いまま開ける日が来る
+// **待ち受けはループバックに限定する。これが唯一の防壁。**ホストを省略するとNodeの既定で
+// 全インターフェース (0.0.0.0) に開き、同じLANにいる誰でも板を読み書きできてしまう。
+// #180 で認証を廃止したので、**代わりに守るものはもう無い** — ここが開いた時点で無防備になる。
+// 環境変数で開ける逃げ道は用意しない (「開けられる」が残ると、いつか開ける日が来る)。
+// 外から使いたくなったら、認証を戻すのではなく SSH ポートフォワードやトンネルを使う
 server.listen(PORT, "127.0.0.1", () => {
   console.log(`ChatBan backend listening on http://localhost:${PORT}`);
 });

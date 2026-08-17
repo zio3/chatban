@@ -4,7 +4,7 @@ import { socket } from "../socket";
 import { gotoProject, projectIdFromUrl } from "../project";
 
 // #86: プロジェクト管理。プロジェクト = SQLiteファイル1つ。
-// 切り替えるとボード・チャット・前提情報・メンバーがまとめて入れ替わる。
+// 切り替えるとボード・チャット・前提情報がまとめて入れ替わる。
 // タスクの#IDはプロジェクトごとに1から始まる (#IDは会話の語彙なので短いほうがいい)。
 export default function ProjectSettings() {
   const [projects, setProjects] = useState<Project[]>([]);
@@ -75,7 +75,7 @@ export default function ProjectSettings() {
       <div>
         <h2 className="text-base font-bold">プロジェクト</h2>
         <p className="mt-1 text-xs text-slate-500">
-          プロジェクトごとにSQLiteファイルが分かれています。切り替えると<strong>ボード・チャット・前提情報・メンバー</strong>
+          プロジェクトごとにSQLiteファイルが分かれています。切り替えると<strong>ボード・チャット・前提情報</strong>
           がまとめて入れ替わり、タスクの番号は各プロジェクトで <span className="font-mono">#1</span> から始まります。
           コストの記録は全プロジェクト共通です。
         </p>

@@ -20,18 +20,12 @@ async function json<T>(res: Response): Promise<T> {
 /** #97: どのプロジェクトへの操作かをヘッダで明示する。
  * URLが持つ状態をそのままリクエストに載せるので、タブごとに違うプロジェクトを触っても混ざらない */
 export function apiFetch(input: string, init: RequestInit = {}): Promise<Response> {
-  // #113: セッションCookieを載せる (認証offのときは何も入っていないだけ)
-  return fetch(input, { ...init, credentials: "include", headers: { ...currentProjectHeader(), ...(init.headers ?? {}) } });
-}
-
-export interface AuthState {
-  enabled: boolean;
-  user: { email: string; name: string; picture: string } | null;
-  clientId: string;
+  // #180: 認証を廃止したのでCookieは載せない (credentials も要らない)
+  return fetch(input, { ...init, headers: { ...currentProjectHeader(), ...(init.headers ?? {}) } });
 }
 
 // #86: プロジェクト。SQLiteファイルごと分かれており、切り替えるとボード・チャット・
-// 前提情報・メンバーがまとめて入れ替わる
+// 前提情報がまとめて入れ替わる
 export interface Project {
   id: number;
   name: string;
@@ -48,14 +42,6 @@ export interface Project {
 }
 
 export const api = {
-  authMe: () => apiFetch("/api/auth/me").then((r) => json<AuthState>(r)),
-  authGoogle: (credential: string) =>
-    apiFetch("/api/auth/google", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ credential }),
-    }).then((r) => json<{ user: AuthState["user"] }>(r)),
-  authLogout: () => apiFetch("/api/auth/logout", { method: "POST" }),
   projects: () => apiFetch("/api/projects").then((r) => json<{ projects: Project[] }>(r)),
   createProject: (name: string) =>
     apiFetch("/api/projects", {

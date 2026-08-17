@@ -403,21 +403,19 @@ export function saveChatMessage(
   trace?: unknown,
   usage?: unknown,
   taskId?: number | null,
-  /** #126: 誰の発言か。email はログイン済みのときだけ (本文の名乗りではなくシステムが付ける) */
-  speaker?: { name?: string | null; email?: string | null }
+  /** #126: 誰の発言か (本文の名乗りではなくシステムが付ける)。
+   * #180 で認証を廃止したので、中身は自己申告の表示名だけ */
+  speaker?: { name?: string | null }
 ) {
   db()
-    .prepare(
-      "INSERT INTO chat_messages (role, content, trace, usage, task_id, speaker, speaker_email) VALUES (?, ?, ?, ?, ?, ?, ?)"
-    )
+    .prepare("INSERT INTO chat_messages (role, content, trace, usage, task_id, speaker) VALUES (?, ?, ?, ?, ?, ?)")
     .run(
       role,
       content,
       trace ? JSON.stringify(trace) : null,
       usage ? JSON.stringify(usage) : null,
       taskId ?? null,
-      speaker?.name ?? null,
-      speaker?.email ?? null
+      speaker?.name ?? null
     );
 }
 
@@ -527,20 +525,17 @@ export function exportAll() {
 
 /** Export に載せてよい設定だけを返す。
  *
- * settings をそのまま全行出したせいで、**セッション署名鍵 (auth.sessionSecret) が
- * 平文で入っていた** (自動レビュー指摘)。この鍵があれば任意のメールアドレス・有効期限の
- * Cookie を自分で署名でき、許可リストのメールアドレスも同じファイルに入っているので、
- * 認証を有効にしても許可ユーザーになりすませる。検証用にExportを渡しただけで、
- * 以後のセッションまで危険になる。
+ * かつて settings をそのまま全行出したせいで、**セッション署名鍵 (auth.sessionSecret) が
+ * 平文で入っていた** (自動レビュー指摘)。#180 で認証を廃止し、秘密を持つ設定は無くなったので
+ * 伏字リストは空にしてある。**関数と伏字の仕組みは残す** — Export は「検証のために人へ渡す
+ * ファイル」「記事の一次資料」なので、秘密を持つ設定を足すときはここに1行足せば済む形にしておく。
  *
- * Export は「検証のために人へ渡すファイル」「記事の一次資料」なので、
- * 渡した先で悪用できるものを載せない。**除外リストではなく伏字**にしているのは、
- * 「その設定が存在すること」自体は記録として意味があるため (どのモデルで動いていたか
- * を追う #88 の目的と同じ)。
+ * 伏せるものを列挙する向きにしてあるのは意図的。載せてよいものを決める向きにすると、
+ * 新しい設定が増えたときに黙って漏れる側へ倒れる。**除外ではなく伏字**なのは、
+ * 「その設定が存在すること」自体は記録として意味があるため (#88 と同じ目的)。
  *
- * 判定は「鍵かどうか」ではなく列挙で持つ。新しい設定が増えたときに黙って漏れる側へ
- * 倒れないよう、載せてよいものを決めるのではなく、伏せるものを明示して増やす */
-const REDACTED_SETTINGS = new Set(["auth.sessionSecret"]);
+ * 「64桁hexが素で載っていないこと」はユニットテスト側の番人が見ている (chat.test.ts) */
+const REDACTED_SETTINGS = new Set<string>();
 export function exportableSettings(): { key: string; value: string }[] {
   return (admin.prepare("SELECT * FROM settings ORDER BY key").all() as { key: string; value: string }[]).map((r) =>
     REDACTED_SETTINGS.has(r.key) ? { ...r, value: "***" } : r

@@ -95,6 +95,15 @@ CREATE TABLE IF NOT EXISTS llm_calls (
   // #172: キャッシュに「書いた」ぶん。読み(cached_tokens)と単価が違う(書き込みは1.25倍)ので別に持つ。
   // 保存しないと /api/metrics の再計算で書き込み分を読み扱いしてしまい、初回の概算が25%安く出る
   add("ALTER TABLE llm_calls ADD COLUMN cache_creation_tokens INTEGER NOT NULL DEFAULT 0");
+
+  // #180: 認証の設定を消す。**特に auth.sessionSecret は平文のセッション署名鍵**で、
+  // 読める相手は誰にでもなりすませた。使う側が消えたあとも残しておく理由が無い
+  // (使われない秘密が置きっぱなしになるのが、いちばんよくある漏れ方)。
+  // allowedEmails は個人のメールアドレスなので、Export や記事の一次資料に混ざらないよう一緒に落とす。
+  //
+  // 消えたときだけ記録する。**鍵の値そのものはログに出さない** (消した記録が漏洩経路になっては本末転倒)
+  const purged = db.prepare("DELETE FROM settings WHERE key LIKE 'auth.%'").run().changes;
+  if (purged > 0) log("schema", `認証の設定 ${purged}件 (署名鍵・許可リスト・クライアントID) を削除しました (#180)`);
 }
 
 /** #106: コスト分析はLLMにSQLを書かせる。書き込めない接続を別に持つのが安全境界
@@ -205,12 +214,10 @@ CREATE TABLE IF NOT EXISTS summary_cards (
   }
   addColumn("ALTER TABLE summary_cards ADD COLUMN frozen INTEGER NOT NULL DEFAULT 0");
   addColumn("ALTER TABLE chat_messages ADD COLUMN task_id INTEGER");
-  // #126: 誰の発言かを記録する。監査ログは「何をしたか」だけでなく「誰が言ったか」が要る。
-  // speaker=表示名 / speaker_email=ログイン済みのときだけ入る本人確認済みのアドレス。
-  // 両方持つのは、ログイン必須で展開する場合と、自分ひとりでログインなしで使う場合の
-  // 両睨みにするため — 認証があれば確かな発言者、無ければ自己申告と分かる形で残す
+  // #126: 誰の発言かを記録する。speaker=表示名 (自己申告)。
+  // かつては speaker_email (ログイン済みのときだけ入る本人確認済みアドレス) も持っていたが、
+  // 認証を廃止した #180 で列ごと落とした (下の削除マイグレーション)
   addColumn("ALTER TABLE chat_messages ADD COLUMN speaker TEXT");
-  addColumn("ALTER TABLE chat_messages ADD COLUMN speaker_email TEXT");
 
   // 「生きているタスク」をVIEWにする。外部エージェントからの指摘 —
   // 「archived=0 AND trashed_at IS NULL ORDER BY COALESCE(sort,id), id を毎回コピーしている。
@@ -251,9 +258,9 @@ CREATE VIEW live_tasks AS
    WHERE archived = 0 AND trashed_at IS NULL
    ORDER BY COALESCE(sort, id), id;`);
 
-  // #179: 担当者・割り振りを廃止。**列とテーブルごと落とす。**
+  // #179: 担当者・割り振りを廃止 / #180: 認証を廃止。**列とテーブルごと落とす。**
   //
-  // 読まないだけにして残す案を採らなかったのは、認証 (#180) と同じ理由 —
+  // 読まないだけにして残す案を採らなかったのは、認証と同じ理由 —
   // 「開けられる」が残ると、いつか開ける日が来る。スキーマに列があれば、
   // SQL窓口 (query_log) を広げた誰かが集計に使い、廃止したはずの軸が復活する。
   //
@@ -287,9 +294,13 @@ CREATE VIEW live_tasks AS
       db.exec(`DROP TABLE IF EXISTS ${t}`);
       dropped.push(t);
     }
+    // #180: 本人確認済みのメールアドレス。認証が無くなれば埋まる経路も無い。
+    // 「認証を戻したときのために取っておく」をしない — 戻さないと決めたのが #180 なので、
+    // 列だけ残すと「いつか入るかもしれない欄」になり、空欄の意味を説明し続けることになる
+    dropColumn("chat_messages", "speaker_email", dropped);
   })();
   // 消えたときだけ記録する。起動のたびに出しても意味がない
-  if (dropped.length > 0) log("schema", `${dropped.join(" / ")} を削除しました (#179 担当者の廃止)`);
+  if (dropped.length > 0) log("schema", `${dropped.join(" / ")} を削除しました (#179 担当者の廃止 / #180 認証の廃止)`);
 
   /** 列が実在するときだけ DROP し、**消えたことを確かめる**。
    * 無ければ何もしない (適用済み) / 消せなければ投げる (黙って通さない) */
@@ -300,11 +311,11 @@ CREATE VIEW live_tasks AS
       db.exec(`ALTER TABLE ${table} DROP COLUMN ${column}`);
     } catch (e: any) {
       throw new Error(
-        `${table}.${column} を削除できませんでした (#179 担当者の廃止): ${e?.message ?? e}。` +
+        `${table}.${column} を削除できませんでした: ${e?.message ?? e}。` +
           `この列を参照している index / trigger / view が残っている可能性があります`
       );
     }
-    if (has()) throw new Error(`${table}.${column} の削除が反映されていません (#179 担当者の廃止)`);
+    if (has()) throw new Error(`${table}.${column} の削除が反映されていません`);
     out.push(`${table}.${column}`);
   }
 }

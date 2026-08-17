@@ -1025,11 +1025,11 @@ test("全ログExportは人が読める形で返る (改行とインデント)",
   expect(text).toContain('\n  "'); // トップレベルのキーが2スペース下がっている
   expect(() => JSON.parse(text)).not.toThrow(); // 整形してもJSONとして壊れていない
 
-  // Exportは人に渡すファイル。セッション署名鍵が平文で入っていると、
-  // 渡した先で任意のメールアドレスのCookieを偽造できる
+  // Exportは人に渡すファイル。かつてセッション署名鍵が平文で入っており、渡した先で
+  // 任意のメールアドレスのCookieを偽造できた。#180 で認証ごと廃止したので鍵は存在しないが、
+  // **番人は残す** (秘密を持つ設定が増えたときに落ちる側にしておく)
   const dump = JSON.parse(text) as { settings: { key: string; value: string }[] };
-  const secret = dump.settings.find((r) => r.key === "auth.sessionSecret");
-  if (secret) expect(secret.value).toBe("***");
+  expect(dump.settings.some((r) => r.key.startsWith("auth."))).toBe(false);
   expect(text).not.toMatch(/"[0-9a-f]{64}"/); // 64桁hexが素で出ていない
 });
 

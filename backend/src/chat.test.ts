@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { extractChoices } from "./chat.js";
 import { differs } from "./archive.js";
 import { readFileSync } from "node:fs";
-import { isAllowed, pickSpeaker, readCookie } from "./auth.js";
+import { pickSpeaker } from "./speaker.js";
 import { tools } from "./chat.js";
 import { DONE_GATE_RULE, exportableSettings, isTaskStatus, mayEnterDone } from "./db.js";
 import { AGENT_STATUS_VALUES } from "./chat.js";
@@ -71,64 +71,26 @@ test("同じ件数でも中身が違えば捨てる", () => {
   assert.equal(differs([1, 3], [1, 2]), true);
 });
 
-// #126: 発言者はシステムが決める。以前はメインチャットだけがセッションを見ていて、
-// タスクチャットはリクエストの speaker を素通ししていたため、ログイン中でも
-// 任意の名前を名乗れた。判断を1か所 (pickSpeaker) に寄せたので、ここで押さえる。
+// #126 → #180: 発言者はシステムが決める。以前はメインチャットとタスクチャットで
+// 決め方が別々で、片方は保存すらしていなかった。判断を1か所 (pickSpeaker) に寄せてある。
+// 認証を廃止したので中身は「自己申告の正規化」だけになったが、**入口が2つあることは変わらない**
+// ので関数は残す (入口ごとに書き分けると必ずズレる #92 #108 #114 #125)。
 
-const me = { email: "sato@example.com", name: "佐藤", picture: null } as any;
-
-test("ログイン済みなら自己申告より本人を優先する", () => {
-  assert.deepEqual(pickSpeaker(me, "田中"), { name: "佐藤", email: "sato@example.com" });
-});
-
-test("ログインしていなければ自己申告を使うが、emailは付けない (未検証の印)", () => {
-  assert.deepEqual(pickSpeaker(null, "田中"), { name: "田中", email: null });
+test("名乗っていればそれを使う", () => {
+  assert.deepEqual(pickSpeaker("田中"), { name: "田中" });
 });
 
 test("名乗りが無ければ発言者なし", () => {
-  assert.deepEqual(pickSpeaker(null, undefined), { name: null, email: null });
-  assert.deepEqual(pickSpeaker(null, ""), { name: null, email: null });
-  assert.deepEqual(pickSpeaker(null, { name: "偽" }), { name: null, email: null });
+  assert.deepEqual(pickSpeaker(undefined), { name: null });
+  assert.deepEqual(pickSpeaker(""), { name: null });
+  assert.deepEqual(pickSpeaker("   "), { name: null });
 });
 
-// #113: セッションCookieは最大30日有効なので、許可リストから外した相手が
-// 最長1か月そのまま入れてしまう (自動レビュー指摘)。リクエストごとに突き合わせる。
-
-test("リストに載っていれば通す (大文字小文字は区別しない)", () => {
-  assert.equal(isAllowed("Sato@Example.com", ["sato@example.com"]), true);
-});
-
-test("外された相手は通さない (セッションが生きていても)", () => {
-  assert.equal(isAllowed("sato@example.com", ["tanaka@example.com"]), false);
-});
-
-test("一度も設定していなければ通す (null) — ここで閉じると設定タブごと詰む", () => {
-  assert.equal(isAllowed("sato@example.com", null), true);
-});
-
-// 「まだ設定していない」と「管理者が全員を外した」を同じ空リスト扱いにしていたため、
-// 権限を全部消す操作が逆に認証を開けっぱなしにしていた (自動レビュー指摘)。
-// 一番強い禁止操作が一番緩い結果を生むのは、どう考えても逆
-test("明示的に空にしたら誰も通さない (全員外す = 誰も通すなという意思表示)", () => {
-  assert.equal(isAllowed("sato@example.com", []), false);
-});
-
-// 認証onのSocket.IOハンドシェイクは、認証を通らない相手の生Cookieを最初に触る場所。
-// decodeURIComponent が URIError を投げると socket.io は捕まえず uncaughtException になり、
-// Cookieを1回送られるだけでプロセスが落ちた (実測。自動レビュー指摘)。
-
-test("壊れたパーセントエンコードは投げずに「無い」を返す", () => {
-  assert.equal(readCookie("chatban_session=%E0%A4%A", "chatban_session"), null);
-});
-
-test("正常な値はデコードして返す", () => {
-  assert.equal(readCookie("chatban_session=a%2Eb", "chatban_session"), "a.b");
-});
-
-test("他のCookieに混ざっていても取れる。無ければnull", () => {
-  assert.equal(readCookie("x=1; chatban_session=tok; y=2", "chatban_session"), "tok");
-  assert.equal(readCookie("x=1; y=2", "chatban_session"), null);
-  assert.equal(readCookie(undefined, "chatban_session"), null);
+test("文字列でないものは名乗りとして扱わない", () => {
+  // JSONで何を送られても落ちない。オブジェクトをそのまま名前にすると [object Object] が記録に残る
+  assert.deepEqual(pickSpeaker({ name: "偽" }), { name: null });
+  assert.deepEqual(pickSpeaker(42), { name: null });
+  assert.deepEqual(pickSpeaker(null), { name: null });
 });
 
 // Doneへ入れる条件。PR #1 では検収API (approveChecked) だけが持っていたため、
@@ -187,13 +149,16 @@ test("知らない値は列として認めない", () => {
 
 // Export は「検証のために人へ渡すファイル」「記事の一次資料」。settings を全行そのまま
 // 出していたため、セッション署名鍵が平文で入っていた (自動レビュー指摘)。
-// 鍵があれば任意のメールアドレスでCookieを偽造でき、許可リストも同じファイルにある。
+// #180 で認証ごと廃止し、いま settings に秘密は無い。**それでもこの番人は残す** —
+// 秘密を持つ設定が増えたときに、伏字リストへの追加を忘れたら落ちる側にしておく。
 
-test("Exportに署名鍵の実物を載せない", () => {
+test("Exportに秘密らしき値を素で載せない", () => {
   const rows = exportableSettings();
-  const secret = rows.find((r) => r.key === "auth.sessionSecret");
-  // 環境によっては未発行 (一度もログインしていない) ので、有るときだけ確かめる
-  if (secret) assert.equal(secret.value, "***");
+  assert.equal(
+    rows.find((r) => r.key === "auth.sessionSecret"),
+    undefined,
+    "認証は #180 で廃止した。auth.sessionSecret が残っているなら削除が漏れている"
+  );
   for (const r of rows) assert.ok(!/^[0-9a-f]{64}$/.test(r.value), `${r.key} に64桁hexが素で載っている`);
 });
 

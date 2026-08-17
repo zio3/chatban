@@ -1,9 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { api, apiFetch, type AuthState, type Project } from "./api";
+import { api, apiFetch, type Project } from "./api";
 import { ensureProjectInUrl, gotoProject, projectIdFromUrl } from "./project";
 import AuditView from "./components/AuditView";
 import Board, { type MovePayload } from "./components/Board";
-import LoginView from "./components/LoginView";
 import Chat, { type Suggestion } from "./components/Chat";
 import ContextView from "./components/ContextView";
 import MetricsView from "./components/MetricsView";
@@ -12,7 +11,7 @@ import TrashView from "./components/TrashView";
 import TaskDetailPanel from "./components/TaskDetailPanel";
 import { useChatTurn } from "./hooks/useChatTurn";
 import type { Attachment } from "./hooks/useAttachments";
-import { socket, disconnectSocket } from "./socket";
+import { socket } from "./socket";
 import type { ChatEntry, SummaryCard, Task } from "./types";
 
 interface Toast {
@@ -34,14 +33,6 @@ export default function App() {
   // #21/#33: ボード以外の閲覧ビューへの遷移 (簡易タブ)
   const [view, setView] = useState<"board" | "context" | "metrics" | "audit" | "settings" | "trash">("board");
 
-  // #113: ログインは任意。していれば右上に誰として入っているかが出る。
-  // enabled は「必須にするか」のフラグで、既定オフ = ログインしなくても使える
-  const [auth, setAuth] = useState<AuthState | null>(null);
-  const [loginOpen, setLoginOpen] = useState(false);
-  const loadAuth = useCallback(() => api.authMe().then(setAuth).catch(() => setAuth(null)), []);
-  useEffect(() => {
-    loadAuth();
-  }, [loadAuth]);
   // #93: チャットは常設なので、いま見ている画面をメタ情報としてLLMへ渡す (発言者と同じ扱い)
   const viewRef = useRef(view);
   viewRef.current = view;
@@ -73,7 +64,7 @@ export default function App() {
     [mainChat.send]
   );
 
-  // #86: プロジェクト一覧。切り替えるとボード・チャット・前提情報・メンバーが総取っ替えになる
+  // #86: プロジェクト一覧。切り替えるとボード・チャット・前提情報が総取っ替えになる
   const [projects, setProjects] = useState<Project[]>([]);
   const loadProjects = useCallback(() => {
     api
@@ -100,27 +91,9 @@ export default function App() {
     }
   }, []);
 
-  // #173: ログインが済んだ直後にやること。**ログイン前に張ったソケットは死んでいる** —
-  // 認証ありのサーバーでは io.use が unauthorized で弾き、socket.io-client は
-  // ハンドシェイク拒否だと購読ごと捨てて二度と繋ぎ直さない (socket.ts の注記)。
-  // Cookieが付いた状態で繋ぎ直し、その間に取りこぼしたぶんを読み直しで埋める。
-  // これをしないと「チャットは応答するのにカードが動かない」ままになる
-  const onLoggedIn = useCallback(async () => {
-    await loadAuth();
-    if (!socket.connected) socket.connect();
-    reload();
-    loadProjects();
-  }, [loadAuth, reload, loadProjects]);
-
-  // #173: ログアウト時。**Cookieを消してもソケットは繋がったまま** — サーバーは
-  // ハンドシェイク時にしか認証を見ないので、切らないとログアウト後も board:changed が
-  // 届き続ける (Codexレビュー指摘)。認証が必須の構成でだけ切る:
-  // ログイン任意の構成 (ローカル/既定) は未認証接続をそもそも許しているので、
-  // ここで切ってもふさげるものが無く、ライブ更新が止まるだけになる
-  const onLoggedOut = useCallback(async () => {
-    if (auth?.enabled) disconnectSocket();
-    await loadAuth();
-  }, [auth?.enabled, loadAuth]);
+  // #173 → #180: ログイン/ログアウト時のソケット繋ぎ直しはここにあったが、認証ごと廃止した。
+  // 「繋ぎ直した直後に読み直して追いつく」処理 (下の onConnect) は**残す** —
+  // あれはログイン起因ではなく、通信断からの復帰でも同じ取りこぼしが起きるため
 
   useEffect(() => {
     reload();
@@ -346,11 +319,6 @@ export default function App() {
   // 「切り替えたら詳細パネルもフィルタも検収チェックも落とす」を手で書いていたが、
   // URLに状態を持たせたら読み込み直しで自然に消える — 状態の置き場所を変えると後始末が消える例
 
-  // #113: enabled は「ログインを必須にするか」。既定オフ = ログインしなくても使えるが、
-  // ログインしたい人はヘッダーからできる (デモで「Googleでログインしている」事実を見せる用)
-  if (auth?.enabled && !auth.user)
-    return <LoginView clientId={auth.clientId} onLoggedIn={onLoggedIn} />;
-
   return (
     <div className="flex h-full bg-slate-100 text-slate-900">
       <div className="flex min-w-0 flex-1 flex-col">
@@ -358,7 +326,7 @@ export default function App() {
         <div className="flex items-baseline gap-3">
           <h1 className="text-lg font-bold tracking-tight">ChatBan</h1>
           {/* #86: プロジェクト切替。SQLiteファイルごと分かれているので、選び直すと
-              ボード・チャット・前提情報・メンバーがまとめて入れ替わる */}
+              ボード・チャット・前提情報がまとめて入れ替わる */}
           <select
             data-testid="project-select"
             value={projectIdFromUrl() ?? projects.find((p) => p.active)?.id ?? ""}
@@ -396,52 +364,9 @@ export default function App() {
             ))}
           </span>
         </div>
-        {/* #179: ここに担当フィルタのチップが並んでいた。担当という軸が無くなったので撤去。
-            右端のアカウント表示は残す (以前この行ごと隠して巻き添えで消したことがある) */}
-        <div className="flex flex-wrap items-center gap-1 text-sm">
-          {/* #113: ログインしていれば誰として入っているかを出す。していなければ入口だけ置く。
-              どちらでも操作は同じ (ログインは任意) */}
-          {auth?.user ? (
-            <span className="ml-2 flex items-center gap-1.5" data-testid="account">
-              {auth.user.picture ? (
-                <img src={auth.user.picture} alt="" className="h-6 w-6 rounded-full" referrerPolicy="no-referrer" />
-              ) : (
-                <span className="flex h-6 w-6 items-center justify-center rounded-full bg-slate-300 text-[10px]">
-                  {auth.user.name.slice(0, 1)}
-                </span>
-              )}
-              <span className="text-xs text-slate-600" title={auth.user.email}>
-                {auth.user.name}
-              </span>
-              <button
-                data-testid="logout"
-                onClick={() => api.authLogout().then(onLoggedOut)}
-                className="rounded-full bg-slate-200 px-2 py-0.5 text-[11px] hover:bg-slate-300"
-              >
-                ログアウト
-              </button>
-            </span>
-          ) : (
-            <button
-              data-testid="login"
-              onClick={() => setLoginOpen(true)}
-              className="ml-2 rounded-full bg-slate-200 px-3 py-1 text-xs hover:bg-slate-300"
-            >
-              ログイン
-            </button>
-          )}
-        </div>
+        {/* #179: ここに担当フィルタのチップが並んでいた (担当という軸ごと撤去)。
+            #180: 右端にあったアカウント表示とログイン/ログアウトも、認証の廃止で消えた */}
       </header>
-      {loginOpen && auth && (
-        <LoginView
-          clientId={auth.clientId}
-          onLoggedIn={() => {
-            setLoginOpen(false);
-            onLoggedIn();
-          }}
-          onClose={() => setLoginOpen(false)}
-        />
-      )}
       <main className="min-h-0 flex-1 overflow-auto p-3">
         {view === "context" && <ContextView />}
         {view === "metrics" && <MetricsView />}

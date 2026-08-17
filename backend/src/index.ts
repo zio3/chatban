@@ -38,6 +38,7 @@ import {
   getProjectContextRow,
   getTask,
   listChatMessages,
+  listUnfoldedDoneIds,
   listSummaryCards,
   listTasks,
   saveChatMessage,
@@ -630,4 +631,35 @@ app.delete(["/mcp", "/mcp/:projectId"], (_req, res) => res.status(405).json({ er
 // 外から使いたくなったら、認証を戻すのではなく SSH ポートフォワードやトンネルを使う
 server.listen(PORT, "127.0.0.1", () => {
   console.log(`ChatBan backend listening on http://localhost:${PORT}`);
+  sweepUnfoldedDone();
 });
+
+/** #195: 畳み損なったDone (`status=done AND archived=0`) を起動時に拾い直す。
+ *
+ * 要約処理は fire-and-forget で走り、`archived=1` が付くのは `rollUpOldCards()` を
+ * await したあと。**その間にプロセスが止まるとジョブは失われ、拾い直す者が居なかった** —
+ * Doneのカードがボードに居座り、要約にも入らないまま完了扱いになる (Codexレビューで発覚 / #175)。
+ *
+ * 置き方で決めたこと:
+ *
+ * - **listen のあとに、待たずに投げる。**中でLLMを呼ぶので (15〜30秒、キーが無ければ失敗する)、
+ *   起動と同期にすると**設定が無いだけで画面が開かなくなる** (#182 で遅延読み込みにした狙いが崩れる)
+ * - **プロジェクトを1つずつ、そのスコープの中で見る。**DBがファイルで分かれているので、
+ *   `withProject` に入らないと別プロジェクトの状況を読んでしまう (#98 と同じ形)
+ * - **見つからなければ黙る。**毎回の起動でログが1行増えるのは、何も起きていない証拠ではなく
+ *   ノイズ。異常だけを言う (`reportOrphanFiles` と同じ扱い)
+ * - **AUTO_ARCHIVE=0 のときは何もしない。**E2Eは「畳まれないDone」を前提にした試験
+ *   (#175: live_tasks と done_tasks の両方に出る状態) を持っているので、掃除すると壊れる */
+function sweepUnfoldedDone(): void {
+  if (process.env.AUTO_ARCHIVE === "0") return;
+  for (const p of listProjects()) {
+    const ids = withProject(p.id, () => listUnfoldedDoneIds());
+    if (ids.length === 0) continue;
+    log("archive", `畳み損なったDoneを拾い直します (project #${p.id}): #${ids.join(", #")}`);
+    // 完了時と同じ経路を通す (カード作成→アーカイブ→要約)。失敗しても起動は続ける —
+    // 拾えなければ次の起動でまた見つかるだけで、状態は悪化しない
+    withProject(p.id, () => onTasksCompleted(ids))
+      .then(() => broadcastBoard(p.id))
+      .catch((e) => log("archive", `拾い直しに失敗 (project #${p.id}): ${e?.message ?? e}`));
+  }
+}

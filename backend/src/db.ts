@@ -243,6 +243,25 @@ export function updateTask(id: number, patch: TaskPatch): Task | undefined {
  * 自然言語UIでは解釈ミスが必ず起きる。「消せます?」が delete_tasks を呼んで実データが消えた事故を受け、
  * 「間違えないようにする」のではなく「間違えても取り返しがつく」形に変えた。
  * プロンプトの確認ルールは漏れるが、消えていないという事実は漏れない (#69 done封鎖と同じ考え方) */
+/** #195: **畳み損なったDone。**Doneへ確定すると `done_at` が入り、そのあと非同期の
+ * 要約処理が `archived=1` を付けてボードから外す。この2つは別の書き込みで、間に
+ * `rollUpOldCards()` の await が入る — **その間にプロセスが止まればジョブは失われる**。
+ *
+ * 結果、`status='done'` なのに `archived=0` のタスクが残り、
+ *   - ボードにDoneのカードが居座る (人間には「検収が効いていない」ように見える)
+ *   - 要約カードに入らないので、**蒸留されないまま完了扱いになる** (Doneの意味が崩れる)
+ *   - live_tasks と done_tasks の両方に出続ける (#175 で契約に書いた状態が無期限に続く)
+ *
+ * 起動時にこれを拾い直すために、探す口だけをここに置く (拾ってどうするかは index.ts)。
+ * **判定は3つとも要る** — trashed_at を見ないと、ゴミ箱に入れたDoneまで畳み直してしまう */
+export function listUnfoldedDoneIds(): number[] {
+  return (
+    db()
+      .prepare("SELECT id FROM tasks WHERE status = 'done' AND archived = 0 AND trashed_at IS NULL ORDER BY id")
+      .all() as { id: number }[]
+  ).map((r) => r.id);
+}
+
 export function trashTask(id: number): boolean {
   return (
     db()

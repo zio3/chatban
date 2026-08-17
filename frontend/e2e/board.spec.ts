@@ -1082,14 +1082,18 @@ test("Originの付かないブラウザGET (<img>相当) も断る。有料の�
   expect(ok.status).toBe(200);
 });
 
-test("お金が動く口はGETに置かない (#180)", async () => {
-  // GET のままだと、悪意あるページが <img src> で撃つだけで課金を増やせる
-  // (#181 で models / metrics は撤去したので、残るのは suggestions だけ)。
+test("有料のLLM呼び出しを起こす口はGETに置かない (#180)", async () => {
+  // GET のままだと、悪意あるページが <img src> で撃つだけで課金を増やせる。
+  // **有料経路を明示的に列挙する** — suggestions だけを見ていると、他の経路が
+  // GETで足されたときに気づけない (自動レビュー指摘。実際 chat と タスクチャットも有料経路)。
+  // #181 で撤去した models / metrics は別のテストが404を固定している
   //
   // **このテストが保証するのは「GETのルートが存在しないこと」だけ。**POST側が機能することは
   // ここでは確かめない — 有料のLLM呼び出しが走るため。E2Eは「LLM呼び出しなし」が原則
-  const res = await fetch(`${API}/api/suggestions`);
-  expect(res.status).toBe(404);
+  for (const path of ["/api/suggestions", "/api/chat", "/api/tasks/1/chat"]) {
+    const res = await fetch(`${API}${path}`);
+    expect(res.status, `${path} がGETで叩ける`).toBe(404);
+  }
 });
 
 test("知らないページからのSocket接続はハンドシェイクで断る (#180)", async () => {
@@ -1401,19 +1405,41 @@ test("SQL窓口は許可リスト方式。載っていないものは名前も�
 });
 
 test("ツール説明に書いてあるテーブルは、実際に引けるものと一致する (#168)", async () => {
-  // 説明と実装のズレは #92 #108 #114 で3回踏んでいる。今度は許可リストが唯一の出所なので、
-  // 説明に載っているのに引けない / 引けるのに載っていない、が起きないことを確かめる
-  const listed = (await mcp("query_log", { sql: "SELECT * FROM settings" })) as any;
-  expect(listed.error).toBeTruthy();
+  // 説明と実装のズレは #92 #108 #114 で3回踏んでいる。許可リストが唯一の出所なので、
+  // 説明に載っているのに引けない / 引けるのに載っていない、の**両方向**を見る。
+  //
+  // ハードコードした一覧と突き合わせる形はやめた (自動レビュー指摘) — 説明から表名が落ちても、
+  // こちらの一覧を直さなければ通ってしまう。**許可リストの実物は、拒否メッセージが列挙している**
+  // ので、そこから取り出して突き合わせる (実行時の値が出所になる)
+  const blocked = (await mcp("query_log", { sql: "SELECT * FROM sqlite_sequence" })) as any;
+  expect(blocked.error).toContain("参照できません");
+  const allow = String(blocked.error)
+    .match(/引けるのは (.+?) だけです/)?.[1]
+    .split(" / ")
+    .map((s) => s.trim()) ?? [];
+  expect(allow.length, "拒否メッセージから許可リストを読み取れない (文言が変わった?)").toBeGreaterThan(3);
 
-  // **許可リストの全項目を挙げる。**1つでも漏らすと、そのテーブルが説明から落ちても気づけない
-  // (実際 project_context がここと説明から漏れていた。自動レビュー指摘)。
-  // このテストが見るのは「説明に載っている → 引ける」の一方向で、逆方向 (引けるのに説明に無い) は
-  // 見ていない — E2Eからは許可リストを読めないため。増やすときは両方に足すこと
-  for (const t of ["live_tasks", "done_tasks", "tasks", "chat_messages", "summary_cards", "project_context"]) {
+  // ツール説明の実物を取ってくる
+  const res = await fetch(`${API}/mcp/1`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream" },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+  });
+  const body = await res.text();
+  const line = body.split("\n").find((l) => l.startsWith("data: ")) ?? body;
+  const tools = JSON.parse(line.replace(/^data: /, "")).result.tools as any[];
+  const desc = tools.find((t) => t.name === "query_log").description as string;
+
+  for (const t of allow) {
+    // 引けるのに説明に無い = エージェントは存在を知らないまま
+    expect(desc, `${t} は引けるのに説明に書いていない`).toContain(t);
+    // 説明に在るのに引けない = 案内どおりに書いたら失敗する
     const r = await mcp("query_log", { sql: `SELECT * FROM ${t} LIMIT 1` });
     expect(r.error, `${t} は説明に載っているのに引けない`).toBeFalsy();
   }
+
+  // 機密は説明にも載っていない (載っていて引けない、を「一致」と呼ばないため)
+  expect(desc).not.toContain("settings");
 });
 
 test("AI提案チップはプロジェクトごとにOFFにできる。OFFなら提案は空で返る (#167)", async ({ page }) => {

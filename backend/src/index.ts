@@ -33,6 +33,7 @@ import {
   listProjects,
   projectSummaries,
   renameProject,
+  ensureInitialProject,
   reportOrphanFiles,
   setActiveProjectId,
   setProjectArchived,
@@ -72,6 +73,7 @@ const PORT = Number(process.env.PORT ?? 8787);
 
 // #108: DBに触る前にタイムゾーンを確かめる。ずれたまま書き込むと元に戻せない
 assertTimezone();
+ensureInitialProject();
 reportOrphanFiles();
 
 const app = express();

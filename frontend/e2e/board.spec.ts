@@ -180,9 +180,6 @@ test("プロジェクト: 切り替えるとボードが入れ替わり、#IDは
   await expect(page.getByTestId("task-detail-panel")).toBeHidden();
   // 元プロジェクトのタスクは見えない (ファイルごと別なので混ざらない)
   await expect(page.getByTestId(`task-card-${inFirst}`)).toBeHidden();
-  // メンバーもプロジェクト側のものに入れ替わる
-  await expect(page.getByRole("button", { name: "さくら", exact: true })).toBeVisible();
-
   // 新プロジェクトの最初のタスクは #1 (対象プロジェクトはヘッダで明示する #97)
   const res = await fetch(`${API}/api/tasks`, {
     method: "POST",

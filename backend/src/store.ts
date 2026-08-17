@@ -547,6 +547,22 @@ export function trashProject(id: number): void {
   log("project", `trashed #${id} ${row.name} -> data/trash/`);
 }
 
+/** まっさらな環境なら、既定のプロジェクトを1つ作る。
+ *
+ * #179 で旧DBの移行コードを消したとき、この初期化がその関数に同居していたため
+ * 一緒に消えてしまい、**空の data ディレクトリでサーバーが起動しなくなった**
+ * (activeProjectId が「プロジェクトが1つもありません」で落ちる)。E2Eは毎回
+ * データを消してから起動するので、52件が丸ごと落ちて気づいた。
+ *
+ * 移行と初期化は別の責務。片方を消してももう片方が残る形にしておく */
+export function ensureInitialProject(): void {
+  if (listProjects().length > 0) return;
+  const p = insertProject("マイプロジェクト");
+  projectDb(p.id); // ここで ensureProjectSchema が当たる
+  setActiveProjectId(p.id);
+  log("project", `initialized empty project #${p.id}`);
+}
+
 /** 起動時に孤児ファイルを拾わないための健全性チェック (ログのみ) */
 export function reportOrphanFiles(): void {
   if (!existsSync(PROJECT_DIR)) return;

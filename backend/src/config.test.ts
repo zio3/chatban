@@ -311,6 +311,32 @@ test("JSONや引用符の中でも、周りの構造を壊さずに値だけ伏�
   );
 });
 
+// **伏せすぎると障害の手がかりが消える** (Codexレビュー指摘)。
+// Messages経路は上流のJSONをそのまま本文に載せるので**空白が1つも無い**。
+// 「空白まで」で取ると、キーが途中のフィールドにあるときに末尾まで飲み込み、
+// type や request_id まで消えた。**キーの後ろに構造が続くケース**で見る
+test("キーの後ろに続くJSONのフィールドは残す (type や request_id を消さない)", () => {
+  const key = "sk-ant-api03-REALSECRETVALUE-abcdefghijklmnop-IgAA";
+  const body =
+    `{"error":{"message":"invalid key sk-ant-a****…IgAA","type":"authentication_error"},"request_id":"req_123"}`;
+  const out = redactSecrets(body, [key]);
+  assert.equal(
+    out,
+    `{"error":{"message":"invalid key ***","type":"authentication_error"},"request_id":"req_123"}`
+  );
+  // 伏せる側と残す側を別々に言う (どちらかだけ通ると気づけない)
+  assert.ok(!out.includes("IgAA"), "キーの末尾が残っている");
+  assert.ok(out.includes("authentication_error"), "エラー種別が消えている");
+  assert.ok(out.includes("req_123"), "request_id が消えている");
+});
+
+test("マスクが早く始まる形も伏せる (コメントで救うと書いた例そのもの)", () => {
+  // 「12文字以上のキーらしい並び」「8文字以上」を要求していたときは、どちらも
+  // これを取りこぼしていた — **救えると書きながら救えていなかった**
+  assert.equal(redactSecrets("upstream: sk-abc***…xyz bad", []), "upstream: *** bad");
+  assert.equal(redactSecrets(`{"key":"sk-ab****"}`, []), `{"key":"***"}`);
+});
+
 test("設定に無いキーでも sk- の形なら伏せる (保険)", () => {
   const out = redactSecrets("upstream said: sk-proj-AbCdEfGhIjKlMnOpQrStUv is invalid", []);
   assert.equal(out, "upstream said: *** is invalid");

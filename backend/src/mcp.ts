@@ -35,6 +35,7 @@ import {
   setProjectContext,
   updateTasks,
 } from "./db.js";
+import { boardDelta } from "./boardState.js";
 import { archiveState } from "./hooks.js";
 import { contextReference, contextTemplateHint, currentProjectId, getProject } from "./store.js";
 import type { TaskStatus } from "./types.js";
@@ -53,6 +54,31 @@ const flexBool = z.preprocess(
 
 function text(data: unknown) {
   return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] };
+}
+
+// #150: 書き込みの応答に「前回見たとき以降の変化」を同梱する。
+// 差分を専用の道具だけにすると「取りに行こうと思ったとき」しか更新されないが、
+// **間違えているときは取りに行こうと思っていない** (思い込んでいるからこそ間違えている)。
+// エージェントは作業中に必ず何かを書くので、そこに相乗りさせれば追加の往復ゼロで最新が届く。
+const SINCE_ON_WRITE = z
+  .string()
+  .optional()
+  .describe(
+    "直前に受け取った状況ID。渡すと、その後にボードで起きた変化 (他所からの更新を含む) が応答に一緒に返る。" +
+      "自分の書き込み結果とは別物で、**自分が見ていない間に何が動いたか**が分かる"
+  );
+
+/** 書き込み応答に載せるボードの動き。全件が要るほど変わっていたら get_board へ誘導する (応答を重くしない) */
+function boardUpdate(since?: string) {
+  const d = boardDelta(since);
+  if (!d.full) return { stateId: d.stateId, ...(d.changes?.length ? { changesSince: d.changes } : {}) };
+  if (!since) return { stateId: d.stateId };
+  // 差分を返せなかったとき、**新しい状況IDを渡さない。**
+  // 渡すとエージェントはそれを次の since に使い、「変化なし」が返って
+  // 全件を一度も見ないまま古い認識のまま進む (自動レビュー指摘)
+  return {
+    note: `${d.note ?? "差分を返せなかった"}。since を付けずに get_board を呼び、全体を取り直すこと`,
+  };
 }
 
 /** #108: 更新結果は要点だけ返す。以前は context を含む全フィールドが返っており、
@@ -110,14 +136,20 @@ export function buildMcpServer(onEvent: (kind: "board" | "proposals") => void): 
             blocked_by: z.array(z.number().int()).optional().describe(BLOCKED_BY_DESCRIPTION),
           })
         ),
+        since: SINCE_ON_WRITE,
       },
     },
-    async ({ tasks }) => {
+    async ({ tasks, since }) => {
       // #114: 書き込みは agentWrite に集約。以前はMCP側にガードが無く、
       // done指定がそのまま通って「AIが自主的にDoneへ移動」する事故が起きた
       const r = createTasksAsAgent(tasks as any);
       onEvent("board");
-      return text({ ok: true, created: (r.created as any[]).map((t: any) => brief(t, isPersonal)), ...(r.note ? { note: r.note } : {}) });
+      return text({
+        ok: true,
+        created: (r.created as any[]).map((t: any) => brief(t, isPersonal)),
+        ...(r.note ? { note: r.note } : {}),
+        ...boardUpdate(since),
+      });
     }
   );
 
@@ -153,9 +185,10 @@ export function buildMcpServer(onEvent: (kind: "board" | "proposals") => void): 
             rejected: flexBool.describe(REJECTED_DESCRIPTION),
           })
         ),
+        since: SINCE_ON_WRITE,
       },
     },
-    async ({ updates }) => {
+    async ({ updates, since }) => {
       const { ok, status, updated, note, conflicts, notFound } = updateTasksAsAgent(updates as any);
       onEvent("board");
       return text({
@@ -168,6 +201,7 @@ export function buildMcpServer(onEvent: (kind: "board" | "proposals") => void): 
         ...(conflicts ? { conflicts } : {}),
         ...(notFound ? { notFound } : {}),
         ...(note ? { note } : {}),
+        ...boardUpdate(since),
       });
     }
   );
@@ -311,6 +345,46 @@ export function buildMcpServer(onEvent: (kind: "board" | "proposals") => void): 
           note: "前提情報が他から更新されています。返した text に自分の変更をマージし、この version を添えて再実行してください",
         });
       return text({ ok: true });
+    }
+  );
+
+  server.registerTool(
+    "get_board",
+    {
+      description:
+        "ボードの現在の状況と**状況ID**を返す。作業を始める前に一度呼ぶ。" +
+        "状況IDを since に渡すと、そのとき以降に変わったぶんだけが返る (#4 は todo -> inprogress のような形)。" +
+        "**自分が最後に読んだ一覧は古くなっている**ので、間が空いたときや他所の変更が入りうるときは、記憶で判断せずこれを呼ぶこと。" +
+        "since が保持期間(60分)を過ぎていても失敗しない — 黙って最新の全件と新しい状況IDが返るので、そのまま使い直せばよい。",
+      inputSchema: {
+        since: z
+          .string()
+          .optional()
+          .describe("前回この道具が返した状況ID。省略すると全件返る"),
+      },
+    },
+    async ({ since }) => {
+      const d = boardDelta(since);
+      if (!d.full) {
+        return text({
+          stateId: d.stateId,
+          since: d.since,
+          changes: d.changes,
+          ...(d.changes && d.changes.length === 0 ? { note: "前回の状況IDから変化なし" } : {}),
+        });
+      }
+      return text({
+        stateId: d.stateId,
+        ...(d.note ? { note: d.note } : {}),
+        project: currentProject(),
+        projectContext: getProjectContext() ?? "",
+        tasks: listTasks().map((t) => brief(t, isPersonal)),
+        summaryCards: listSummaryCards().map((c) => ({
+          id: c.id,
+          title: c.title,
+          elements: c.elements.map((e) => e.text),
+        })),
+      });
     }
   );
 

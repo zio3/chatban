@@ -4,21 +4,16 @@ import { cleanAgentText } from "./text.js";
 import { compactArchive } from "./archive.js";
 import { getBoardPromptSection } from "./promptState.js";
 import {
-  assignmentHistory,
-  createProposal,
   createTask,
   restoreTask,
   trashTask,
   getTask,
-  listPendingProposals,
   listSummaryCards,
   listTasks,
-  memberLoads,
   queryLlmCalls,
   queryLogHelp,
   queryProjectData,
   reorderTasks,
-  resolveProposal,
   searchTasks,
   setProjectContext,
   updateTask,
@@ -70,23 +65,21 @@ export const QUERY_LOG_DESCRIPTION = [
   "2つのscopeは分離ポリシーが違う。cost=全プロジェクト横断 (LLMの請求は口座単位なので、プロジェクトで割ると総額が出せない。project_id 列で絞り込みは可能) / audit=接続中のプロジェクトのみ (別プロジェクトのタスクや会話は見えない)",
   "scope='cost': llm_calls — id, purpose(chat/suggest/archive-decompose/archive-title), model, routed_model, prompt_tokens, completion_tokens, cached_tokens, cache_creation_tokens, elapsed_ms, project_id, price_in_per_m, price_out_per_m, estimated_usd, created_at",
   "cached_tokens=キャッシュから読んだ入力 / cache_creation_tokens=キャッシュに書いた入力。単価が違う(読みは定価の約10%、書きは1.25倍)ので合算しない。prompt_tokens はどちらも含んだ総入力",
-  "scope='audit': このプロジェクトの記録。chat_messages(id, role, content, trace, usage, task_id, speaker, speaker_email, created_at。speaker=発言者の表示名 / speaker_email=ログイン済みのときだけ入る本人確認済みアドレス。本文中の名乗りではなくシステムが付けた値) / assignment_history(task_title, assignee, note, created_at) / proposals(task_id, assignee, reason, status, created_at) / summary_cards(id, title, elements, task_ids, frozen, created_at)",
-  "scope='audit' の tasks(id, title, status, assignee, assign_reason, summary, context, context_version, due, blocked_by, rejected, checked_at, done_at, trashed_at, sort, archived, summary_card_id, created_at, updated_at)",
+  "scope='audit': このプロジェクトの記録。chat_messages(id, role, content, trace, usage, task_id, speaker, speaker_email, created_at。speaker=発言者の表示名 / speaker_email=ログイン済みのときだけ入る本人確認済みアドレス。本文中の名乗りではなくシステムが付けた値) / summary_cards(id, title, elements, task_ids, frozen, created_at)",
+  "scope='audit' の tasks(id, title, status, summary, context, context_version, due, blocked_by, rejected, checked_at, done_at, trashed_at, sort, archived, summary_card_id, created_at, updated_at)",
   "checked_at = 人が実物で確かめた日時 (nullなら未検収)。status とは別物で、done は列が動いたこと・checked_at は検収が進んだこと。片方からもう片方を推測しない。この窓口は読み取り専用で、checked_at を書く手段はどこにも無い (印を付けられるのは人間だけ)",
   "会話で「#112」と呼ぶタスクは tasks.id = 112 のこと(主キー)。番号はプロジェクトごとに1から振られる。特定の1件を見るときは WHERE id=<番号> で引く",
   "日付の列を取り違えない。created_at=登録日 / updated_at=最終更新(その後の編集でも動く) / done_at=Doneへ確定した日 / checked_at=人が確かめた日。完了の集計には done_at を使う(created_at だと登録日を数えてしまう)。summary_cards.created_at も完了日ではない — 日次まとめで統合されると最初のカードの日付を引き継ぐ",
   "done_at のうち 2026-08-10 以前のものは、列を作る前に終わったぶんを updated_at から埋めた近似値(完了後に触っていなければ最終更新=完了日時)。日単位の集計には使えるが、分単位の議論には使わない",
   "done_tasks ビューを使う。完了したもの(done_at が入っているもの)だけを、完了が新しい順に抜いたもの。日付は done_day 列に入っているので date() を書かなくてよい。live_tasks の対で、生きている=live_tasks / 終わった=done_tasks",
   "例(いつ何件終わったか): SELECT done_day, COUNT(*) n FROM done_tasks GROUP BY 1 ORDER BY 1 DESC",
-  "例(誰が何を終わらせたか): SELECT done_day, assignee, title FROM done_tasks WHERE done_day >= date('now','localtime','-7 days')",
+  "例(直近1週間に終わったもの): SELECT done_day, title FROM done_tasks WHERE done_day >= date('now','localtime','-7 days')",
   "SELECT * は使わない。必要な列だけ挙げる。context(経緯メモ)は1件1,000字を超えるので、一覧では length(context) か substr(context,1,120) にし、全文が要るタスクだけ id で絞って引き直す",
   "live_tasks ビューを使う。tasks から「生きているもの」(ゴミ箱でもアーカイブ済みでもないもの)だけを、ボードと同じ並びで抜いたもの。条件と並びを毎回書かなくてよく、書き忘れてゴミ箱のタスクが混ざることもない。列は tasks と同じ + sort_key(=COALESCE(sort,id))。ゴミ箱やアーカイブを見たいときだけ tasks を直に引く",
-  "例(ボードの一覧): SELECT id, status, title, assignee, due, checked_at, length(context) ctx FROM live_tasks",
+  "例(ボードの一覧): SELECT id, status, title, due, checked_at, length(context) ctx FROM live_tasks",
   "例(1件の詳細。経緯メモの全文と版): SELECT title, status, summary, context, context_version, blocked_by FROM tasks WHERE id=112",
   "例(直近の動き。「なにやってたっけ」): SELECT id, status, title, summary, updated_at FROM live_tasks ORDER BY updated_at DESC LIMIT 15",
-  "例(担当ごとの負荷): SELECT m.name, COUNT(t.id) open FROM members m LEFT JOIN live_tasks t ON t.assignee=m.name AND t.status!='done' GROUP BY m.name",
   "例(ゴミ箱の中身): SELECT id, title, trashed_at FROM tasks WHERE trashed_at IS NOT NULL ORDER BY trashed_at DESC",
-  "例(承認待ちの割り振り案): SELECT task_id, assignee, reason FROM proposals WHERE status='pending'",
   "summary_cards = Doneに畳んだ完了の要約。frozen=0 は現役のカードで、日をまたぐと同じ日のものが1枚に統合されていく。frozen=1 は人間が「整頓」を押して固定した過去ログで、もう統合されず内容も変わらない(旧称 settled)",
   "例(Doneの要約カード): SELECT id, title, task_ids, frozen FROM summary_cards ORDER BY id DESC",
   "例(検収待ちで、まだ人が確かめていないもの): SELECT id, title, summary FROM live_tasks WHERE status='review' AND checked_at IS NULL",
@@ -94,7 +87,6 @@ export const QUERY_LOG_DESCRIPTION = [
   "例: SELECT routed_model, COUNT(*) n, ROUND(SUM(estimated_usd),4) usd FROM llm_calls GROUP BY 1 ORDER BY usd DESC LIMIT 10",
   "例: SELECT ROUND(SUM(estimated_usd),4) usd FROM llm_calls WHERE date(created_at)=date('now','localtime')",
   "例(いつ誰が何を言ったか): SELECT created_at, speaker, speaker_email, substr(content,1,120) c FROM chat_messages WHERE role='user' ORDER BY id DESC LIMIT 30",
-  "例(誰の指示でその割り振りになったか): SELECT h.created_at, h.task_title, h.assignee, h.note FROM assignment_history h ORDER BY h.id DESC LIMIT 20",
   "例: SELECT created_at, role, substr(content,1,120) FROM chat_messages WHERE date(created_at)='2026-08-09' ORDER BY id LIMIT 30",
   "例: SELECT substr(created_at,1,13) h, COUNT(*) n FROM chat_messages GROUP BY 1 ORDER BY 1",
   "会話ログは常時プロンプトに載せていないので、過去の話を聞かれたらここを掘る。",
@@ -126,10 +118,9 @@ export const REORDER_DESCRIPTION = [
  * summary / context / context_append / due / blocked_by も更新できる。
  * 特に context_append は一覧しか見ないクライアントからは存在が読み取れなかった (指摘) */
 export const UPDATE_TASKS_DESCRIPTION =
-  "タスクの状態と内容を更新する(複数可)。状態・担当・タイトルのほか、summary(現況の1行)・経緯メモ・期限・依存も変えられる。経緯メモに1行足すだけなら context_append を使う(既存を読む必要も版も要らない)";
+  "タスクの状態と内容を更新する(複数可)。状態・タイトルのほか、summary(現況の1行)・経緯メモ・期限・依存も変えられる。経緯メモに1行足すだけなら context_append を使う(既存を読む必要も版も要らない)";
 
 /** rejected の説明。以前は「reasonに根拠を書く」としていたが、reason というパラメータは無い。
- * 書けるのは assign_reason(なぜこの担当か)だけで、しかも個人プロジェクトでは消えている。
  * additionalProperties:false なので、存在しない reason を渡すと確実にエラーになる (指摘) */
 export const REJECTED_DESCRIPTION =
   "却下(やらない決定)フラグ。trueにするときは、なぜやらないと決めたかを summary に一言、詳しい経緯は経緯メモ(context / context_append)に書く。取り消しは false";
@@ -168,12 +159,6 @@ export const CONTEXT_WRITE_DESCRIPTION =
 export const BLOCKED_BY_DESCRIPTION =
   "依存先タスクID。「それが終わらないと着手できない」ときだけ張る。あとでやりたいだけ・順番を表したいだけなら張らず、reorder_tasks で列の下へ落とす(依存は着手可能性、優先順位は並び順)";
 
-/** #126: 割り振り提案の契約。履歴ゼロの状態で「実績がある」「経験を活かせる」という
- * 存在しない根拠が返っていた。「AIが根拠を示す」が売りなので、根拠が捏造だと可視化の意味が消える。
- * 理由を必須にすると辻褄合わせを促すので、任意にして「無いなら書かない」を許す */
-export const PROPOSE_DESCRIPTION =
-  "割り振り案を提案する(人間の承認で確定)。理由はボード上で確かめられる事実だけを書く(保有件数・依存・期限・過去の完了実績)。裏付けが無いなら理由は書かない — 「実績がある」「経験を活かせる」のような、データで確かめられない理由を作らないこと";
-
 // 計測スクリプト(scripts/prompt-breakdown.ts)から実物を測れるように公開する。
 // 「何が入力トークンを食っているか」はソースを眺めても分からず、実物を数えるしかない
 export const tools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
@@ -191,8 +176,6 @@ export const tools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
               type: "object",
               properties: {
                 title: { type: "string" },
-                assignee: { type: "string", description: "担当者名。未定なら省略" },
-                assign_reason: { type: "string", description: "その担当にした理由を一言で (「指名」「API検証の実績」など)。進捗や作業結果は書かない" },
                 context: { type: "string", description: "登録に至った経緯・会話で出た論点・決まったこと。相談や議論の流れから登録するときは必ず書く (タイトルだけでは背景が失われる)" },
                 due: { type: "string", description: "期限 YYYY-MM-DD。相対表現は今日の日付から解決" },
                 blocked_by: { type: "array", items: { type: "integer" }, description: BLOCKED_BY_DESCRIPTION },
@@ -221,8 +204,6 @@ export const tools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
                 id: { type: "integer", description: "タスクID。会話で「#112」と呼ばれるものと同じで、tasks テーブルの主キー(id)。プロジェクトごとに1から振られるので、別プロジェクトの#112とは別物" },
                 title: { type: "string" },
                 status: { type: "string", enum: STATUS_VALUES, description: STATUS_DESCRIPTION },
-                assignee: { type: "string" },
-                assign_reason: { type: "string", description: "担当変更・却下の判断理由を一言で。期限だけの変更では渡さない(既存の理由を上書きしてしまう)。進捗や作業結果は書かない — それは summary" },
                 summary: { type: "string", description: SUMMARY_DESCRIPTION },
                 due: { type: ["string", "null"], description: "期限 YYYY-MM-DD。解除はnull" },
                 blocked_by: { type: ["array", "null"], items: { type: "integer" }, description: `${BLOCKED_BY_DESCRIPTION}。全置換で、解除はnull` },
@@ -303,7 +284,7 @@ export const tools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
     function: {
       name: "search_tasks",
       description:
-        "タスクの本文(タイトル・現況・経緯メモ・担当理由)と会話ログを横断検索する。アーカイブ済みも対象。会話は新しい順に最大6件返る(「あんな話してたっけ?」用)。表記ゆれや言い換えは自分で展開して複数語を渡すこと(OR検索・当たった語が返る)。例: 「なんでDB分けたんだっけ」→ terms:[\"DB\",\"データベース\",\"ファイル分離\",\"分割\",\"プロジェクト\"]",
+        "タスクの本文(タイトル・現況・経緯メモ)と会話ログを横断検索する。アーカイブ済みも対象。会話は新しい順に最大6件返る(「あんな話してたっけ?」用)。表記ゆれや言い換えは自分で展開して複数語を渡すこと(OR検索・当たった語が返る)。例: 「なんでDB分けたんだっけ」→ terms:[\"DB\",\"データベース\",\"ファイル分離\",\"分割\",\"プロジェクト\"]",
       parameters: {
         type: "object",
         properties: {
@@ -321,7 +302,7 @@ export const tools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
       parameters: {
         type: "object",
         properties: {
-          scope: { type: "string", enum: ["cost", "audit"], description: "cost=LLM呼び出し記録 / audit=会話・割り振り・タスク" },
+          scope: { type: "string", enum: ["cost", "audit"], description: "cost=LLM呼び出し記録 / audit=会話・タスク" },
           sql: { type: "string", description: "SELECT または WITH で始まる1文" },
         },
         required: ["scope", "sql"],
@@ -351,46 +332,12 @@ export const tools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
       },
     },
   },
-  {
-    type: "function",
-    function: {
-      name: "set_view",
-      description: "ボードの表示フィルタを切り替える(「鈴木さんの分だけ見せて」など)。assigneeにnullを渡すと全員表示に戻す",
-      parameters: {
-        type: "object",
-        properties: {
-          assignee: { type: ["string", "null"], description: "絞り込む担当者名。全員表示はnull" },
-        },
-        required: ["assignee"],
-      },
-    },
-  },
 ];
 
-/** #109/#110: メンバーが1人も居ないプロジェクトは「個人用」。担当者という概念自体を消す。
- * MCP側(mcp.ts)と同じ扱いにする — 片方だけ直すと「MCPでは消えたのにチャットでは担当者を聞かれる」
- * という、入口ごとの契約のズレ(#92 #108 #114と同型)がまた生まれる。
- *
- * 共有プロジェクトでは元の配列をそのまま返す。ツール定義はプロンプトの一部なので、
- * 組み立て直してバイト列が揺れるとキャッシュが外れる */
-const ASSIGNEE_TOOLS = ["set_view"];
-let personalTools: OpenAI.Chat.Completions.ChatCompletionTool[] | null = null;
-
-function toolsFor(personal: boolean): OpenAI.Chat.Completions.ChatCompletionTool[] {
-  if (!personal) return tools;
-  if (personalTools) return personalTools;
-  personalTools = JSON.parse(JSON.stringify(tools))
-    .filter((t: any) => !ASSIGNEE_TOOLS.includes(t.function.name))
-    .map((t: any) => {
-      const items = t.function.parameters?.properties?.tasks?.items ?? t.function.parameters?.properties?.updates?.items;
-      if (items?.properties) {
-        delete items.properties.assignee;
-        delete items.properties.assign_reason;
-      }
-      return t;
-    });
-  return personalTools!;
-}
+// #179: 以前はここに toolsFor(personal) があり、メンバーが居ないプロジェクトでは
+// 実行時に assignee 系のツールと項目を削っていた (#109/#110)。担当者そのものを
+// 廃止したので、削る対象も分岐も消えた。**ツール定義は常に1つ**になり、
+// プロンプトのバイト列が揺れる余地 (キャッシュが外れる原因) も1つ減っている
 
 
 async function execTool(name: string, args: any, uiActions: UiAction[], events: Set<string>): Promise<unknown> {
@@ -486,10 +433,6 @@ async function execTool(name: string, args: any, uiActions: UiAction[], events: 
         };
       return { ok: true };
     }
-    case "set_view": {
-      uiActions.push({ type: "set_filter", assignee: args.assignee ?? null });
-      return { ok: true };
-    }
     default:
       return { error: `unknown tool: ${name}` };
   }
@@ -501,9 +444,6 @@ export function buildSystemPrompt(
   view?: string,
   speakerVerified?: boolean
 ): string {
-  const loads = memberLoads();
-  const history = assignmentHistory();
-  const pending = listPendingProposals();
   // キャッシュ友好の並び: 静的な内容(人格/ルール/思想)を先頭に固定し、動的な内容(索引/履歴/カード)を末尾へ。
   // プロンプトキャッシュはプレフィックス一致なので、先頭が安定しているほどヒット部分が伸びる。
   return [
@@ -518,17 +458,12 @@ export function buildSystemPrompt(
     "- 依頼か相談か迷ったら相談として扱う (誤登録の削除コストより会話で受ける方が安い)。",
     "- create_tasks / update_tasks の報告では、必ず割り当てられたタスクID を「#12として登録しました」の形式で明記する (ユーザーは以後この番号で参照する)。",
     "- 相談・議論の流れからタスクを登録するときは、create_tasks の context に登録に至った経緯を要約して入れる。経緯のない単発の明確な依頼では省略可。",
-    "- 「Nは◯◯に」のような指名は update_tasks で即実行してよい (reason は「指名」)。",
-    "- 割り振りは update_tasks でその場で確定し、誰をどこに置いたかを一覧で報告する。承認ボタンのような確認UIは無い — 担当は後からいくらでも変えられるので、確定してから直すほうが速い (取り返しがつかないのはDoneだけで、そこは人間の検収でしか通れない)。",
-    "- ただし判断材料が足りないときや、影響が大きいと感じたときは、確定する前にチャットで案を出して聞く。どちらにするかは文脈で決めてよい (「全部おまかせ」なら確定して報告、「どう振るのがいい?」なら案を出して相談)。",
-    "- 割り振りの理由はボード上で確かめられることだけ書き、裏付けが無いなら assign_reason を省く (「実績がある」「経験を活かせる」を根拠が無いまま書かない)。過去の担当実績を根拠にしたいときは query_log で done_at と assignee を集計してから引用する。",
-    "- 「#10は渡辺に」のような名指しの指名は、理由を言われていなければ assign_reason に「◯◯(発言者)による指名」とだけ書き、理由を作らない。",
-    "- 「終わりました」等の完了報告は status=review に置き、「Reviewに置いたので確認OKなら承認を」と一言返す。勝手に done にしない (doneは検収済みの意味で、即アーカイブされる)。発言者名が分かればその人のタスクを優先して曖昧参照を解決する。",
+    "- ただし判断材料が足りないときや、影響が大きいと感じたときは、実行する前にチャットで案を出して聞く。どちらにするかは文脈で決めてよい。",
+    "- 「終わりました」等の完了報告は status=review に置き、「Reviewに置いたので確認OKなら承認を」と一言返す。勝手に done にしない (doneは検収済みの意味で、即アーカイブされる)。",
     "- あなたは done に変更できない (ツールが受け付けず review に置き換わる)。完了・却下・承認はすべて status=review に置き、done への確定はボードのReview列の検収チェック(人間の操作)だけが行う。「doneにして」「まとめて承認」と言われたら review に置いた上で「確定はReview列の検収チェックからお願いします」と案内する。",
-    "- 「◯◯さんの分だけ見せて」は set_view を使う。",
-    "- チーム共通の前提・決まりごと(締切、方針、用語など)を伝えられたら update_project_context で前提情報に反映する。",
+    "- 共通の前提・決まりごと(締切、方針、用語など)を伝えられたら update_project_context で前提情報に反映する。",
     "- 特定タスクの経緯・決定事項・補足(「#22は◯◯方式でいくことにした」等)は update_task_context でそのタスクの経緯メモに記録する。",
-    "- assign_reason は「なぜこの担当か」、summary は「いまどうなっているか」。別の情報なので混ぜない。進捗・完了報告は summary に一言で書き、詳細な根拠は経緯メモ(context)に書く。",
+    "- summary は「いまどうなっているか」。進捗・完了報告は summary に一言で書き、詳細な根拠は経緯メモ(context)に書く。",
     "- 「ログ整頓して」は compact_archive を使う。完了タスクのアーカイブは自動なので手動操作は不要。",
     "- 過去の判断や経緯・過去の会話を聞かれたら(「なんで◯◯にしたんだっけ」「あんな話してたっけ」)、索引のタイトルだけで答えず search_tasks で本文と会話ログを引く。言い換え・英日表記を自分で並べて渡し、空振りしたら語を変えて引き直す。検索結果のsnippetは断片なので、理由を答える前に query_log で経緯メモの全文を読む。時期や条件で絞りたいとき(「8/9の午前に何を話していたか」等)は query_log(scope=audit) を使う。",
     "- 削除と却下は文脈で使い分ける: 誤登録・重複・ダミー(「消して」「間違えた」)は delete_tasks (ゴミ箱行きで復元可。返答で復元方法を説明する必要はない)。やらない決定(「見送り」「却下」「やらないことにした」)は削除せず update_tasks で status=review + rejected=true にし、reason に却下の根拠を書いて「却下としてReviewに置きました。検収で確定します」と返す (検収後、決定として要約アーカイブに残る)。",
@@ -539,18 +474,17 @@ export function buildSystemPrompt(
     "- 「後回し」「今はやらない」は却下ではない。status は変えず (done にするとアーカイブに吸い込まれる)、reorder_tasks でその列の下へ落とす。「今やりたい」は逆に上へ。",
     "- 「金曜まで」「明日まで」等の期限表現は今日の日付から YYYY-MM-DD に解決して due に入れる。期限が近い/過ぎたタスクはレポートや割り振り提案で優先的に言及する。",
     "- 画像やPDFが添付されたら内容を読み取って会話・操作に活かす。重要な情報(バグの症状、決定事項、資料の要点)はタスクの context や前提情報に文字で蒸留して記録する。ファイル原本はどこにも保存されないため、後から参照が必要な内容は必ず文字にして残す。",
-    "- 「#AはB待ち」「Bが終わってから」等の依存表現は blocked_by に依存先IDを登録する(複数可)。索引の dep がそれ。依存先が未完了のタスクは割り振り提案の対象にせず、レポートでは「#N待ち」と添える。",
+    "- 「#AはB待ち」「Bが終わってから」等の依存表現は blocked_by に依存先IDを登録する(複数可)。索引の dep がそれ。依存先が未完了のタスクは、レポートで「#N待ち」と添える。",
     "- 操作後は結果を一言で報告する。長い説明はしない。",
     "",
     "## ユーザーの返事を先回りして置く",
     "こちらから聞き返して次の発言を待つときは、ユーザーが返しそうな短い返事を [[ ]] で囲んで置く。",
     "これは押せるボタンになり、押すとその文字列がユーザーの発言として送られる。「OK」と打つだけの手間を省くためのもの。",
     "",
-    "例1: 「#12は鈴木さんが空いています。振っておきますか?  [[OK]] [[別の人にする]]」",
-    "例2: 「タスクに積みますか?  [[積んで]] [[いまはいい]]」",
-    "例3: 「#8はやらない方針ということで、却下にしますか?  [[却下でOK]] [[まだ決めない]]」",
-    "例4: 「先に依存を外したほうが早そうです。そちらから見ますか?  [[それでOK]] [[このまま進める]]」",
-    "例5: 「どれから着手しますか。  [[#4から]] [[#5から]] [[#6から]]」",
+    "例1: 「タスクに積みますか?  [[積んで]] [[いまはいい]]」",
+    "例2: 「#8はやらない方針ということで、却下にしますか?  [[却下でOK]] [[まだ決めない]]」",
+    "例3: 「先に依存を外したほうが早そうです。そちらから見ますか?  [[それでOK]] [[このまま進める]]」",
+    "例4: 「どれから着手しますか。  [[#4から]] [[#5から]] [[#6から]]」",
     "",
     "1〜4個まで。ユーザーの言葉で書く (「はい」「OK」「それで」など、そのまま発言になる短文)。",
     "同じ内容を「- 」の箇条書きでも書かない — 置いたものがそのまま表示になる。",
@@ -570,25 +504,6 @@ export function buildSystemPrompt(
     // 温かい間はバイト不変のまま伸びるのでキャッシュが基準部分まで効く。TTL超過時のみ再ベースライン。
     getBoardPromptSection(),
     "",
-    // #101: メンバーが1人も登録されていないプロジェクトは「一人用」。
-    // 割り振りは自分1人しかいない場に対する空回りなので、材料ごと渡さず提案もさせない
-    // (フラグを増やさず、データの有無で振る舞いを変える)
-    loads.length === 0
-      ? [
-          "## 体制",
-          "このプロジェクトはメンバー未登録の一人用。担当者が空なのが正常な状態であり、欠落ではない。",
-          "- 担当の空きを問題として指摘しない。「未割り当てが◯件あります」のような報告もしない",
-          "- 割り振りを頼まれたら実行せず、一人用なので担当は使っていないと説明し、人を増やすなら⚙設定タブのプロジェクト設定から追加できると案内する",
-        ].join("\n")
-      : [
-          "## メンバーと現在の担当タスク数(未完了)",
-          JSON.stringify(loads),
-          "",
-          "## 過去の割り振り履歴 (類似タスクの参考にする)",
-          JSON.stringify(history.slice(0, 10).map((h) => ({ t: h.taskTitle.slice(0, 30), a: h.assignee }))),
-        ].join("\n"),
-    "",
-    pending.length ? `## 承認待ちの割り振り提案\n${JSON.stringify(pending)}` : "",
     // #93: いま見ている画面。発言者と同じくメタ情報 (本文には混ぜない)。
     // 「これ何?」「これ高くない?」のような指示語をタブの文脈で解決するために渡す
     VIEW_HINTS[view ?? ""] ?? "",
@@ -776,10 +691,10 @@ async function generateSuggestionsUncached(
       {
         role: "user",
         content:
-          'ボードの現状を読んで、いまユーザーにとって価値のある操作を最大3つ提案して。ツールは呼ばない。出力はJSON配列のみ: [{"label":"絵文字+15字以内の短文","message":"チャットにそのまま投げる依頼文"}]。期限接近・依存解除・検収たまり・未割り当てなど文脈が根拠のものを優先。',
+          'ボードの現状を読んで、いまユーザーにとって価値のある操作を最大3つ提案して。ツールは呼ばない。出力はJSON配列のみ: [{"label":"絵文字+15字以内の短文","message":"チャットにそのまま投げる依頼文"}]。期限接近・依存解除・検収たまりなど文脈が根拠のものを優先。',
       },
       ],
-      tools: toolsFor(memberLoads().length === 0),
+      tools,
     },
     { signal }
   );
@@ -864,7 +779,6 @@ async function runChatTurnInner(
     ...history.slice(-20),
     { role: "user", content: userContent },
   ];
-  const isPersonal = memberLoads().length === 0; // #109/#110
   const trace: ToolTrace[] = [];
   const uiActions: UiAction[] = [];
   const usage: ChatResult["usage"] = { promptTokens: 0, completionTokens: 0, rounds: 0, elapsedMs: 0, calls: [] };
@@ -872,7 +786,7 @@ async function runChatTurnInner(
 
   for (let round = 0; round < 8; round++) {
     const c0 = Date.now();
-    const res = await chatCompletion("chat", getModel("main"), { messages, tools: toolsFor(isPersonal) });
+    const res = await chatCompletion("chat", getModel("main"), { messages, tools });
     usage.rounds++;
     usage.promptTokens += res.usage?.prompt_tokens ?? 0;
     usage.completionTokens += res.usage?.completion_tokens ?? 0;

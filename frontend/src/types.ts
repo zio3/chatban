@@ -4,9 +4,6 @@ export interface Task {
   id: number;
   title: string;
   status: TaskStatus;
-  assignee: string | null;
-  /** #92: なぜこの担当か。進捗は summary へ (名前で用途が分かるよう reason から改名) */
-  assignReason: string | null;
   context: string | null;
   /** 期限 YYYY-MM-DD (#44) */
   due: string | null;
@@ -23,12 +20,6 @@ export interface Task {
   sort: number;
   createdAt: string;
   updatedAt: string;
-}
-
-export interface Member {
-  id: number;
-  name: string;
-  skills: string | null;
 }
 
 export interface SummaryElement {
@@ -51,10 +42,9 @@ export interface ToolTrace {
   result: unknown;
 }
 
-export type UiAction =
-  | { type: "set_filter"; assignee: string | null }
-  /** 直前の返答に添える簡易返信ボタン。押すとその文字列がそのまま発言として送られ、次の発言で消える */
-  | { type: "ask"; options: string[] };
+/** 直前の返答に添える簡易返信ボタン。押すとその文字列がそのまま発言として送られ、次の発言で消える。
+ * #179 で set_filter (担当者での絞り込み) が消え、いまはこれだけ */
+export type UiAction = { type: "ask"; options: string[] };
 
 export interface ChatResponse {
   reply: string;

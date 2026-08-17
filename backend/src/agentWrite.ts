@@ -17,8 +17,6 @@ import type { TaskStatus } from "./types.js";
 export interface AgentTaskInput {
   title: string;
   status?: string;
-  assignee?: string | null;
-  assign_reason?: string;
   context?: string;
   summary?: string;
   due?: string | null;
@@ -80,12 +78,7 @@ export function createTasksAsAgent(tasks: AgentTaskInput[]): { created: unknown[
   const created = tasks.map((t) => {
     const { status, coerced } = coerceStatus(t.status);
     if (coerced) anyCoerced = true;
-    const task = createTask(
-      cleanAgentText(t.title),
-      status ?? "todo",
-      cleanAgentText(t.assignee) ?? null,
-      cleanAgentText(t.assign_reason) ?? null
-    );
+    const task = createTask(cleanAgentText(t.title), status ?? "todo");
     const patch: TaskPatch = {
       ...(t.context !== undefined ? { context: cleanAgentText(t.context) } : {}),
       ...(t.summary !== undefined ? { summary: cleanAgentText(t.summary) } : {}),
@@ -130,24 +123,13 @@ export function updateTasksAsAgent(updates: AgentTaskUpdate[]): {
     const { status, coerced: didCoerce } = coerceStatus(u.status);
     if (didCoerce) coerced.push(u.id);
 
-    const assignee = u.assignee === "" ? null : cleanAgentText(u.assignee); // 空文字は「未割り当て」の意図とみなす
     const due = u.due === "" ? null : u.due;
     const blockedBy = u.blocked_by === undefined ? undefined : (u.blocked_by ?? null);
     const sameDeps =
       blockedBy !== undefined && JSON.stringify(blockedBy ?? []) === JSON.stringify(cur?.blockedBy ?? []);
 
     const statusChanged = changed(status, cur?.status);
-    const assigneeChanged = changed(assignee, cur?.assignee ?? null);
     const rejectedChanged = u.rejected !== undefined && !!u.rejected !== !!cur?.rejected;
-
-    // reason上書きガード: 担当・状態の変更を伴わない更新(due/依存のみ等)で
-    // reasonを添えられると既存の割り振り理由が破壊されるため無視する (実事故2件の再発防止)。
-    // 空文字のreasonは常に拒否する — 理由を「消す」操作に意味はない
-    const keepReason =
-      typeof u.assign_reason === "string" &&
-      u.assign_reason.trim() !== "" &&
-      u.assign_reason !== cur?.assignReason &&
-      (assigneeChanged || statusChanged || rejectedChanged);
 
     // #112: 経緯メモは「読む→マージ→全文で書き戻す」契約なので、読んでから書くまでの間に
     // 他人(人間のUI・別セッション)が追記していると、その追記が黙って消える。
@@ -185,8 +167,6 @@ export function updateTasksAsAgent(updates: AgentTaskUpdate[]): {
       patch: {
         ...(changed(cleanAgentText(u.title), cur?.title) ? { title: cleanAgentText(u.title) } : {}),
         ...(statusChanged ? { status: status as TaskStatus } : {}),
-        ...(assigneeChanged ? { assignee } : {}),
-        ...(keepReason ? { assignReason: cleanAgentText(u.assign_reason) } : {}),
         ...(changed(due, cur?.due ?? null) ? { due } : {}),
         ...(blockedBy !== undefined && !sameDeps ? { blockedBy } : {}),
         ...(contextIncoming && !contextStale ? { context: cleanAgentText(nextContext) } : {}),

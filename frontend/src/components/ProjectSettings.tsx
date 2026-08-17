@@ -11,7 +11,6 @@ export default function ProjectSettings() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [newName, setNewName] = useState("");
-  const [newMembers, setNewMembers] = useState("");
   // #117: コピーできたことを一瞬見せる。押したのに何も起きないと分からない
   const [copied, setCopied] = useState<number | null>(null);
   const copyMcp = async (id: number, url: string) => {
@@ -40,7 +39,6 @@ export default function ProjectSettings() {
 
   const [editing, setEditing] = useState<number | null>(null);
   const [draftName, setDraftName] = useState("");
-  const [draftMembers, setDraftMembers] = useState("");
 
   const load = useCallback(() => {
     api
@@ -71,7 +69,6 @@ export default function ProjectSettings() {
     }
   }
 
-  const parseMembers = (s: string) => s.split(/[,、\s]+/).map((x) => x.trim()).filter(Boolean);
 
   return (
     <div className="space-y-3">
@@ -97,18 +94,12 @@ export default function ProjectSettings() {
                   className="w-full rounded-lg border border-slate-300 px-3 py-1.5 text-sm"
                   placeholder="プロジェクト名"
                 />
-                <input
-                  value={draftMembers}
-                  onChange={(e) => setDraftMembers(e.target.value)}
-                  className="w-full rounded-lg border border-slate-300 px-3 py-1.5 text-sm"
-                  placeholder="メンバー (カンマ区切り)"
-                />
                 <div className="flex gap-2">
                   <button
                     disabled={busy}
                     onClick={() =>
                       run(async () => {
-                        await api.updateProject(p.id, { name: draftName, members: parseMembers(draftMembers) });
+                        await api.updateProject(p.id, { name: draftName });
                         setEditing(null);
                       })
                     }
@@ -123,8 +114,6 @@ export default function ProjectSettings() {
                     キャンセル
                   </button>
                 </div>
-                {/* 担当者として使われている名前は外せない (タスクのassigneeが孤児になるため) */}
-                <p className="text-[11px] text-slate-400">タスクの担当者として使われている名前は、外そうとしても残ります</p>
               </div>
             ) : (
               <div className="flex flex-wrap items-center gap-2">
@@ -136,7 +125,7 @@ export default function ProjectSettings() {
                   <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-bold text-emerald-700">表示中</span>
                 )}
                 <span className="text-xs text-slate-400">
-                  未完了{p.openTasks}件 / {p.members.length > 0 ? p.members.join("・") : "メンバーなし"}
+                  未完了{p.openTasks}件
                 </span>
                 {/* #117: MCPの接続先はプロジェクトごとに違う (URLで固定する設計 #96)。
                     .mcp.json に貼る値をここから直接コピーできるようにする */}
@@ -193,7 +182,6 @@ export default function ProjectSettings() {
                     onClick={() => {
                       setEditing(p.id);
                       setDraftName(p.name);
-                      setDraftMembers(p.members.join(", "));
                     }}
                     className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-100"
                   >
@@ -240,19 +228,12 @@ export default function ProjectSettings() {
             placeholder="プロジェクト名"
             className="min-w-[200px] flex-1 rounded-lg border border-slate-300 px-3 py-1.5 text-sm"
           />
-          <input
-            value={newMembers}
-            onChange={(e) => setNewMembers(e.target.value)}
-            placeholder="メンバー (カンマ区切り、後から追加可)"
-            className="min-w-[240px] flex-1 rounded-lg border border-slate-300 px-3 py-1.5 text-sm"
-          />
           <button
             disabled={busy || !newName.trim()}
             onClick={() =>
               run(async () => {
-                await api.createProject(newName.trim(), parseMembers(newMembers));
+                await api.createProject(newName.trim());
                 setNewName("");
-                setNewMembers("");
               })
             }
             className="rounded-lg bg-slate-900 px-4 py-1.5 text-sm text-white disabled:opacity-30"

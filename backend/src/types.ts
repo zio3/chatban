@@ -4,9 +4,6 @@ export interface Task {
   id: number;
   title: string;
   status: TaskStatus;
-  assignee: string | null;
-  /** #92: なぜこの担当か。進捗は summary へ (名前で用途が分かるよう reason から改名) */
-  assignReason: string | null;
   /** 詳細・決定事項・ブリーフィングの置き場 (フリーテキスト、遅延読み込み) */
   context: string | null;
   /** 期限 YYYY-MM-DD (#44)。相対表現はチャットが今日の日付から解決して格納する */
@@ -31,28 +28,14 @@ export interface Task {
   updatedAt: string;
 }
 
-export interface Member {
-  id: number;
-  name: string;
-  skills: string | null;
-}
-
-export interface Proposal {
-  id: number;
-  taskId: number;
-  taskTitle: string;
-  assignee: string;
-  reason: string;
-  status: "pending" | "approved" | "rejected";
-  createdAt: string;
-}
-
-/** チャットの応答に付随してUIを動かす指示。DBには保存しない揮発物 */
-export type UiAction =
-  | { type: "set_filter"; assignee: string | null }
-  | {
-      /** 直前の返答に対する簡易返信ボタン。押すとその文字列がそのままユーザー発言として送られる。
-       * 次の発言でUIごと消える(状態を持たない) — 承認待ちという状態を作らないための設計 */
-      type: "ask";
-      options: string[];
-    };
+/** チャットの応答に付随してUIを動かす指示。DBには保存しない揮発物。
+ *
+ * #179 で set_filter (担当者での絞り込み) が消え、いまは ask だけ。
+ * フィルタ自体をやめたわけではなく、担当という軸が無くなった —
+ * 作り直すなら「LLMにIDの集合を返させて、押した瞬間に確定する」形になる (CLAUDE.md の将来案) */
+export type UiAction = {
+  /** 直前の返答に対する簡易返信ボタン。押すとその文字列がそのままユーザー発言として送られる。
+   * 次の発言でUIごと消える(状態を持たない) — 承認待ちという状態を作らないための設計 */
+  type: "ask";
+  options: string[];
+};

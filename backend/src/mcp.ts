@@ -24,11 +24,9 @@ import {
   trashTask,
   getProjectContextRow,
   getTask,
-  listMembers,
   listSummaryCards,
   listTasks,
   listTrashedTasks,
-  memberLoads,
   metrics,
   searchTasks,
   setProjectContext,
@@ -77,13 +75,12 @@ function boardUpdate(syncToken?: string) {
 
 /** #108: 更新結果は要点だけ返す。以前は context を含む全フィールドが返っており、
  * 経緯メモを更新するたびに自分が書いた1,800字がそっくり戻ってきていた (トークンの無駄) */
-function brief(t: ReturnType<typeof getTask>, personal = false) {
+function brief(t: ReturnType<typeof getTask>) {
   if (!t) return null;
   return {
     id: t.id,
     title: t.title,
     status: t.status,
-    ...(personal ? {} : { assignee: t.assignee }),
     ...(t.summary ? { summary: t.summary } : {}),
     ...(t.due ? { due: t.due } : {}),
     ...(t.blockedBy?.length ? { blockedBy: t.blockedBy } : {}),
@@ -103,11 +100,8 @@ function currentProject() {
 export function buildMcpServer(onEvent: (kind: "board" | "proposals") => void): McpServer {
   const server = new McpServer({ name: "chatban", version: "0.1.0" });
 
-  // #109/#110: メンバーが1人も居ないプロジェクトは「個人用」。担当者という概念自体を消す。
-  // ツールを隠すだけでは足りず、create_tasks/update_tasks のスキーマから assignee を外さないと
-  // 「無い」にならない (エージェントから見えるのはスキーマなので、隠しても項目が残っていれば使う)。
-  // 接続ごとにサーバーを組み立てているので、プロジェクトを見て定義を変えられる
-  const isPersonal = listMembers().length === 0;
+  // #179: 以前はここで「メンバーが居ないプロジェクトなら assignee をスキーマから外す」
+  // という分岐 (#109/#110) をしていた。担当者そのものが無くなったので分岐ごと消えている
 
   server.registerTool(
     "create_tasks",
@@ -118,12 +112,6 @@ export function buildMcpServer(onEvent: (kind: "board" | "proposals") => void): 
           z.object({
             title: z.string(),
             status: STATUS.optional().describe(`省略時はtodo。${STATUS_DESCRIPTION}`),
-            ...(isPersonal
-              ? {}
-              : {
-                  assignee: z.string().optional().describe("担当者名。未定なら省略"),
-                  assign_reason: z.string().optional().describe("なぜこの担当かを一言で。進捗は書かない"),
-                }),
             context: z.string().optional().describe("登録に至った経緯・論点・決定事項 (経緯メモの初期値)"),
             summary: z.string().optional().describe(SUMMARY_DESCRIPTION),
             due: z.string().optional().describe("期限 YYYY-MM-DD"),
@@ -140,7 +128,7 @@ export function buildMcpServer(onEvent: (kind: "board" | "proposals") => void): 
       onEvent("board");
       return text({
         ok: true,
-        created: (r.created as any[]).map((t: any) => brief(t, isPersonal)),
+        created: (r.created as any[]).map((t: any) => brief(t)),
         ...(r.note ? { note: r.note } : {}),
         ...boardUpdate(sync_token),
       });
@@ -157,12 +145,6 @@ export function buildMcpServer(onEvent: (kind: "board" | "proposals") => void): 
             id: z.number().int().describe("タスクID。会話で「#112」と呼ばれるものと同じで、tasks テーブルの主キー(id)。プロジェクトごとに1から振られるので、別プロジェクトの#112とは別物"),
             title: z.string().optional(),
             status: STATUS.optional().describe(STATUS_DESCRIPTION),
-            ...(isPersonal
-              ? {}
-              : {
-                  assignee: z.string().nullable().optional(),
-                  assign_reason: z.string().optional().describe("なぜこの担当かを一言で。進捗は書かない"),
-                }),
             summary: z.string().optional().describe(SUMMARY_DESCRIPTION),
             context: z
               .string()
@@ -190,7 +172,7 @@ export function buildMcpServer(onEvent: (kind: "board" | "proposals") => void): 
         // 全部ダメだったのか一部だけかは status で言う (配列を数えさせない)
         ok,
         status,
-        updated: (updated as any[]).map((t: any) => brief(t, isPersonal)),
+        updated: (updated as any[]).map((t: any) => brief(t)),
         // #112: 経緯メモの版が合わなかったものは適用していない。現在の全文を返すのでマージして再実行する
         ...(conflicts ? { conflicts } : {}),
         ...(notFound ? { notFound } : {}),
@@ -222,7 +204,7 @@ export function buildMcpServer(onEvent: (kind: "board" | "proposals") => void): 
     async ({ ids }) => {
       const restored = ids.map((id) => restoreTask(id));
       onEvent("board");
-      return text({ ok: true, restored: restored.map((t: any) => brief(t, isPersonal)) });
+      return text({ ok: true, restored: restored.map((t: any) => brief(t)) });
     }
   );
 
@@ -230,7 +212,7 @@ export function buildMcpServer(onEvent: (kind: "board" | "proposals") => void): 
     "search_tasks",
     {
       description:
-        "タスクの本文(タイトル・現況・経緯メモ・担当理由)を横断検索する。アーカイブ済みも対象。表記ゆれや言い換えは自分で展開して複数語を渡す(OR検索)",
+        "タスクの本文(タイトル・現況・経緯メモ)を横断検索する。アーカイブ済みも対象。表記ゆれや言い換えは自分で展開して複数語を渡す(OR検索)",
       inputSchema: { terms: z.array(z.string()).describe("検索語(最大10)。言い換え・英日表記を並べる") },
     },
     async ({ terms }) => text(searchTasks(terms))
@@ -379,7 +361,7 @@ export function buildMcpServer(onEvent: (kind: "board" | "proposals") => void): 
         projectContextVersion: d.projectContextVersion,
         // checked は brief に無いのでここで足す。**人が検収したかどうかは全件応答からも
         // 読めないといけない** — 差分だけ直しても、取り直したときに分からなければ同じ事故が起きる
-        tasks: listTasks().map((t) => ({ ...brief(t, isPersonal)!, checked: !!t.checkedAt })),
+        tasks: listTasks().map((t) => ({ ...brief(t)!, checked: !!t.checkedAt })),
         summaryCards: listSummaryCards().map((c) => ({
           id: c.id,
           title: c.title,

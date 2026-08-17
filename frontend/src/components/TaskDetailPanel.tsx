@@ -159,11 +159,6 @@ export default function TaskDetailPanel({
             <span className="rounded-full bg-rose-600 px-2.5 py-0.5 text-xs font-bold text-white">🚫 却下</span>
           )}
           <span className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${status.cls}`}>{status.label}</span>
-          {task.assignee && (
-            <span className="rounded-full bg-indigo-100 px-2.5 py-0.5 text-xs font-medium text-indigo-700">
-              {task.assignee}
-            </span>
-          )}
           {task.due && (
             <span className="rounded bg-amber-50 px-1.5 py-0.5 text-[10px] text-amber-700">⏰ 期限 {task.due}</span>
           )}
@@ -203,13 +198,6 @@ export default function TaskDetailPanel({
           <section>
             <h3 className="mb-1 text-xs font-bold uppercase tracking-wide text-slate-400">現況</h3>
             <p className="text-sm text-slate-700">📝 {task.summary}</p>
-          </section>
-        )}
-
-        {task.assignReason && (
-          <section>
-            <h3 className="mb-1 text-xs font-bold uppercase tracking-wide text-slate-400">割り振り理由</h3>
-            <p className="text-sm text-slate-600">💡 {task.assignReason}</p>
           </section>
         )}
 

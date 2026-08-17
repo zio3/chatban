@@ -13,7 +13,7 @@ import TaskDetailPanel from "./components/TaskDetailPanel";
 import { useChatTurn } from "./hooks/useChatTurn";
 import type { Attachment } from "./hooks/useAttachments";
 import { socket, disconnectSocket } from "./socket";
-import type { ChatEntry, Member, SummaryCard, Task } from "./types";
+import type { ChatEntry, SummaryCard, Task } from "./types";
 
 interface Toast {
   tone?: "error" | "info";
@@ -22,22 +22,10 @@ interface Toast {
   retry?: () => void;
 }
 
-const UNASSIGNED = "__unassigned__"; // #90: 担当なしを表すフィルタキー (メンバー名と衝突しない値)
 
 export default function App() {
   const [tasks, setTasks] = useState<Task[]>([]);
-  const [members, setMembers] = useState<Member[]>([]);
   const [summaryCards, setSummaryCards] = useState<SummaryCard[]>([]);
-  // #90: 複数トグル。空Set=全員表示。UNASSIGNEDは担当なしを表す擬似キー
-  const [filter, setFilter] = useState<Set<string>>(new Set());
-  const toggleFilter = useCallback((name: string) => {
-    setFilter((prev) => {
-      const next = new Set(prev);
-      if (next.has(name)) next.delete(name);
-      else next.add(name);
-      return next;
-    });
-  }, []);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [toast, setToast] = useState<Toast | null>(null);
@@ -69,8 +57,6 @@ export default function App() {
     request: (m, h, signal, attachments) => api.chat(m, h, signal, currentUserRef.current, attachments, viewRef.current),
     onResponse: (res) => {
       for (const a of res.uiActions) {
-        // チャットからの絞り込みは単一指定。nullで解除 (#90でSetに変わったため詰め替える)
-        if (a.type === "set_filter") setFilter(a.assignee ? new Set([a.assignee]) : new Set());
         if (a.type === "ask") setAskOptions(a.options);
       }
     },
@@ -106,7 +92,6 @@ export default function App() {
     try {
       const b = await api.board();
       setTasks(b.tasks);
-      setMembers(b.members);
       setSummaryCards(b.summaryCards ?? []);
     } catch (e: any) {
       setLoadError(e?.message ?? String(e));
@@ -150,11 +135,9 @@ export default function App() {
     };
     // #72: メインチャットはリロードで新規 (会話は作業記憶。重要事項はプロジェクト前提/タスク経緯メモに
     // 蒸留されて残り、生ログはDB保存済みで📜監査タブから見える)。タスクチャットは経緯ログなので復元維持
-    const onBoard = (p: { tasks: Task[]; summaryCards?: SummaryCard[]; members?: Member[] }) => {
+    const onBoard = (p: { tasks: Task[]; summaryCards?: SummaryCard[] }) => {
       setTasks(p.tasks);
       if (p.summaryCards) setSummaryCards(p.summaryCards);
-      // メンバーを足したら担当フィルタと割り振り提案にすぐ効く (以前は再読み込みまで古いまま)
-      if (p.members) setMembers(p.members);
     };
     // Done要約カードの非同期再生成中インジケータ (#56)
     const onArchive = (p: { count: number }) => setArchiveWorking(p.count > 0);
@@ -230,9 +213,8 @@ export default function App() {
     [tasks]
   );
 
-  // 詳細パネルの「ボードで表示」: パネルは開いたまま、フィルタ解除→スクロール→フラッシュ (Slackスレッド風の常駐)
+  // 詳細パネルの「ボードで表示」: パネルは開いたまま、スクロール→フラッシュ (Slackスレッド風の常駐)
   const jumpToBoard = useCallback((id: number) => {
-    setFilter(new Set());
     setTimeout(() => {
       const el = document.querySelector(`[data-testid="task-card-${id}"]`);
       if (!el) return;
@@ -311,7 +293,6 @@ export default function App() {
   // 「何を話しかければいいか分からない人」向けのユースケース導線。ボード状態で出し分ける。
   // #93: チャットは常設(#74)なので、ボード以外を見ているときはその画面の話ができるチップを出す
   const suggestions: Suggestion[] = [];
-  const unassigned = tasks.filter((t) => t.status !== "done" && !t.assignee);
   const VIEW_SUGGESTIONS: Partial<Record<typeof view, Suggestion[]>> = {
     context: [{ label: "📋 前提情報に追記したい", message: "前提情報に追記したいことがある。いまの内容を踏まえて相談したい" }],
     metrics: [{ label: "💰 何にお金がかかってる?", message: "AI利用のコストは何にかかっている? 節約する余地はある?" }],
@@ -332,13 +313,6 @@ export default function App() {
     });
   } else {
     suggestions.push({ label: "📋 現状をレポートして", message: "ボードの現状を簡潔にレポートして" });
-    // #101: 振る相手がいないなら「いい感じに振る」は空回り。メンバー未登録なら出さない
-    if (members.length > 0 && unassigned.length > 0) {
-      suggestions.push({
-        label: `🎯 未割り当て${unassigned.length}件をいい感じに振る`,
-        message: "未割り当てのタスクをいい感じに振っといて",
-      });
-    }
     if (tasks.filter((t) => t.status === "review").length > 0) {
       suggestions.push({ label: "👀 レビュー待ちをまとめて", message: "レビュー中のタスクの状況をまとめて" });
     }
@@ -351,21 +325,11 @@ export default function App() {
     suggestions.push(...aiSuggestions);
   }
 
-  const sortedTasks = [...tasks].sort((a, b) => a.sort - b.sort || a.id - b.id);
-  // #90: トグルはメンバー表だけでなく「実際にボードに居る担当者」の和集合から作る。
-  // Claudeのようにメンバー未登録の担当者がいると、全部オンにしても出せないタスクが生まれるため
-  const filterNames = [
-    ...members.map((m) => m.name),
-    ...[...new Set(tasks.map((t) => t.assignee).filter((a): a is string => !!a))].filter(
-      (a) => !members.some((m) => m.name === a)
-    ),
-  ];
-  // #90: 選択ゼロなら素通し。複数選択はOR (Aさん「と」Bさんを並べて見る)
-  const visibleTasks =
-    filter.size === 0
-      ? sortedTasks
-      : sortedTasks.filter((t) => filter.has(t.assignee ?? UNASSIGNED));
-  const hiddenCount = sortedTasks.length - visibleTasks.length;
+  // #179: 担当フィルタは撤去した。いま絞り込みは無く、ボードは常に全件を出す。
+  // 作り直すなら「LLMにIDの集合を返させて、押した瞬間に確定する」形になる (CLAUDE.md の将来案) —
+  // 述語で絞る方式に戻さないのは、フィルタを掛けたまま放置したときに
+  // 後から増えたタスクが埋もれるため (#41/#90 で気にしていた「隠れたものが無いことになる」)
+  const visibleTasks = [...tasks].sort((a, b) => a.sort - b.sort || a.id - b.id);
 
   // パネルで開いているタスクが完了→アーカイブでtasksから消えても、パネルは最後のスナップショットで
   // 開き続ける (#53: AIの「完了にしました」返答が見えないまま消えるのを防ぐ)。閉じるのは✕のみ
@@ -432,47 +396,9 @@ export default function App() {
             ))}
           </span>
         </div>
-        {/* #90: 担当フィルタは複数トグル (AさんBさんを並べて見る)。選択ゼロ=全員表示。
-            なりきりの入口は撤去 (デモでは人フィルタが見えれば足りる)。speakerの配線は温存 */}
-        {/* #101: 担当者が1人も居ないプロジェクト(一人用)ではフィルタのチップを出さない。
-            「未割り当て」だけ残っても、全部が未割り当てなので絞る意味がない。
-            **隠すのはチップだけ。**以前は行ごと hidden にしていたので、担当者ゼロだと
-            右端のアカウント表示 (ログアウトボタン) まで巻き添えで消えていた */}
+        {/* #179: ここに担当フィルタのチップが並んでいた。担当という軸が無くなったので撤去。
+            右端のアカウント表示は残す (以前この行ごと隠して巻き添えで消したことがある) */}
         <div className="flex flex-wrap items-center gap-1 text-sm">
-          {filterNames.length > 0 && (
-            <>
-              {filterNames.map((name) => (
-                <button
-                  key={name}
-                  onClick={() => toggleFilter(name)}
-                  className={`rounded-full px-3 py-1 ${filter.has(name) ? "bg-slate-900 text-white" : "bg-slate-200 hover:bg-slate-300"}`}
-                >
-                  {name}
-                </button>
-              ))}
-              {/* 未割り当ては「拾い手がいない」を見つける導線。担当なしのタスクが埋もれるのを防ぐ */}
-              <button
-                onClick={() => toggleFilter(UNASSIGNED)}
-                className={`rounded-full px-3 py-1 ${filter.has(UNASSIGNED) ? "bg-slate-900 text-white" : "bg-slate-200 hover:bg-slate-300"}`}
-              >
-                未割り当て
-              </button>
-              {/* フィルタが効いていることをチップの色だけに頼らない。何件隠れているかを数で出す
-                  (#87/#88が「消えた」と誤解された事故の再発防止) */}
-              {filter.size > 0 && (
-                <span className="ml-2 flex items-center gap-1.5 rounded-full bg-amber-100 px-3 py-1 text-xs text-amber-800">
-                  フィルタで{hiddenCount}件が非表示
-                  <button
-                    onClick={() => setFilter(new Set())}
-                    className="font-bold hover:text-amber-950"
-                    title="フィルタ解除"
-                  >
-                    ✕
-                  </button>
-                </span>
-              )}
-            </>
-          )}
           {/* #113: ログインしていれば誰として入っているかを出す。していなければ入口だけ置く。
               どちらでも操作は同じ (ログインは任意) */}
           {auth?.user ? (
@@ -541,7 +467,7 @@ export default function App() {
         {view === "board" && !loading && !loadError && (
           <Board
             tasks={visibleTasks}
-            allTasks={sortedTasks}
+            allTasks={visibleTasks}
             summaryCards={summaryCards}
             archiveWorking={archiveWorking}
             onMove={moveTask}

@@ -27,8 +27,6 @@ const MAX_CHANGES = 40;
 export interface TaskFacts {
   title: string;
   status: string;
-  /** #179 で担当者を廃止したらこの項目ごと消える。それまでは変更を見逃さないために持つ */
-  assignee: string | null;
   summary: string | null;
   due: string | null;
   blockedBy: number[] | null;
@@ -94,7 +92,6 @@ export function captureBoard(): Omit<BoardSnapshot, "syncToken" | "takenAt"> {
       {
         title: t.title,
         status: t.status,
-        assignee: t.assignee,
         summary: t.summary ?? null,
         due: t.due,
         blockedBy: t.blockedBy,
@@ -162,7 +159,6 @@ function fieldChanges(prev: TaskFacts, cur: TaskFacts): string[] {
   const out: string[] = [];
   if (prev.status !== cur.status) out.push(`status: ${prev.status} -> ${cur.status}`);
   if (prev.title !== cur.title) out.push(`title: 「${prev.title}」-> 「${cur.title}」`);
-  if (prev.assignee !== cur.assignee) out.push(`担当: ${prev.assignee ?? "なし"} -> ${cur.assignee ?? "なし"}`);
   if (prev.rejected !== cur.rejected) out.push(cur.rejected ? "却下された" : "却下を取り消した");
   if (prev.due !== cur.due) out.push(`期限: ${prev.due ?? "なし"} -> ${cur.due ?? "なし"}`);
   if (!sameDeps(prev.blockedBy, cur.blockedBy))

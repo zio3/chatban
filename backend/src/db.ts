@@ -2,7 +2,13 @@ import { hooks } from "./hooks.js";
 import { log } from "./log.js";
 import { admin, adminReadonly, currentProjectId, db, projectReadonly } from "./store.js";
 import { decodeUnicodeEscapes } from "./text.js";
-import type { Member, Proposal, Task, TaskStatus } from "./types.js";
+import type { Task, TaskStatus } from "./types.js";
+
+// #179: 担当者・割り振りの機能は落とした (個人利用に特化)。
+// **DBの列とテーブルは残してある** — tasks.assignee / assign_reason / members /
+// proposals / assignment_history には実際に回した記録が入っており、消すと戻らない。
+// 残っているのは「データ」であって「機能」ではない: 読む経路も書く経路も無く、
+// query_log の許可リストからも外してある。認証 (#180) で逃げ道を残さなかったのと矛盾しない
 
 // #86: スキーマ定義とファイルの置き場は store.ts が持つ。
 // ここは「いまアクティブなプロジェクトのDB」に対する操作だけを書く。
@@ -27,8 +33,6 @@ function rowToTask(r: any): Task {
     id: r.id,
     title: r.title,
     status: r.status,
-    assignee: r.assignee,
-    assignReason: r.assign_reason ?? null,
     context: r.context ?? null,
     summary: r.summary ?? null,
     due: r.due ?? null,
@@ -44,7 +48,7 @@ function rowToTask(r: any): Task {
   };
 }
 
-export function createTask(title: string, status: TaskStatus = "todo", assignee: string | null = null, assignReason: string | null = null): Task {
+export function createTask(title: string, status: TaskStatus = "todo"): Task {
   // 新規作成でいきなり Done は作れない。検収は「実物を確かめた」記録なので、
   // 生まれた瞬間に確かめ終わっているものは無い (mayEnterDone と同じ理由)
   if (!isTaskStatus(status)) {
@@ -55,9 +59,7 @@ export function createTask(title: string, status: TaskStatus = "todo", assignee:
     log("api", `新規作成で status=done を指定されたので review にしました: ${title}`);
     status = "review";
   }
-  const info = db()
-    .prepare("INSERT INTO tasks (title, status, assignee, assign_reason) VALUES (?, ?, ?, ?)")
-    .run(title, status, assignee, assignReason);
+  const info = db().prepare("INSERT INTO tasks (title, status) VALUES (?, ?)").run(title, status);
   return getTask(Number(info.lastInsertRowid))!;
 }
 
@@ -67,7 +69,7 @@ export function getTask(id: number): Task | undefined {
 }
 
 export type TaskPatch = Partial<
-  Pick<Task, "title" | "status" | "assignee" | "assignReason" | "sort" | "context" | "summary" | "due" | "blockedBy" | "rejected">
+  Pick<Task, "title" | "status" | "sort" | "context" | "summary" | "due" | "blockedBy" | "rejected">
 >;
 
 /** Doneへ入ってよい状態か。approveChecked が通す条件そのもの。
@@ -119,9 +121,6 @@ export function updateTasks(patches: { id: number; patch: TaskPatch }[]): (Task 
   const results = patches.map(({ id, patch }) => {
     const cur = getTask(id);
     if (!cur) return undefined;
-    // #87: 空文字の担当は「未割り当て」の意図。文字列""のまま保存すると
-    // 誰にも割り当たっていないのにフィルタにも負荷計算にも乗らない幽霊状態になる
-    if (patch.assignee === "") patch = { ...patch, assignee: null };
     // 未知の列は無視する (その行の他の項目は保存する)。REST入口でも弾いているが、
     // ここが最後の砦 — 入口が増えたときに片方だけ直る形にしない
     if (patch.status !== undefined && !isTaskStatus(patch.status)) {
@@ -152,12 +151,10 @@ export function updateTasks(patches: { id: number; patch: TaskPatch }[]): (Task 
     // 印を消せば、差し戻したものは必ずもう一度チェックを付け直すことになる
     const leavingDone = cur.status === "done" && next.status !== "done";
     db().prepare(
-      "UPDATE tasks SET title = ?, status = ?, assignee = ?, assign_reason = ?, sort = ?, context = ?, summary = ?, due = ?, blocked_by = ?, rejected = ?, context_version = context_version + ?, checked_at = ?, done_at = ?, updated_at = datetime('now', 'localtime') WHERE id = ?"
+      "UPDATE tasks SET title = ?, status = ?, sort = ?, context = ?, summary = ?, due = ?, blocked_by = ?, rejected = ?, context_version = context_version + ?, checked_at = ?, done_at = ?, updated_at = datetime('now', 'localtime') WHERE id = ?"
     ).run(
       next.title,
       next.status,
-      next.assignee,
-      next.assignReason,
       next.sort,
       next.context,
       next.summary,
@@ -170,15 +167,6 @@ export function updateTasks(patches: { id: number; patch: TaskPatch }[]): (Task 
       next.status === "done" ? (cur.doneAt ?? new Date().toLocaleString("sv-SE")) : null,
       id
     );
-    // #126: 担当が変わったら、そのタスクの承認待ち提案は畳む (表示と実体の食い違いを残さない)
-    if (patch.assignee !== undefined && patch.assignee !== cur.assignee) settleProposalsFor(id, next.assignee);
-    if (patch.assignee && patch.assignee !== cur.assignee) {
-      db().prepare("INSERT INTO assignment_history (task_title, assignee, note) VALUES (?, ?, ?)").run(
-        next.title,
-        patch.assignee,
-        patch.assignReason ?? null
-      );
-    }
     if (cur.status !== "done" && next.status === "done") completed.push(id);
     else if (cur.status === "done" && next.status !== "done") reopened.push(id);
     return getTask(id);
@@ -265,103 +253,6 @@ export function restoreTask(id: number): Task | undefined {
  * 呼ばない、に依存しない — #57/#69 と同じ形) */
 export function purgeTask(id: number): boolean {
   return db().prepare("DELETE FROM tasks WHERE id = ? AND trashed_at IS NOT NULL").run(id).changes > 0;
-}
-
-export function listMembers(): Member[] {
-  return db().prepare("SELECT * FROM members ORDER BY id").all() as Member[];
-}
-
-/** 担当ごとの未完了件数。**ボードに見えているものだけを数える。**
- *
- * ゴミ箱もアーカイブ済みも数えていたので、消したタスクが担当者に乗り続けていた
- * (自動レビュー指摘)。この数字はLLMのシステムプロンプトに入って割り振り判断の材料になるので、
- * ずれると「消したタスクのせいでAIがその人を忙しいと誤認し、別の人へ振る」ことになる。
- * 画面に出ている数字が違う、で済まない — 判断材料そのものが汚れる。
- *
- * 条件はボードの一覧 (live_tasks) と同じにする。母集団の条件を書き分けると必ずズレる */
-export function memberLoads(): { name: string; openTasks: number }[] {
-  return listMembers().map((m) => ({
-    name: m.name,
-    openTasks: (
-      db()
-        .prepare(
-          "SELECT COUNT(*) AS c FROM tasks WHERE assignee = ? AND status != 'done' AND trashed_at IS NULL AND archived = 0"
-        )
-        .get(m.name) as { c: number }
-    ).c,
-  }));
-}
-
-export function assignmentHistory(limit = 20): { taskTitle: string; assignee: string; note: string | null }[] {
-  return (
-    db().prepare("SELECT task_title, assignee, note FROM assignment_history ORDER BY id DESC LIMIT ?").all(limit) as any[]
-  ).map((r) => ({ taskTitle: r.task_title, assignee: r.assignee, note: r.note }));
-}
-
-/** #126: reason は任意。裏付けの無い理由を作らせるくらいなら、理由なしで提案させる */
-export function createProposal(taskId: number, assignee: string, reason?: string | null): Proposal | undefined {
-  const task = getTask(taskId);
-  if (!task) return undefined;
-  const info = db().prepare("INSERT INTO proposals (task_id, assignee, reason) VALUES (?, ?, ?)").run(taskId, assignee, reason ?? null);
-  return getProposal(Number(info.lastInsertRowid));
-}
-
-export function getProposal(id: number): Proposal | undefined {
-  const r = db()
-    .prepare(
-      "SELECT p.*, t.title AS task_title FROM proposals p JOIN tasks t ON t.id = p.task_id WHERE p.id = ?"
-    )
-    .get(id) as any;
-  if (!r) return undefined;
-  return {
-    id: r.id,
-    taskId: r.task_id,
-    taskTitle: r.task_title,
-    assignee: r.assignee,
-    reason: r.reason,
-    status: r.status,
-    createdAt: r.created_at,
-  };
-}
-
-export function listPendingProposals(): Proposal[] {
-  const rows = db()
-    .prepare(
-      "SELECT p.*, t.title AS task_title FROM proposals p JOIN tasks t ON t.id = p.task_id WHERE p.status = 'pending' ORDER BY p.id"
-    )
-    .all() as any[];
-  return rows.map((r) => ({
-    id: r.id,
-    taskId: r.task_id,
-    taskTitle: r.task_title,
-    assignee: r.assignee,
-    reason: r.reason,
-    status: r.status,
-    createdAt: r.created_at,
-  }));
-}
-
-export function resolveProposal(id: number, status: "approved" | "rejected"): Proposal | undefined {
-  db().prepare("UPDATE proposals SET status = ? WHERE id = ?").run(status, id);
-  const p = getProposal(id);
-  if (p && status === "approved") {
-    updateTask(p.taskId, { assignee: p.assignee, assignReason: p.reason });
-  }
-  return p;
-}
-
-/** #126: 担当が別経路で確定したら、そのタスクの承認待ち提案は用済みにする。
- * 残しておくと、提案カードには古い候補・ボードには新しい担当が出て食い違う
- * (提案カードは承認ボタンを出しているのに、実体はもう確定している状態)。
- * 表示と実体を構造的に一致させる */
-export function settleProposalsFor(taskId: number, assignee: string | null): number {
-  const pending = db()
-    .prepare("SELECT id, assignee FROM proposals WHERE task_id = ? AND status = 'pending'")
-    .all(taskId) as { id: number; assignee: string }[];
-  const stmt = db().prepare("UPDATE proposals SET status = ? WHERE id = ?");
-  // 提案どおりなら承認扱い、違う相手に決まったなら却下扱い (どちらも「もう待っていない」)
-  for (const p of pending) stmt.run(p.assignee === assignee ? "approved" : "rejected", p.id);
-  return pending.length;
 }
 
 export interface SummaryElement {
@@ -629,9 +520,6 @@ export function exportAll() {
     summaryCards: all("summary_cards"),
     chatMessages: all("chat_messages"), // trace/usage含む生データ
     llmCalls: admin.prepare("SELECT * FROM llm_calls WHERE project_id = ? ORDER BY id").all(currentProjectId()),
-    assignmentHistory: all("assignment_history"),
-    proposals: all("proposals"),
-    members: all("members"),
     projectContext: db().prepare("SELECT * FROM project_context WHERE id = 1").get() ?? null,
     settings: exportableSettings(), // #88: どのモデルで動いていたかの記録
   };
@@ -688,10 +576,7 @@ export function auditLog() {
     elapsedMs: r.elapsed_ms,
     createdAt: r.created_at,
   }));
-  const assignments = (
-    db().prepare("SELECT id, task_title, assignee, note, created_at FROM assignment_history ORDER BY id DESC LIMIT 50").all() as any[]
-  ).map((r) => ({ id: r.id, taskTitle: r.task_title, assignee: r.assignee, note: r.note, createdAt: r.created_at }));
-  return { chat, llm, assignments };
+  return { chat, llm };
 }
 
 /** #93: 「直近なにをしてた?」に実データで答えるための活動ログ。
@@ -702,23 +587,17 @@ export function recentActivity(limit = 15) {
   const tasks = (
     db()
       .prepare(
-        "SELECT id, title, status, assignee, rejected, updated_at FROM tasks WHERE trashed_at IS NULL ORDER BY updated_at DESC, id DESC LIMIT ?"
+        "SELECT id, title, status, rejected, updated_at FROM tasks WHERE trashed_at IS NULL ORDER BY updated_at DESC, id DESC LIMIT ?"
       )
       .all(limit) as any[]
   ).map((r) => ({
     id: r.id,
     title: r.title,
     status: r.status,
-    assignee: r.assignee,
     ...(r.rejected ? { rejected: true } : {}),
     at: r.updated_at,
   }));
-  const assignments = (
-    db()
-      .prepare("SELECT task_title, assignee, note, created_at FROM assignment_history ORDER BY id DESC LIMIT 10")
-      .all() as any[]
-  ).map((r) => ({ task: r.task_title, to: r.assignee, note: r.note ? String(r.note).slice(0, 80) : null, at: r.created_at }));
-  return { updatedTasks: tasks, assignments };
+  return { updatedTasks: tasks };
 }
 
 // #91: 並べ替えはLLMが決めた順番(ID列)をそのまま受け取る。
@@ -776,13 +655,13 @@ export function searchTasks(terms: string[], limit = 10) {
   if (words.length === 0) return { hits: [] };
   const rows = db()
     .prepare(
-      "SELECT id, title, status, assignee, summary, assign_reason, context, archived FROM tasks WHERE trashed_at IS NULL"
+      "SELECT id, title, status, summary, context, archived FROM tasks WHERE trashed_at IS NULL"
     )
     .all() as any[];
 
   const scored = rows
     .map((r) => {
-      const haystack = [r.title, r.summary, r.assign_reason, r.context].filter(Boolean).join("\n");
+      const haystack = [r.title, r.summary, r.context].filter(Boolean).join("\n");
       const lower = haystack.toLowerCase();
       const matched = words.filter((w) => lower.includes(w.toLowerCase()));
       if (matched.length === 0) return null;
@@ -793,7 +672,6 @@ export function searchTasks(terms: string[], limit = 10) {
         id: r.id,
         title: r.title,
         status: r.archived ? "archived" : r.status,
-        assignee: r.assignee,
         matched, // どの語で当たったか (LLMが次の語を選び直す材料になる)
         snippet,
       };
@@ -894,10 +772,7 @@ export const PUBLIC_TABLES: Record<"cost" | "audit", readonly string[]> = {
     "live_tasks",
     "done_tasks",
     "chat_messages",
-    "assignment_history",
-    "proposals",
     "summary_cards",
-    "members",
     "project_context",
   ],
 };

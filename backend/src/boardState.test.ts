@@ -12,7 +12,6 @@ function task(over: Partial<TaskFacts> = {}): TaskFacts {
   return {
     title: "既定のタイトル",
     status: "todo",
-    assignee: null,
     summary: null,
     due: null,
     blockedBy: null,
@@ -100,12 +99,6 @@ test("依存は中身で比べる (null と空配列は同じ扱い)", () => {
   const changed = diffBoards(board([[1, task({ blockedBy: [2] })]]), board([[1, task({ blockedBy: null })]]));
   assert.equal(changed.length, 1);
   assert.match(changed[0], /依存: \[2\] -> \[\]/);
-});
-
-test("担当者の変更を拾う", () => {
-  const changes = diffBoards(board([[8, task()]]), board([[8, task({ assignee: "zio" })]]));
-  assert.equal(changes.length, 1);
-  assert.match(changes[0], /担当: なし -> zio/);
 });
 
 test("並べ替えは1行にまとめ、その1行から現在の順を復元できる", () => {

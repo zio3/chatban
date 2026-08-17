@@ -40,7 +40,20 @@ let client: OpenAI | null = null;
 function openai(): OpenAI {
   if (!client) {
     const c = llmConfig();
-    client = new OpenAI({ apiKey: c.apiKey, baseURL: c.baseURL });
+    client = new OpenAI({
+      apiKey: c.apiKey,
+      baseURL: c.baseURL,
+      // #191: **リトライしないことを明示する。**既定は2回で、401は対象外だが
+      // 429 / 5xx / 接続エラーには効く = 混雑しているときに1操作で3回叩く。
+      // 明示する理由は3つ:
+      //   1. **もう一方の経路 (messagesCompletion) は素の fetch なのでリトライしない。**
+      //      同じ操作の挙動が宛先の形式で変わるのを、既定値まかせで放置しない
+      //   2. #183 (期間限定デモ) で「リトライは入れない — 失敗を叩き直すと残高を早く食う」と
+      //      決めている。残高が上限そのものなので、勝手に3倍払わせない
+      //   3. 失敗はチャットに赤く出て **🔄再送ボタン**が付く。**人間が押すのが再試行**で、
+      //      裏で黙って増やす必要がない (「確定は人間」と同じ線)
+      maxRetries: 0,
+    });
   }
   return client;
 }

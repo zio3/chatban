@@ -268,3 +268,91 @@ test("短いAPIキーも伏せられる (長さで手加減しない)", () => {
 test("空の値は伏字にしない (すべての位置に一致してしまう)", () => {
   assert.equal(redactSecrets("some error", [undefined, null, ""]), "some error");
 });
+
+// #191: **上流が中間をマスクして返す形が漏れていた (失効キーで実測)。**
+// OpenAI は 401 の本文にキーを部分マスクで載せる:
+//   Incorrect API key provided: sk-ant-a****…IgAA
+// 元のキーと文字列が違うので完全一致の置換が発火せず、**先頭7文字と末尾4文字が
+// ログとHTTP応答に残った** (当日のログで3行)。
+
+test("部分マスクされたキーも伏せる (完全一致では捕まらない形)", () => {
+  const key = "sk-ant-api03-REALSECRETVALUE-abcdefghijklmnop-IgAA";
+  const masked = "sk-ant-a" + "*".repeat(40) + "IgAA"; // 上流が中間を埋めて返した形
+  const out = redactSecrets(`401 Incorrect API key provided: ${masked}. You can find...`, [key]);
+  assert.equal(out, "401 Incorrect API key provided: ***. You can find...");
+  // 断片が1つも残っていないこと (先頭も末尾も)
+  assert.ok(!out.includes("sk-ant-a"), "先頭が残っている");
+  assert.ok(!out.includes("IgAA"), "末尾が残っている");
+});
+
+// **マスク文字は列挙できない** (Codexレビュー指摘)。最初の実装は `*` と `.` だけを
+// 続きとみなしていたので、`…`(Unicode省略記号) で一致が止まり `***…IgAA` になって
+// **末尾4文字が残った**。実物のOpenAIは ASCII の `*` なので実測では気づけなかった —
+// 「実測で通ったから正しい」ではなく、**知らないマスク文字が来ても効くか**で見る
+test("マスクの文字が何であっても、トークンの終わりまで伏せる", () => {
+  const key = "sk-ant-api03-REALSECRETVALUE-abcdefghijklmnop-IgAA";
+  for (const middle of ["*".repeat(40), "…", "...", "xxxx", "•••", "＊＊", "▒▒▒"]) {
+    const out = redactSecrets(`key: sk-ant-a${middle}IgAA failed`, [key]);
+    assert.equal(out, "key: *** failed", `マスクが ${middle} のとき`);
+    assert.ok(!out.includes("IgAA"), `末尾が残っている (マスク=${middle})`);
+  }
+});
+
+test("設定を知らなくても、sk- で始まるトークンは形が崩れていても伏せる", () => {
+  // 規則3 (保険)。マスクが早く始まっても素通りさせない
+  assert.equal(redactSecrets("upstream: sk-proj-abcd1234…WXYZ bad", []), "upstream: *** bad");
+});
+
+test("JSONや引用符の中でも、周りの構造を壊さずに値だけ伏せる", () => {
+  const key = "sk-ant-api03-REALSECRETVALUE-abcdefghijklmnop-IgAA";
+  assert.equal(
+    redactSecrets(`{"error":"invalid key sk-ant-a****IgAA"}`, [key]),
+    `{"error":"invalid key ***"}`
+  );
+});
+
+// **伏せすぎると障害の手がかりが消える** (Codexレビュー指摘)。
+// Messages経路は上流のJSONをそのまま本文に載せるので**空白が1つも無い**。
+// 「空白まで」で取ると、キーが途中のフィールドにあるときに末尾まで飲み込み、
+// type や request_id まで消えた。**キーの後ろに構造が続くケース**で見る
+test("キーの後ろに続くJSONのフィールドは残す (type や request_id を消さない)", () => {
+  const key = "sk-ant-api03-REALSECRETVALUE-abcdefghijklmnop-IgAA";
+  const body =
+    `{"error":{"message":"invalid key sk-ant-a****…IgAA","type":"authentication_error"},"request_id":"req_123"}`;
+  const out = redactSecrets(body, [key]);
+  assert.equal(
+    out,
+    `{"error":{"message":"invalid key ***","type":"authentication_error"},"request_id":"req_123"}`
+  );
+  // 伏せる側と残す側を別々に言う (どちらかだけ通ると気づけない)
+  assert.ok(!out.includes("IgAA"), "キーの末尾が残っている");
+  assert.ok(out.includes("authentication_error"), "エラー種別が消えている");
+  assert.ok(out.includes("req_123"), "request_id が消えている");
+});
+
+test("マスクが早く始まる形も伏せる (コメントで救うと書いた例そのもの)", () => {
+  // 「12文字以上のキーらしい並び」「8文字以上」を要求していたときは、どちらも
+  // これを取りこぼしていた — **救えると書きながら救えていなかった**
+  assert.equal(redactSecrets("upstream: sk-abc***…xyz bad", []), "upstream: *** bad");
+  assert.equal(redactSecrets(`{"key":"sk-ab****"}`, []), `{"key":"***"}`);
+});
+
+test("設定に無いキーでも sk- の形なら伏せる (保険)", () => {
+  const out = redactSecrets("upstream said: sk-proj-AbCdEfGhIjKlMnOpQrStUv is invalid", []);
+  assert.equal(out, "upstream said: *** is invalid");
+});
+
+test("伏せすぎない — モデルIDやrequest_idは残す (診断の材料を消さない)", () => {
+  const key = "sk-ant-api03-REALSECRETVALUE-abcdefghijklmnop-IgAA";
+  const text = "model gpt-5.4-mini-2026-03-17 request_id=req_011CQ8xYz failed with 401";
+  assert.equal(redactSecrets(text, [key]), text);
+});
+
+test("短いダミーキーでは前方一致を使わない (無関係な語を巻き込まない)", () => {
+  // "ollama" は8文字未満なので、前方一致 (先頭8文字) の規則は適用しない。
+  // 完全一致だけが効くので、"ollama-server-v2" のような語まで丸ごと消えたりしない
+  assert.equal(
+    redactSecrets("connect to ollama-server-v2 failed", ["ollama"]),
+    "connect to ***-server-v2 failed"
+  );
+});

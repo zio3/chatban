@@ -131,7 +131,10 @@ function TaskCard({
           {task.blockedBy && task.blockedBy.length > 0 && (
             <span
               className="text-[10px] text-slate-400"
-              title={depsUnresolved ? "依存先が未完了のため着手できません" : "依存先はすべて完了済み"}
+              // #152: 「着手できません」と書いていたが、**コードは何も止めていない**
+              // (mayEnterDone は依存を見ない)。AI向けの契約を「緩い参照」に直したので、
+              // 人間が読む側も揃える — 入口ごとに意味が違うと、どちらを信じてよいか分からなくなる
+              title={depsUnresolved ? "終わっていない依存先があります (着手は止めません)" : "依存先はすべて完了済み"}
             >
               ⛓{" "}
               {task.blockedBy.map((id) => (

@@ -1,8 +1,16 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { CONTEXT_APPEND_DESCRIPTION, createTasksAsAgent, updateTasksAsAgent } from "./agentWrite.js";
+import {
+  CONTEXT_APPEND_DESCRIPTION,
+  createTasksAsAgent,
+  RESTORE_DESCRIPTION,
+  restoreTasksAsAgent,
+  updateTasksAsAgent,
+} from "./agentWrite.js";
 import {
   BLOCKED_BY_DESCRIPTION,
   CONTEXT_WRITE_DESCRIPTION,
+  DUE_DESCRIPTION,
+  SEARCH_DESCRIPTION,
   PROJECT_CONTEXT_WRITE_DESCRIPTION,
   QUERY_LOG_DESCRIPTION,
   REJECTED_DESCRIPTION,
@@ -19,7 +27,6 @@ import {
   queryProjectData,
   reorderTasks,
   createTask,
-  restoreTask,
   trashTask,
   getProjectContextRow,
   getTask,
@@ -112,7 +119,7 @@ export function buildMcpServer(onEvent: (kind: "board" | "proposals") => void): 
             status: STATUS.optional().describe(`省略時はtodo。${STATUS_DESCRIPTION}`),
             context: z.string().optional().describe("登録に至った経緯・論点・決定事項 (経緯メモの初期値)"),
             summary: z.string().optional().describe(SUMMARY_DESCRIPTION),
-            due: z.string().optional().describe("期限 YYYY-MM-DD"),
+            due: z.string().optional().describe(DUE_DESCRIPTION),
             blocked_by: z.array(z.number().int()).optional().describe(BLOCKED_BY_DESCRIPTION),
           })
         ),
@@ -127,6 +134,8 @@ export function buildMcpServer(onEvent: (kind: "board" | "proposals") => void): 
       return text({
         ok: true,
         created: (r.created as any[]).map((t: any) => brief(t)),
+        // #153: 期限の形が違って捨てたものは名指しで返す (保存されたつもりにさせない)
+        ...(r.badDue ? { badDue: r.badDue } : {}),
         ...(r.note ? { note: r.note } : {}),
         ...boardUpdate(sync_token),
       });
@@ -154,7 +163,7 @@ export function buildMcpServer(onEvent: (kind: "board" | "proposals") => void): 
               .optional()
               .describe("context を渡すときのみ必須。直前に query_log で読んだ context_version をそのまま添える"),
             context_append: z.string().optional().describe(CONTEXT_APPEND_DESCRIPTION),
-            due: z.string().nullable().optional().describe("期限 YYYY-MM-DD。解除はnull"),
+            due: z.string().nullable().optional().describe(`${DUE_DESCRIPTION}。解除はnull`),
             blocked_by: z.array(z.number().int()).nullable().optional().describe(`${BLOCKED_BY_DESCRIPTION}。全置換で、解除はnull`),
             rejected: flexBool.describe(REJECTED_DESCRIPTION),
           })
@@ -163,7 +172,7 @@ export function buildMcpServer(onEvent: (kind: "board" | "proposals") => void): 
       },
     },
     async ({ updates, sync_token }) => {
-      const { ok, status, updated, note, conflicts, notFound } = updateTasksAsAgent(updates as any);
+      const { ok, status, updated, note, conflicts, notFound, badDue } = updateTasksAsAgent(updates as any);
       onEvent("board");
       return text({
         // #120/#123: 1件でも適用できなければ ok:false。
@@ -174,6 +183,9 @@ export function buildMcpServer(onEvent: (kind: "board" | "proposals") => void): 
         // #112: 経緯メモの版が合わなかったものは適用していない。現在の全文を返すのでマージして再実行する
         ...(conflicts ? { conflicts } : {}),
         ...(notFound ? { notFound } : {}),
+        // #153: 期限だけ捨てた行。**フィールドを列挙して返しているので、増やしたら
+        // ここも足さないと入口ごとにズレる** (#92 #108 #114 と同じ形で、実際にズレた)
+        ...(badDue ? { badDue } : {}),
         ...(note ? { note } : {}),
         ...boardUpdate(sync_token),
       });
@@ -196,21 +208,22 @@ export function buildMcpServer(onEvent: (kind: "board" | "proposals") => void): 
   server.registerTool(
     "restore_tasks",
     {
-      description: "ゴミ箱に入れたタスクを元に戻す(複数可)",
+      description: RESTORE_DESCRIPTION,
       inputSchema: { ids: z.array(z.number().int()) },
     },
     async ({ ids }) => {
-      const restored = ids.map((id) => restoreTask(id));
+      // #161: 判定と報告は agentWrite に集約 (入口ごとに ok の意味が違わないように)。
+      // 返す形も共通側で絞ってあるので、ここで brief() を通す必要はない —
+      // **チャットとMCPで応答の形まで同じ**になる (以前は片方だけ要約していた)
       onEvent("board");
-      return text({ ok: true, restored: restored.map((t: any) => brief(t)) });
+      return text(restoreTasksAsAgent(ids));
     }
   );
 
   server.registerTool(
     "search_tasks",
     {
-      description:
-        "タスクの本文(タイトル・現況・経緯メモ)を横断検索する。アーカイブ済みも対象。表記ゆれや言い換えは自分で展開して複数語を渡す(OR検索)",
+      description: SEARCH_DESCRIPTION,
       inputSchema: { terms: z.array(z.string()).describe("検索語(最大10)。言い換え・英日表記を並べる") },
     },
     async ({ terms }) => text(searchTasks(terms))

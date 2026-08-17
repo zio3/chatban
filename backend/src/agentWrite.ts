@@ -1,4 +1,14 @@
-import { createTask, DONE_GATE_RULE, getTask, updateTask, updateTasks, type TaskPatch } from "./db.js";
+import {
+  createTask,
+  DONE_GATE_RULE,
+  DUE_FORMAT_RULE,
+  getTask,
+  isDueDate,
+  restoreTask,
+  updateTask,
+  updateTasks,
+  type TaskPatch,
+} from "./db.js";
 import { cleanAgentText } from "./text.js";
 import type { TaskStatus } from "./types.js";
 
@@ -61,6 +71,12 @@ export const CONTEXT_APPEND_DESCRIPTION =
   // 「追記を使え」という指示はあったが、使える形で書き始める方法が無かった
   "追記で積む前提なら、経緯メモの末尾に「## 経過」を作っておく。前半(背景・決めたこと)は固定、経過だけが伸びる形なら追記が効く — 節で細かく構造化すると追記が節の外に付き、毎回全文を書き直すことになる";
 
+/** #153: 期限の形が違うとき。**その行ごと落とさず、due だけ捨てて名指しで言う。**
+ * 他のフィールド (タイトル・経緯メモ) は書けているのに全体を失敗にすると、エージェントは
+ * 同じ内容を送り直すことになる (#120/#108 と同じ理由)。かといって黙って捨てると
+ * 「期限を入れたつもり」が残るので、必ず報告する */
+const BAD_DUE_NOTE = `期限の形式が違うため、その指定だけ適用していません (他の項目は保存しました)。${DUE_FORMAT_RULE}。その旨をユーザーにも伝えてください`;
+
 const NOT_FOUND_NOTE =
   "は存在しません。IDを確認してください (古い一覧を見ている可能性があります)。この指定は何も適用していません。その旨をユーザーにも伝えてください";
 
@@ -73,22 +89,93 @@ const DONE_NOTE =
   `done は指定できないので review に置きました。${DONE_GATE_RULE}。` +
   "実装や作業が終わったという意味だと解釈しています。ユーザーには「reviewに置いたので検収してください」と伝えてください";
 
-export function createTasksAsAgent(tasks: AgentTaskInput[]): { created: unknown[]; note?: string } {
+/** 渡された due を「保存してよい値」に均す。#153: 形が違うものは捨てる (undefined を返す) */
+function acceptableDue(due: string | null | undefined): { due?: string | null; bad: boolean } {
+  if (due === undefined) return { bad: false };
+  if (due === null || due === "") return { due: null, bad: false };
+  return isDueDate(due) ? { due, bad: false } : { bad: true };
+}
+
+export function createTasksAsAgent(tasks: AgentTaskInput[]): {
+  created: unknown[];
+  note?: string;
+  /** 期限の形が違って捨てたもの (タイトルで返す。作成時点ではIDを知らせても意味が薄い) */
+  badDue?: string[];
+} {
   let anyCoerced = false;
+  const badDue: string[] = [];
   const created = tasks.map((t) => {
     const { status, coerced } = coerceStatus(t.status);
     if (coerced) anyCoerced = true;
-    const task = createTask(cleanAgentText(t.title), status ?? "todo");
+    const title = cleanAgentText(t.title);
+    const task = createTask(title, status ?? "todo");
+    const due = acceptableDue(t.due);
+    if (due.bad) badDue.push(title);
     const patch: TaskPatch = {
       ...(t.context !== undefined ? { context: cleanAgentText(t.context) } : {}),
       ...(t.summary !== undefined ? { summary: cleanAgentText(t.summary) } : {}),
-      ...(t.due !== undefined ? { due: t.due } : {}),
+      ...(due.due !== undefined ? { due: due.due } : {}),
       ...(t.blocked_by !== undefined ? { blockedBy: t.blocked_by } : {}),
     };
     return Object.keys(patch).length > 0 ? updateTask(task.id, patch) : task;
   });
-  return { created, ...(anyCoerced ? { note: DONE_NOTE } : {}) };
+  // 2つ重なったら両方言う。片方だけ返すと、もう片方は起きなかったことになる
+  const notes = [anyCoerced ? DONE_NOTE : "", badDue.length > 0 ? BAD_DUE_NOTE : ""].filter(Boolean);
+  return {
+    created,
+    ...(notes.length > 0 ? { note: notes.join(" / ") } : {}),
+    ...(badDue.length > 0 ? { badDue } : {}),
+  };
 }
+
+/** #161: 復元の契約。**チャットとMCPで結果の読み方を揃えるために、ここに集約する。**
+ *
+ * 前の周までは各入口が restoreTask を直接呼んでいて、MCPは「1件でも戻せなければ ok:false」、
+ * チャットは「常に ok:true」になっていた (Codexレビュー指摘)。**ok だけを見るエージェントは
+ * 入口によって失敗を見落とす** — 同じ道具の名前で結果の意味が違うのが一番たちが悪い。
+ *
+ * 重複IDも先に落とす。[N, N] を渡すと1回目は成功・2回目は0件更新になり、
+ * **同じNが restored と notRestored の両方に載って ok:false** になっていた
+ * (approveChecked が同じ理由で先に dedupe しているのに合わせる)。
+ *
+ * 復元は検収の印を落とすので、**それを note で言う**。境界はコードで守られているが、
+ * 戻したエージェントが「検収状態が変わった」ことを知る手段が無いと、
+ * 「さっき検収されていたから確定できる」という前提のまま話を進めてしまう */
+export function restoreTasksAsAgent(ids: number[]): {
+  ok: boolean;
+  /** 戻したものの要点だけ。**Task をそのまま載せない** — `context` (1件1,000字超) が
+   * 応答に乗り、チャットではそれが次のLLM入力とtraceへ再投入される (#108 と同じ無駄)。
+   * ここで絞っておけば入口ごとに要約する必要がなく、経路差も生まれない (Codexレビュー指摘) */
+  restored: { id: number; title: string; status: string }[];
+  notRestored?: number[];
+  note?: string;
+} {
+  const unique = [...new Set(ids)];
+  const results = unique.map((id) => ({ id, task: restoreTask(id) }));
+  const restored = results
+    .map((r) => r.task)
+    .filter((t): t is NonNullable<typeof t> => !!t)
+    .map((t) => ({ id: t.id, title: t.title, status: t.status }));
+  const notRestored = results.filter((r) => !r.task).map((r) => r.id);
+  const notes = [
+    restored.length > 0 ? RESTORE_CHECKED_NOTE : "",
+    notRestored.length > 0
+      ? `#${notRestored.join(", #")} はゴミ箱に無いので戻していません (既にボードにあるか、存在しないIDです)。その旨をユーザーにも伝えてください`
+      : "",
+  ].filter(Boolean);
+  return {
+    ok: notRestored.length === 0,
+    restored,
+    ...(notRestored.length > 0 ? { notRestored } : {}),
+    ...(notes.length > 0 ? { note: notes.join(" / ") } : {}),
+  };
+}
+
+/** 復元したときに必ず言うこと。ツールの説明 (RESTORE_DESCRIPTION) と応答の両方で使う */
+export const RESTORE_CHECKED_NOTE =
+  "戻したタスクの検収の印は外れています (ゴミ箱を通る間に人間の確認は挟まっていないため)。Doneへ確定するには、人間がもう一度ボードで検収チェックを付ける必要があります";
+
+export const RESTORE_DESCRIPTION = `ゴミ箱に入れたタスクを元に戻す(複数可)。**戻すと検収の印は外れる** — ${DONE_GATE_RULE}。戻せなかったIDは notRestored で名指しで返る`;
 
 export function updateTasksAsAgent(updates: AgentTaskUpdate[]): {
   ok: boolean;
@@ -99,11 +186,14 @@ export function updateTasksAsAgent(updates: AgentTaskUpdate[]): {
   coerced: number[];
   conflicts?: ContextConflict[];
   notFound?: number[];
+  /** #153: 期限の形が違って、その指定だけ捨てたタスクID */
+  badDue?: number[];
   note?: string;
 } {
   const coerced: number[] = [];
   const conflicts: ContextConflict[] = [];
   const notFound: number[] = [];
+  const badDue: number[] = [];
 
   const patches = updates.map((u) => {
     // #87: 「差分だけ送る」モデルを前提にしない。全フィールドをエコーバックするモデル
@@ -120,10 +210,17 @@ export function updateTasksAsAgent(updates: AgentTaskUpdate[]): {
     }
     const changed = <T>(incoming: T | undefined, current: T) => incoming !== undefined && incoming !== current;
 
+    // done → review の倒し込みも、報告に積むのは行の適用が決まってから (下の contextStale の後)。
+    // badDue と同じ形で、版が合わずに行ごと未適用のときに「reviewに置きました」と返っていた
+    // (Codexレビュー指摘: 直した badDue の隣に同型が残っていた)
     const { status, coerced: didCoerce } = coerceStatus(u.status);
-    if (didCoerce) coerced.push(u.id);
 
-    const due = u.due === "" ? null : u.due;
+    // #153: 形が違う due は捨てて名指しで返す ("" は解除として扱う。従来どおり)。
+    // **報告に積むのは行が実際に適用されると分かってから** (下の contextStale の後)。
+    // 版が合わずに行ごと未適用のときに badDue も返すと、「他の項目は保存しました」と
+    // 「この行は一切適用していません」が同時に返って矛盾する (Codexレビュー指摘)
+    const dueCheck = acceptableDue(u.due);
+    const due = dueCheck.due;
     const blockedBy = u.blocked_by === undefined ? undefined : (u.blocked_by ?? null);
     const sameDeps =
       blockedBy !== undefined && JSON.stringify(blockedBy ?? []) === JSON.stringify(cur?.blockedBy ?? []);
@@ -162,6 +259,10 @@ export function updateTasksAsAgent(updates: AgentTaskUpdate[]): {
     // updated に載ったのを見て「書けた」と読まれる。成功と失敗は排他にする #120)
     if (contextStale) return null;
 
+    // ここまで来た行は適用される。**適用されたことが前提の報告はこの位置で積む** (#153)
+    if (dueCheck.bad) badDue.push(u.id);
+    if (didCoerce) coerced.push(u.id);
+
     return {
       id: u.id,
       patch: {
@@ -186,6 +287,9 @@ export function updateTasksAsAgent(updates: AgentTaskUpdate[]): {
     ...(coerced.length > 0 ? [`#${coerced.join(", #")} は${DONE_NOTE}`] : []),
     ...(conflicts.length > 0 ? [`#${conflicts.map((c) => c.id).join(", #")} は${CONFLICT_NOTE}`] : []),
     ...(notFound.length > 0 ? [`#${notFound.join(", #")} ${NOT_FOUND_NOTE}`] : []),
+    // #153: 期限だけ捨てた行。**rejected には数えない** — 他の項目は保存できているので、
+    // ここで ok:false にすると「1件も書けなかった」と読まれて全部送り直される
+    ...(badDue.length > 0 ? [`#${badDue.join(", #")} は${BAD_DUE_NOTE}`] : []),
   ];
   // #124: 適用できた行だけが入る。undefined/null は混ざらない (内部事情を漏らさない)
   const applied = updated.filter((t): t is NonNullable<typeof t> => t != null);
@@ -199,6 +303,7 @@ export function updateTasksAsAgent(updates: AgentTaskUpdate[]): {
     coerced,
     ...(conflicts.length > 0 ? { conflicts } : {}),
     ...(notFound.length > 0 ? { notFound } : {}),
+    ...(badDue.length > 0 ? { badDue } : {}),
     ...(notes.length > 0 ? { note: notes.join(" / ") } : {}),
   };
 }

@@ -323,6 +323,21 @@ async function mcp(tool: string, args: unknown): Promise<any> {
   return JSON.parse(JSON.parse(line).result.content[0].text);
 }
 
+/** MCPの道具一覧 (契約そのもの)。同じ取り出しが3か所に書かれていたのでここへ寄せた */
+async function mcpToolList(): Promise<any[]> {
+  const res = await fetch(`${API}/mcp/1`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream" },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+  });
+  const line = (await res.text())
+    .split("\n")
+    .map((l) => l.replace(/^data: /, "").trim())
+    .filter((l) => l.startsWith("{"))
+    .pop()!;
+  return JSON.parse(line).result.tools as any[];
+}
+
 test("経緯メモの上書きは版が合うときだけ通る。状態変更は版に縛られない (#112)", async () => {
   const id = await createTask("楽観ロックの検証");
 
@@ -440,9 +455,11 @@ test("MCPの読み取りはSQL窓口1本。落とした一覧ツールは同じ�
   expect(names).toContain("query_log");
   expect(names).toContain("sync_board");
 
-  // 落としたぶんはSQLで引ける (接続の足場だけは get_project_context に残す)
+  // 落としたぶんはSQLで引ける (接続の足場だけは get_project_context に残す)。
+  // **作ったタスクに絞って引く** — 全件だと query_log の上限 (200行) で切られ、
+  // 積み重なったE2Eデータでは新しいものが範囲外に落ちる (実測: 387件で発生)
   const board = await mcp("query_log", {
-    sql: "SELECT id, status, title FROM tasks WHERE archived=0 AND trashed_at IS NULL",
+    sql: `SELECT id, status, title FROM tasks WHERE archived=0 AND trashed_at IS NULL AND id=${id}`,
   });
   expect(board.rows.some((r: any) => r.id === id)).toBe(true);
 
@@ -661,8 +678,11 @@ test("生きているタスクは live_tasks ビューで引ける (母集団の
   const trashed = await createTask("ゴミ箱行きのタスク");
   await mcp("delete_tasks", { ids: [trashed] });
 
+  // **この2件に絞って引く。**母集団を全件取ると query_log の上限 (200行) で切られ、
+  // 積み重なったE2Eデータでは新しく作ったほうが範囲外に落ちて落ちる (実測: 387件で発生)。
+  // 確かめたいのは「live_tasks にゴミ箱が混ざらない」ことなので、母集団の大きさは要らない
   const r = await mcp("query_log", {
-    sql: "SELECT id, title FROM live_tasks",
+    sql: `SELECT id, title FROM live_tasks WHERE id IN (${alive}, ${trashed})`,
   });
   const ids = (r.rows as any[]).map((x) => x.id);
   expect(ids).toContain(alive);
@@ -749,7 +769,15 @@ test("summary の契約はチャットとMCPで同じ文言になっている (�
   expect(summaryDesc).not.toContain("状態ではなく");
 
   const dep = update.inputSchema.properties.updates.items.properties.blocked_by.description;
-  expect(dep).toContain("それが終わらないと着手できない");
+  // #152: 依存は緩い参照で、コードは何も止めない (mayEnterDone は依存先を見ない)。
+  // 以前は「それが終わらないと着手できない」と書いてあり、実装が課していない制約を
+  // 宣言していた — 相互依存や循環を見たエージェントが「矛盾」として直そうとする。
+  // 契約側で「止めない」「循環でも矛盾ではない」を言えていることを検査する
+  expect(dep).toContain("コードは何も止めない");
+  expect(dep).toContain("循環していても矛盾ではない");
+  expect(dep).not.toContain("着手できない");
+  // 依存を優先順位に使う失敗 (#41) への歯止めは残っていること
+  expect(dep).toContain("reorder_tasks");
 
   // 契約が「渡せないもの」を案内していないこと。additionalProperties:false なので、
   // 存在しないパラメータ名を書くと渡した側が確実にエラーになる (実際 rejected の説明が
@@ -1591,4 +1619,167 @@ test("先に始まっていた提案生成は、チャットが始まったら�
     }
   }
   expect(observed, "3回試しても中断のログが増えなかった (suggestが毎回chatより先に完了した?)").toBe(true);
+});
+
+test("ゴミ箱に入れると検収の印が落ちる (古い確認のままDoneへ通せない) (#161)", async () => {
+  // 検収まで済ませる (人間のUI操作と同じ道)
+  const id = await createTask("検収済みだがゴミ箱を通ったタスク", "review");
+  await fetch(`${API}/api/tasks/${id}/checked`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ checked: true }),
+  });
+  const checkedAt = async () =>
+    (await mcp("query_log", { scope: "audit", sql: `SELECT checked_at FROM tasks WHERE id=${id}` }))
+      .rows[0].checked_at;
+  expect(await checkedAt(), "検収の印が付いていない").toBeTruthy();
+
+  // ゴミ箱 → 復元。**AIが呼べるMCPツールだけで往復できる**のがこの穴の入口だった
+  expect((await mcp("delete_tasks", { ids: [id] })).ok).toBe(true);
+  expect((await mcp("restore_tasks", { ids: [id] })).ok).toBe(true);
+
+  // 復元後は未検収に戻っている (ゴミ箱と復元の間に人間の確認は一度も入っていない)
+  expect(await checkedAt(), "古い検収の印が生き返っている").toBeFalsy();
+
+  // ゴミ箱にいる間は「検収済みだった」事実が残る (監査の材料を消さない)。
+  // ゴミ箱にある限り mayEnterDone は trashedAt を見て false なので、残っていても危険はない —
+  // **落とすのは復元のとき**。この形なら、変更前からゴミ箱にある行にも効く
+
+  // **やっていないことを報告しない。**ゴミ箱に無いタスクを restore しても成功にしない
+  // (以前は更新0件でも getTask を返していたので「復元しました」と言えてしまった)
+  const again = await mcp("restore_tasks", { ids: [id] });
+  expect(again.ok, "ゴミ箱に無いのに復元成功として返っている").toBe(false);
+  expect(again.notRestored).toContain(id);
+  expect(again.restored, "戻していないのに restored に載っている").toHaveLength(0);
+
+  // RESTは理由で応答を分ける。**実在するタスクを「無い」と言わない**
+  const already = await fetch(`${API}/api/tasks/${id}/restore`, { method: "POST" });
+  expect(already.status, "実在するのに404を返している").toBe(409);
+  const missing = await fetch(`${API}/api/tasks/99999999/restore`, { method: "POST" });
+  expect(missing.status).toBe(404);
+
+  // 同じIDを2つ渡しても、片方が成功・片方が失敗にならない (先に重複を落とす)
+  const dupTarget = await createTask("重複指定で戻すタスク");
+  await mcp("delete_tasks", { ids: [dupTarget] });
+  const dup = await mcp("restore_tasks", { ids: [dupTarget, dupTarget] });
+  expect(dup.ok, "同じIDが成功と失敗の両方になっている").toBe(true);
+  expect(dup.restored).toHaveLength(1);
+  expect(dup.notRestored).toBeUndefined();
+  // 応答は要点だけ。**経緯メモを載せない** — チャット経路ではこれが次のLLM入力へ再投入される
+  expect(Object.keys(dup.restored[0]).sort()).toEqual(["id", "status", "title"]);
+  // 復元したら検収の印が外れることを応答でも言う (境界はコードで守るが、報告しないと
+  // エージェントは「さっき検収されていた」前提のまま話を進める)
+  expect(dup.note).toContain("検収");
+
+  // 印が無いので確定も通らない。setChecked はRESTにしか無いので、AIはここから先へ進めない
+  const res = await fetch(`${API}/api/tasks/approve`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ids: [id] }),
+  });
+  const after = await mcp("query_log", { scope: "audit", sql: `SELECT status FROM tasks WHERE id=${id}` });
+  expect(res.ok).toBe(true); // 一括検収そのものは成功で返る (条件を満たす件だけ通す)
+  expect(after.rows[0].status, "未検収なのにDoneへ入った").not.toBe("done");
+});
+
+test("期限は登録時にも保存される (弾くだけ足して保存を忘れない) (#153)", async () => {
+  // **「検証を足したら、通ったものが効くこと」まで確かめる。**
+  // 検証だけ足して createTask に渡し忘れ、正しい due が200のまま黙って捨てられていた
+  const res = await fetch(`${API}/api/tasks`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ title: "登録時に期限を入れるタスク", due: "2026-08-20" }),
+  });
+  expect(res.ok).toBe(true);
+  const created = await res.json();
+  expect(created.due, "正しい期限が黙って捨てられている").toBe("2026-08-20");
+
+  // 不正な形式は登録そのものを断る
+  const bad = await fetch(`${API}/api/tasks`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ title: "だめな期限", due: "2026-02-31" }),
+  });
+  expect(bad.status).toBe(400);
+
+  // 解除の "" は空文字を保存せず null に均す (画面では解除に見えるのに
+  // WHERE due IS NOT NULL のSQLに残る、という食い違いを作らない)
+  await fetch(`${API}/api/tasks/${created.id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ due: "" }),
+  });
+  const row = await mcp("query_log", {
+    scope: "audit",
+    // 別名に notNull は使えない (SQLite の予約語 NOTNULL とぶつかって構文エラーになる)
+    sql: `SELECT due, (due IS NOT NULL) AS has_due FROM tasks WHERE id=${created.id}`,
+  });
+  expect(row.rows[0].has_due, "解除したのに空文字が残っている").toBe(0);
+});
+
+test("期限の形式が違うとその指定だけ捨てて名指しで返す (#153)", async () => {
+  // REST は 400 で断る
+  const id = await createTask("期限を入れたいタスク");
+  const bad = await fetch(`${API}/api/tasks/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ due: "not-a-date" }),
+  });
+  expect(bad.status).toBe(400);
+  expect((await bad.json()).error).toContain("YYYY-MM-DD");
+
+  // エージェント経路 (MCP) は行ごと落とさず、他の項目は保存して badDue で報告する
+  const r = await mcp("update_tasks", { updates: [{ id, summary: "現況は保存される", due: "2026-02-31" }] });
+  expect(r.badDue, "期限を捨てたことが名指しで返っていない").toContain(id);
+  expect(r.note).toContain("期限の形式");
+
+  const row = await mcp("query_log", {
+    scope: "audit",
+    sql: `SELECT due, summary FROM tasks WHERE id=${id}`,
+  });
+  expect(row.rows[0].due, "暦に無い日付が保存された").toBeFalsy();
+  expect(row.rows[0].summary, "期限以外も一緒に落ちている").toBe("現況は保存される");
+
+  // 正しい形式は通る (弾きすぎていないことの確認)
+  const ok = await mcp("update_tasks", { updates: [{ id, due: "2026-08-17" }] });
+  expect(ok.badDue).toBeUndefined();
+  expect((await mcp("query_log", { scope: "audit", sql: `SELECT due FROM tasks WHERE id=${id}` })).rows[0].due)
+    .toBe("2026-08-17");
+});
+
+test("検索の絞り込みは引数ではなくSQLへ案内する (#176)", async () => {
+  const hit = await createTask("スクリーンショットを撮り直す");
+  const noise = await createTask("ダークモードの検討");
+  // 経緯メモに語が入っているだけのタスク (#130 で実際に起きた形)。
+  // context の全文上書きは版が要るので、版の要らない context_append で足す
+  await mcp("update_tasks", {
+    updates: [{ id: noise, context_append: "提出前に見た目を揃えるかどうか。スクリーンショットの見え方も含む" }],
+  });
+
+  // search_tasks は広く当てる道具のまま (本文で当たるものも返る)
+  const wide = await mcp("search_tasks", { terms: ["スクリーンショット"] });
+  const wideIds = wide.hits.map((h: any) => h.id);
+  expect(wideIds).toContain(hit);
+  expect(wideIds, "本文で当たるものが出ていない (前提が崩れている)").toContain(noise);
+
+  // **絞り込みの引数は持たない。**足しかけた title_only は撤回した (#91 と同じ判断) —
+  // 渡しても黙って無視される (=引数で絞れると思わせない) ことを固定する
+  const ignored = await mcp("search_tasks", { terms: ["スクリーンショット"], title_only: true });
+  expect(ignored.hits.map((h: any) => h.id), "絞り込みの引数が生きている").toContain(noise);
+
+  // 代わりに契約がSQLへ案内していること。案内が消えたら、絞りたいエージェントは
+  // 引数を探して見つからず、広い結果を読み直すことになる
+  const tools = await mcpToolList();
+  const desc = tools.find((t: any) => t.name === "search_tasks").description as string;
+  expect(desc).toContain("query_log");
+  expect(desc).toContain("title LIKE");
+
+  // **案内した先が実際に効くことまで確かめる。**手順を書くだけでなく通してみる
+  const narrowed = await mcp("query_log", {
+    scope: "audit",
+    sql: "SELECT id, title FROM live_tasks WHERE title LIKE '%スクリーンショット%'",
+  });
+  const narrowedIds = narrowed.rows.map((r: any) => r.id);
+  expect(narrowedIds).toContain(hit);
+  expect(narrowedIds, "SQLで絞ったのに本文で当たったものが残っている").not.toContain(noise);
 });

@@ -100,6 +100,27 @@ export function isTaskStatus(v: unknown): v is TaskStatus {
 export const DONE_GATE_RULE =
   "Doneへは「Review列に置く → 人間が検収チェックを付ける → 確定」の順でしか入りません。他の列からDoneへの直送はできません";
 
+/** #153: 期限は YYYY-MM-DD だけ。契約にはそう書いてあるが確かめていなかったので、
+ * `not-a-date` がそのまま保存された (ユーザー報告)。
+ *
+ * **文字列としての形だけでなく、暦として在る日かも見る。**正規表現だけだと 2026-02-31 や
+ * 2026-13-01 が通る。通してしまうと、カードのバッジ(dueBadge)や「期限が近い順」の判断が
+ * 静かに狂う — 保存できてしまう値のほうが、弾かれる値より始末が悪い。
+ *
+ * isTaskStatus と同じ置き方 (実行時に外から来た値を確かめる純粋関数)。DBもHTTPも要らないので
+ * ユニットで押さえられるし、REST・チャット・MCPのどこから来ても同じ判定になる */
+export function isDueDate(v: unknown): v is string {
+  if (typeof v !== "string") return false;
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(v);
+  if (!m) return false;
+  const [y, mo, d] = [Number(m[1]), Number(m[2]), Number(m[3])];
+  // UTCで組み立てる。ローカル時刻だとタイムゾーン次第で日付がずれ、判定が環境依存になる
+  const dt = new Date(Date.UTC(y, mo - 1, d));
+  return dt.getUTCFullYear() === y && dt.getUTCMonth() === mo - 1 && dt.getUTCDate() === d;
+}
+
+export const DUE_FORMAT_RULE = "期限は YYYY-MM-DD (実在する日付) で渡してください。解除は null です";
+
 /** Doneへ確定して要約カードに畳まれたか。
  *
  * archived は Task 型に出していない (getTask はアーカイブ済みも返すが、UIは要約カード経由で読む)。
@@ -230,15 +251,40 @@ export function trashTask(id: number): boolean {
         // 要約カードの task_ids は更新されないので、消すとカードに存在しないIDが残り、
         // 開くと404になる — 検収済み成果の監査元が壊れる (自動レビュー指摘)。
         // ボードから見えないタスクをチャット/MCPがIDで名指しできてしまうのが入口だった
+        //
+        // #161: 検収の印はここでは触らない。落とすのは復元のとき (restoreTask を見る)
         "UPDATE tasks SET trashed_at = datetime('now', 'localtime') WHERE id = ? AND trashed_at IS NULL AND archived = 0"
       )
       .run(id).changes > 0
   );
 }
 
+/** #161: **戻すときに検収の印を落とす。**
+ *
+ * trashed_at を付け外しするだけだったので、「検収済み → ゴミ箱 → 復元」で
+ * **古い checked_at が生き返り**、人間の確認を一度も挟まずに mayEnterDone が再び true になった。
+ * delete_tasks / restore_tasks は **AIが呼べるMCPツール**なので、REST専用にしてある setChecked を
+ * 経路として迂回できていた (「プロンプトは漏れるが、経路が無いことは漏れない」に反する)。
+ * updateTasks が backToWork / leavingDone で印を消しているのと同じ理屈 —
+ * 状態が変われば前の確認は根拠にならない。
+ *
+ * **落とすのは trash 時ではなく restore 時。**理由が2つある (Codexレビュー指摘):
+ *   1. ゴミ箱の中にいる間は「検収済みだった」という事実が残る (監査の材料を消さない)。
+ *      ゴミ箱にある限り mayEnterDone は trashedAt を見て false なので、残っていても危険はない
+ *   2. **この変更より前からゴミ箱にある行にも効く。**trash 時に消す形だと、既にゴミ箱で
+ *      眠っている checked_at 非NULLの行は復元で古い印が復活したままになる (移行が必要になる)
+ *
+ * 条件に trashed_at IS NOT NULL を付けているので、ゴミ箱に無いものを restore しても印は消えない。
+ *
+ * **戻すのは「実際に戻したとき」だけ。**以前は changes を見ずに必ず getTask を返していたので、
+ * ゴミ箱に無い生きたタスクのIDを渡しても成功として扱われ、呼び出し側が
+ * 「復元しました」と報告していた (Codexレビュー指摘)。**やっていないことを報告しない** —
+ * 0件更新は undefined を返し、入口側 (REST 404 / restored:false) に判断させる */
 export function restoreTask(id: number): Task | undefined {
-  db().prepare("UPDATE tasks SET trashed_at = NULL WHERE id = ?").run(id);
-  return getTask(id);
+  const changed = db()
+    .prepare("UPDATE tasks SET trashed_at = NULL, checked_at = NULL WHERE id = ? AND trashed_at IS NOT NULL")
+    .run(id).changes;
+  return changed > 0 ? getTask(id) : undefined;
 }
 
 /** 実体を消す。人間のUI操作からのみ通す (チャット・MCPからは呼ばない)。
@@ -520,6 +566,24 @@ export function reorderTasks(
 // 出す必要がない。LLMが語を並べ(判断)、コードが総当たりする(機械的処理) — #91の並べ替えと同じ形。
 //
 // アーカイブ済みも対象にする。経緯を後から辿りたい場面はDoneになった後のほうが多い。
+/** #176: **絞り込みの引数は持たない。**
+ *
+ * 複数語をORで引くのは表記ゆれを展開するためで、それ自体は正しい。問題は本文(経緯メモ)まで
+ * 見ることで、**語がかすっただけのタスクが混ざる**こと。実例 (2026-08-15): 「記事 / スクショ /
+ * Zenn / 提出」で引いたら #130(ダークモードの検討) や #103(検索機能の実装) が返った —
+ * どちらも context に「提出」の2文字があっただけ。候補10件を読み直すことになった。
+ *
+ * `titleOnly` を足しかけたが**やめた** (zio: 「その方向だったら、SQL直接書いてもらう方向を
+ * 案内しようか」)。絞りたい形は「タイトルだけ」以外にもいくらでもある — 期限つきだけ、
+ * review だけ、8月に触ったものだけ、その組み合わせ。引数で並べ始めると際限が無く、
+ * **#91 でソートキーを渡す方式を作りかけて捨てたのと同じ形**になる。
+ *
+ * 絞り込みは `query_log` (読み取り専用のSQL窓口) の仕事にする。`WHERE title LIKE '%記事%'`
+ * と書けば済み、**新しい安全境界も要らない** (readonly + 許可リスト #168 で既に守ってある)。
+ * ANDも同じ理由で足さない (そもそも表記ゆれの展開は「どれか1つ当たればよい」ので、
+ * ANDにすると展開そのものが機能しなくなる)。
+ *
+ * この関数は「表記ゆれを展開して当たりを見つける」までの道具と位置づける */
 export function searchTasks(terms: string[], limit = 10) {
   const words = terms.map((t) => t.trim()).filter(Boolean).slice(0, 10);
   if (words.length === 0) return { hits: [] };

@@ -1,11 +1,16 @@
 import type OpenAI from "openai";
-import { CONTEXT_APPEND_DESCRIPTION, createTasksAsAgent, updateTasksAsAgent } from "./agentWrite.js";
+import {
+  CONTEXT_APPEND_DESCRIPTION,
+  createTasksAsAgent,
+  RESTORE_DESCRIPTION,
+  restoreTasksAsAgent,
+  updateTasksAsAgent,
+} from "./agentWrite.js";
 import { cleanAgentText } from "./text.js";
 import { compactArchive } from "./archive.js";
 import { getBoardPromptSection } from "./promptState.js";
 import {
   createTask,
-  restoreTask,
   trashTask,
   getTask,
   listSummaryCards,
@@ -152,11 +157,37 @@ export const SUMMARY_DESCRIPTION =
 export const CONTEXT_WRITE_DESCRIPTION =
   "経緯メモの全文上書き。累積の記録なので、既存を読んでマージした全文を渡す(書き直すときに要約すると前の情報が消える)。渡すときは context_version も必須。1件足すだけなら context_append を使う — そちらは読む必要も版も要らない";
 
+/** #153: 期限の契約。以前は「期限 YYYY-MM-DD」だけで、**渡した値が使われたかどうかが
+ * 返り値から分からなかった** — `not-a-date` がそのまま保存された報告がある。
+ * 検証を足したので、契約側でも「実在する日付」と「違うと捨てて報告する」ことを言う */
+export const DUE_DESCRIPTION =
+  "期限 YYYY-MM-DD (実在する日付。相対表現は今日の日付から解決する)。形式が違うとその指定だけ捨てて badDue で名指しで返す — 保存されたつもりにならないよう、返り値を確かめる";
+
+/** #176: 検索の位置づけ。**絞り込みの引数は持たない** — 絞りたい形は際限が無いので、
+ * SQL窓口 (query_log) へ渡すよう契約側で案内する。#91 でソートキーを渡す方式を捨てたのと同じ判断。
+ * チャットとMCPで同じ文言を使う (入口ごとに書き分けると必ずズレる) */
+export const SEARCH_DESCRIPTION = [
+  "タスクの本文(タイトル・現況・経緯メモ)を横断検索する。アーカイブ済みも対象。表記ゆれや言い換えは自分で展開して複数語を渡す(OR検索・当たった語が matched で返る)。",
+  "**候補が広すぎたら、この道具で絞ろうとせず query_log でSQLを書く。**本文にその語が1度出てくるだけで当たるので、絞り込みはSQLのほうが素直に書ける:",
+  "例(タイトルだけを見る): SELECT id, title FROM live_tasks WHERE title LIKE '%記事%'",
+  "例(条件を重ねる): SELECT id, title, due FROM live_tasks WHERE status='review' AND due IS NOT NULL ORDER BY due",
+  "この道具は「表記ゆれを展開して当たりを見つける」まで、query_log は「条件で絞る」— 使い分ける。",
+].join("\n");
+
 /** 依存の契約。「順番に着手したい」を依存にしてしまう失敗が実際に起きた
  * (「DateTimeOffset化はデモの後」を blocked_by で表現していた)。
- * 依存は着手可能性の話で、優先順位は sort(並び順)で表す */
+ * 依存は着手可能性の話で、優先順位は sort(並び順)で表す。
+ *
+ * #152: **「それが終わらないと着手できない」と書いていたのをやめた。**
+ * 強制力の宣言に読めるが、実装は何も止めていない (`mayEnterDone` が見るのは
+ * status / checkedAt / trashedAt だけで、依存先は見ない)。文言だけが嘘をついていたので、
+ * 相互依存や循環を見たエージェントが「両方とも永久に着手できない=矛盾」と読み、
+ * 直すべき不整合として扱ってしまう。**緩い参照であることを契約側で言う。**
+ * かつて `reason` 欄が説明不足で用途を発明されたのと同じ形 — あちらは説明が無く、
+ * こちらは説明が実装と違った。ツール契約のdescriptionはエージェントにとってのUIラベルなので、
+ * 実装が課していない制約をそこに書くと、エージェントはそれを守ろうとして詰まる */
 export const BLOCKED_BY_DESCRIPTION =
-  "依存先タスクID。「それが終わらないと着手できない」ときだけ張る。あとでやりたいだけ・順番を表したいだけなら張らず、reorder_tasks で列の下へ落とす(依存は着手可能性、優先順位は並び順)";
+  "依存先タスクID。「#AはBが終わってから」という関係の覚え書きで、コードは何も止めない(依存先が残っていても着手・Review・Doneはできる)。相互に張り合っていても、循環していても矛盾ではない — 事実としてそう書いてあるだけ。未完了の依存先があれば「#N待ち」と添え、やるかどうかは人間に決めてもらう。あとでやりたいだけ・順番を表したいだけなら張らず、reorder_tasks で列の下へ落とす(依存は関係の記述、優先順位は並び順)";
 
 // 計測スクリプト(scripts/prompt-breakdown.ts)から実物を測れるように公開する。
 // 「何が入力トークンを食っているか」はソースを眺めても分からず、実物を数えるしかない
@@ -176,7 +207,7 @@ export const tools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
               properties: {
                 title: { type: "string" },
                 context: { type: "string", description: "登録に至った経緯・会話で出た論点・決まったこと。相談や議論の流れから登録するときは必ず書く (タイトルだけでは背景が失われる)" },
-                due: { type: "string", description: "期限 YYYY-MM-DD。相対表現は今日の日付から解決" },
+                due: { type: "string", description: DUE_DESCRIPTION },
                 blocked_by: { type: "array", items: { type: "integer" }, description: BLOCKED_BY_DESCRIPTION },
               },
               required: ["title"],
@@ -204,7 +235,7 @@ export const tools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
                 title: { type: "string" },
                 status: { type: "string", enum: STATUS_VALUES, description: STATUS_DESCRIPTION },
                 summary: { type: "string", description: SUMMARY_DESCRIPTION },
-                due: { type: ["string", "null"], description: "期限 YYYY-MM-DD。解除はnull" },
+                due: { type: ["string", "null"], description: `${DUE_DESCRIPTION}。解除はnull` },
                 blocked_by: { type: ["array", "null"], items: { type: "integer" }, description: `${BLOCKED_BY_DESCRIPTION}。全置換で、解除はnull` },
                 rejected: { type: "boolean", description: REJECTED_DESCRIPTION },
                 context: { type: "string", description: CONTEXT_WRITE_DESCRIPTION },
@@ -235,7 +266,7 @@ export const tools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
     type: "function",
     function: {
       name: "restore_tasks",
-      description: "ゴミ箱に入れたタスクを元に戻す(複数可)",
+      description: RESTORE_DESCRIPTION,
       parameters: {
         type: "object",
         properties: { ids: { type: "array", items: { type: "integer" } } },
@@ -282,8 +313,9 @@ export const tools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
     type: "function",
     function: {
       name: "search_tasks",
-      description:
-        "タスクの本文(タイトル・現況・経緯メモ)と会話ログを横断検索する。アーカイブ済みも対象。会話は新しい順に最大6件返る(「あんな話してたっけ?」用)。表記ゆれや言い換えは自分で展開して複数語を渡すこと(OR検索・当たった語が返る)。例: 「なんでDB分けたんだっけ」→ terms:[\"DB\",\"データベース\",\"ファイル分離\",\"分割\",\"プロジェクト\"]",
+      // 共通の説明 + チャット側だけの補足 (会話ログも引く)。
+      // 絞り込みをSQLへ寄せる案内は共通側に入っている (#176)
+      description: `${SEARCH_DESCRIPTION}\n会話ログも同じ語で引き、新しい順に最大6件返る(「あんな話してたっけ?」用)。例: 「なんでDB分けたんだっけ」→ terms:["DB","データベース","ファイル分離","分割","プロジェクト"]`,
       parameters: {
         type: "object",
         properties: {
@@ -347,10 +379,20 @@ async function execTool(name: string, args: any, uiActions: UiAction[], events: 
       return { ok: true, ...r };
     }
     case "update_tasks": {
-      const { ok, status, updated, note, conflicts, notFound } = updateTasksAsAgent(args.updates ?? []);
+      const { ok, status, updated, note, conflicts, notFound, badDue } = updateTasksAsAgent(args.updates ?? []);
       events.add("board");
       // #112: 版が合わなかった経緯メモは適用していない。現在の全文を返すのでマージして再実行する
-      return { ok, status, updated, ...(conflicts ? { conflicts } : {}), ...(notFound ? { notFound } : {}), ...(note ? { note } : {}) };
+      // #153: badDue も返す。**列挙して返しているので、足し忘れると入口ごとにズレる** —
+      // このPRの中で2回踏んだ (MCP側で1回、こちらで1回。契約は「badDueで名指しで返す」と言っている)
+      return {
+        ok,
+        status,
+        updated,
+        ...(conflicts ? { conflicts } : {}),
+        ...(notFound ? { notFound } : {}),
+        ...(badDue ? { badDue } : {}),
+        ...(note ? { note } : {}),
+      };
     }
     case "delete_tasks": {
       // #102: 実データは消さずゴミ箱へ。誤解釈で消えても取り返しがつくようにする
@@ -364,9 +406,12 @@ async function execTool(name: string, args: any, uiActions: UiAction[], events: 
       // unknown tool を返していた (自動レビュー指摘)。画面が「チャットで戻せる」と
       // 案内しているのに成立しない状態。MCP側には実装があり、**入口ごとに機能が違っていた**
       // (#92 #108 #114 #125 #126 と同じ形。契約だけ公開して実装を書き忘れる、が新しい)
-      const results = (args.ids as number[]).map((id) => ({ id, restored: !!restoreTask(id) }));
+      // #161: 判定と報告は agentWrite に集約。以前はここだけ **常に ok:true** で、
+      // MCPは「1件でも戻せなければ ok:false」だった — ok だけを見るエージェントは
+      // 入口によって失敗を見落とす (Codexレビュー指摘)
+      const r = restoreTasksAsAgent(args.ids as number[]);
       events.add("board");
-      return { ok: true, results };
+      return r;
     }
     case "update_task_context": {
       // #112/#114: 経緯メモの上書きも agentWrite を通す (版の確認を1箇所に集約)
@@ -467,7 +512,7 @@ export function buildSystemPrompt(taskFocus?: ReturnType<typeof getTask>, view?:
     "- 「後回し」「今はやらない」は却下ではない。status は変えず (done にするとアーカイブに吸い込まれる)、reorder_tasks でその列の下へ落とす。「今やりたい」は逆に上へ。",
     "- 「金曜まで」「明日まで」等の期限表現は今日の日付から YYYY-MM-DD に解決して due に入れる。期限が近い/過ぎたタスクはレポートや割り振り提案で優先的に言及する。",
     "- 画像やPDFが添付されたら内容を読み取って会話・操作に活かす。重要な情報(バグの症状、決定事項、資料の要点)はタスクの context や前提情報に文字で蒸留して記録する。ファイル原本はどこにも保存されないため、後から参照が必要な内容は必ず文字にして残す。",
-    "- 「#AはB待ち」「Bが終わってから」等の依存表現は blocked_by に依存先IDを登録する(複数可)。索引の dep がそれ。依存先が未完了のタスクは、レポートで「#N待ち」と添える。",
+    "- 「#AはB待ち」「Bが終わってから」等の依存表現は blocked_by に依存先IDを登録する(複数可)。索引の dep がそれ。依存先が未完了のタスクは、レポートで「#N待ち」と添える。これは関係の覚え書きで着手を止めるものではないので、相互や循環になっていても直すべき不整合として扱わない。",
     "- 操作後は結果を一言で報告する。長い説明はしない。",
     "",
     "## ユーザーの返事を先回りして置く",

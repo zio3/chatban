@@ -366,12 +366,39 @@ export function createSummaryCard(): SummaryCard {
   return getSummaryCard(Number(info.lastInsertRowid))!;
 }
 
-export function assignTaskToCard(taskId: number, cardId: number) {
-  db().prepare("UPDATE tasks SET archived = 1, summary_card_id = ? WHERE id = ?").run(cardId, taskId);
-  const ids = new Set<number>(JSON.parse((db().prepare("SELECT task_ids FROM summary_cards WHERE id = ?").get(cardId) as any).task_ids));
-  ids.add(taskId);
+/** #195: **畳む対象を条件つきUPDATEで押さえる (claim)。**返すのは実際に押さえられたIDだけ。
+ *
+ * 以前は「読んだ時点で done だったID」をそのまま `assignTaskToCard` に渡していた。
+ * だが要約処理は `rollUpOldCards()` を await するので、**読んでから書くまでに時間がある**:
+ *
+ * - その間に対象をゴミ箱へ入れると、`status` は done のままなので素通りし、
+ *   **ゴミ箱と要約カードの両方に入ったタスク**ができる (status しか見ていなかった)
+ * - 起動時の掃除 (#195) と通常のフックが同じIDを拾うと、`assignTaskToCard` は無条件更新なので
+ *   **後から来たカードが奪い、先発カードの task_ids には同じIDが残る**
+ *
+ * どちらも「読んだ時点の事実」を根拠に書いていたのが原因なので、**書くときに条件を付ける**。
+ * `summary_card_id IS NULL` が二重取りの歯止めで、`trashed_at IS NULL` がゴミ箱の歯止め。
+ * 押さえられなかったIDは呼び出し側が捨てる (Codexレビュー指摘) */
+export function claimTasksForCard(taskIds: number[], cardId: number): number[] {
+  const stmt = db().prepare(
+    "UPDATE tasks SET archived = 1, summary_card_id = ? WHERE id = ? AND status = 'done' AND archived = 0 AND trashed_at IS NULL AND summary_card_id IS NULL"
+  );
+  const claimed = taskIds.filter((id) => stmt.run(cardId, id).changes > 0);
+  if (claimed.length === 0) return claimed;
+  // カード側の索引にも、押さえられたものだけ載せる
+  const ids = new Set<number>(
+    JSON.parse((db().prepare("SELECT task_ids FROM summary_cards WHERE id = ?").get(cardId) as any).task_ids)
+  );
+  for (const id of claimed) ids.add(id);
   db().prepare("UPDATE summary_cards SET task_ids = ? WHERE id = ?").run(JSON.stringify([...ids]), cardId);
+  return claimed;
 }
+
+// #195: ここに `assignTaskToCard(taskId, cardId)` があった (**無条件のUPDATE**)。
+// claimTasksForCard に置き換えて削除した — 残しておくと、次に畳む処理を書く人が
+// 素直にこちらを呼び、**同じ競合をもう一度作る**。使われない安全でない口は置かない。
+// (唯一の呼び出し元だった scripts/migrate-archive.ts も削除した。
+//  getOrCreateActiveCard が #105 で消えていて既に動かず、中身は #195 の起動時掃除と同じ)
 
 export function detachTaskFromCard(taskId: number) {
   const r = db().prepare("SELECT summary_card_id FROM tasks WHERE id = ?").get(taskId) as any;

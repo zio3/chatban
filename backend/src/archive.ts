@@ -2,7 +2,7 @@ import {
   detachTaskFromCard,
   createSummaryCard,
   getSummaryCard,
-  assignTaskToCard,
+  claimTasksForCard,
   deleteSummaryCards,
   getTask,
   listSummaryCards,
@@ -257,18 +257,25 @@ export async function onTasksCompleted(taskIds: number[]): Promise<SummaryCard |
   if (taskIds.length === 0) return undefined;
   await rollUpOldCards(); // 先に古いぶんを畳んでから、今回のバッチを新しいカードにする
 
-  // #105: 要約生成は15〜30秒かかる。その間にDoneから戻されたタスクをアーカイブすると
-  // 「todoなのに archived=1 でボードから消える」幽霊ができるので、いまも done のものだけ入れる
-  const stillDone = taskIds.filter((id) => getTask(id)?.status === "done");
-  if (stillDone.length === 0) {
-    log("archive", `tasksCompleted [${taskIds.join(",")}]: 全件doneでなくなっていたのでアーカイブしない`);
+  // #105 → #195: 要約生成は15〜30秒かかり、`rollUpOldCards()` の await もある。
+  // その間に対象の状態は変わりうるので、**「読んだ時点でdoneだった」を根拠に書かない**。
+  // 条件つきUPDATEで押さえ (claimTasksForCard)、**押さえられたものだけ**をカードに入れる:
+  //   - Doneから戻された → 「todoなのに archived=1 でボードから消える」幽霊を作らない (#105)
+  //   - ゴミ箱へ入れられた → ゴミ箱と要約カードの両方に入るのを防ぐ (Codexレビュー指摘)
+  //   - 別の経路が先に畳んだ (起動時の掃除 #195 と通常のフックが重なる) → 二重取りしない
+  const card = createSummaryCard();
+  const claimed = claimTasksForCard(taskIds, card.id);
+  if (claimed.length === 0) {
+    // **空のカードを残さない。**畳むものが無いのにカードだけ増えると、
+    // ボードに中身の無い要約が並ぶ (#191 で空カードを嫌ったのと同じ理由)
+    deleteSummaryCards([card.id]);
+    log("archive", `tasksCompleted [${taskIds.join(",")}]: 畳める対象が無かったのでカードは作らない`);
     return undefined;
   }
-  if (stillDone.length < taskIds.length) {
-    log("archive", `tasksCompleted: ${taskIds.length - stillDone.length}件はdoneでなくなっていたので除外`);
+  if (claimed.length < taskIds.length) {
+    const skipped = taskIds.filter((id) => !claimed.includes(id));
+    log("archive", `tasksCompleted: #${skipped.join(", #")} は畳まなかった (done以外・ゴミ箱・畳み済みのいずれか)`);
   }
-  const card = createSummaryCard();
-  for (const id of stillDone) assignTaskToCard(id, card.id);
   return regenerateCard(card.id);
 }
 

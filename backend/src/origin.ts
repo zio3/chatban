@@ -17,8 +17,13 @@
  * (#92 #108 #114 #125 #126 と同じ形。**入口が2つあるものは1つの関数にする**)。 */
 export function isAllowedOrigin(origin: string | undefined | null, allowed: string[]): boolean {
   // Origin が無い呼び出しは通す。curl・スクリプト・MCP (Claude Code) がこれで、
-  // **ブラウザは必ず Origin を付ける**ので、ここを開けてもページからの攻撃は増えない。
-  // 塞ぐと Claude Code から /mcp に繋がらなくなる (ローカルのエージェント用の口)
+  // 塞ぐと Claude Code から /mcp に繋がらなくなる (ローカルのエージェント用の口)。
+  //
+  // 安全なのは **状態を変える cross-origin の fetch / フォーム送信と WebSocket が
+  // 必ず Origin を伴う**ため。ただし **トップレベルのGETナビゲーション (リンクを踏む、
+  // アドレス欄に打つ) には Origin が付かない**ので、これは
+  // **「GETに副作用を持たせない」ことを前提にした判断**である。
+  // GETで状態を変えるAPIを足すと、この前提ごと崩れる (自動レビュー指摘)
   if (!origin) return true;
   return allowed.includes(origin);
 }

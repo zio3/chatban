@@ -143,7 +143,8 @@ export function contextTemplateHint(
     ...(tooLong
       ? {
           size:
-            `${text.length}文字ある (目安 ${CONTEXT_SIZE_HINT}文字)。ここは毎回のLLMプロンプトに丸ごと載るので、` +
+            `${text.length}文字ある (目安 ${CONTEXT_SIZE_HINT}文字)。` +
+            "この前提情報はボードのチャットでは毎回のプロンプトに丸ごと載る (MCPでは get_board の応答に載る) ので、" +
             "**終わった予定・無くなった機能への言及・過ぎた日付**が残っていないか読み返し、古くなった記述の追い出しを提案すること。" +
             "消すかどうかを決めるのは人間なので、勝手に消さず候補を挙げて確認する",
         }

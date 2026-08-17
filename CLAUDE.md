@@ -12,7 +12,8 @@ AIはレコメンドのみ、確定は人間承認 (human-in-the-loop)。提出�
 backend/   Express + Socket.IO + better-sqlite3 (port 8787)
            OpenAI SDK (base_url=OrcaRouter) の tool use ループ — src/chat.ts
            MCPサーバー (Streamable HTTP) — src/mcp.ts → POST /mcp
-           全LLM呼び出しを llm_calls テーブルに記録 — GET /api/metrics
+           全LLM呼び出しを llm_calls テーブルに記録 — POST /api/metrics
+           (外部の請求APIを叩き単価をDBへ書くのでPOST。副作用のある口はGETに置かない #180)
 frontend/  Vite + React + TS + Tailwind v4 + dnd-kit (port 5173、/api と /socket.io は8787へproxy)
 ```
 

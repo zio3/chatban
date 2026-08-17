@@ -1095,11 +1095,16 @@ test("Originの付かないブラウザGET (<img>相当) も断る。有料の�
   expect(ok.status).toBe(200);
 });
 
-test("お金が動く口はGETに置かない (#180)", async () => {
-  // GET のままだと、開いているだけで課金と記録を増やされる。
-  // 「読み取りに見えるが副作用がある」ものは POST にして、Origin判定と二重で守る
-  const res = await fetch(`${API}/api/suggestions`);
-  expect(res.status).toBe(404); // GETのルートは存在しない
+test("お金が動く口・外部を叩く口はGETに置かない (#180)", async () => {
+  // GET のままだと、悪意あるページが <img src> で撃つだけで課金と記録を増やせる。
+  // 3本まとめて見るのは、1本だけ固定すると他の2本が黙って戻せてしまうため
+  for (const path of ["/api/suggestions", "/api/models", "/api/metrics"]) {
+    const res = await fetch(`${API}${path}`);
+    expect(res.status, `${path} がGETで叩ける`).toBe(404);
+  }
+  // 対照: POST なら動く (塞ぎすぎて機能を殺していないこと)
+  const ok = await fetch(`${API}/api/metrics`, { method: "POST" });
+  expect(ok.status).toBe(200);
 });
 
 test("知らないページからのSocket接続はハンドシェイクで断る (#180)", async () => {

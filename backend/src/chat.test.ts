@@ -46,8 +46,9 @@ test("自分のページとブラウザ以外は通す", () => {
 
 test("Originが無い呼び出しは通す (curl・スクリプト・MCP)", () => {
   // 状態を変える cross-origin の fetch/フォーム送信と WebSocket は必ず Origin を伴う。
-  // ただしトップレベルのGETナビゲーションには付かないので、**GETに副作用を持たせない**
-  // ことが前提の判断 (origin.ts の注記)。塞ぐと Claude Code から /mcp に繋がらなくなる
+  // ただしトップレベルのGETナビゲーションには付かないので、**課金・外部アクセスを伴う処理を
+  // GETに置かない**ことが前提の判断 (origin.ts の注記)。
+  // 塞ぐと Claude Code から /mcp に繋がらなくなる
   assert.equal(isAllowedOrigin(undefined, ORIGINS), true);
   assert.equal(isAllowedOrigin("", ORIGINS), true);
   assert.equal(isAllowedOrigin(null, ORIGINS), true);

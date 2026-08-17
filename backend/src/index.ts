@@ -463,8 +463,10 @@ app.post("/api/suggestions", async (_req, res) => {
 });
 
 // 全ログExport (#83): 全テーブルのダンプをJSONダウンロード (検証利用)。
-// セッション署名鍵だけ伏字 (db.ts の exportableSettings)。伏せる判断はDB層にあるので
-// この口からは見えないが、「渡してよいファイルか」を考える人はまずここを読む
+// **いま伏字にしている設定は無い** — かつてここに載っていたセッション署名鍵は #180 で
+// 認証ごと廃止した。伏字の仕組み自体は db.ts の exportableSettings に残してあるので、
+// 秘密を持つ設定を足すときはそこに1行足す。伏せる判断はDB層にあってこの口からは見えないが、
+// 「渡してよいファイルか」を考える人はまずここを読む
 app.get("/api/audit/export", (_req, res) => {
   const stamp = new Date().toISOString().slice(0, 19).replace(/[-:T]/g, "").slice(0, 14);
   res.setHeader("Content-Disposition", `attachment; filename="chatban-audit-${stamp}.json"`);
@@ -552,7 +554,9 @@ app.delete("/api/projects/:id", (req, res) => {
 // 管理画面 (#88): 用途別モデルの実効値と既定値。source=どこから来た値か
 const SLOTS: ModelSlot[] = ["main", "archive", "cheap"];
 // #180: ログイン設定 (/api/settings/auth) は認証ごと廃止した。個人利用に特化したので、
-// 「誰を通すか」を決める窓口そのものを持たない (守るのは待ち受けアドレスとCORSの許可リスト)
+// 「誰を通すか」を決める窓口そのものを持たない。守るのは待ち受けアドレス (127.0.0.1固定) と、
+// 他所のページからの要求を断ること (Origin / Sec-Fetch-Site の明示拒否) の2つ。
+// **cors() は境界ではない** — ヘッダを付けないだけでリクエストは通る (origin.ts の注記)
 
 app.get("/api/settings/models", (_req, res) => {
   res.json({

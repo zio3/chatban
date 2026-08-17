@@ -22,7 +22,11 @@ export function isAllowedOrigin(origin: string | undefined | null, allowed: stri
   // **ここだけでは足りない。**Origin が付かないブラウザ要求が2種類ある —
   // トップレベルのGETナビゲーション (リンクを踏む) と、`<img src>` のような subresource GET。
   // 後者は悪意あるページから撃てるので、Origin の有無だけを見ていると素通りする。
-  // それを塞ぐのが下の isBrowserCrossSite (自動レビュー指摘で追加)
+  // それを塞ぐのが下の isBrowserCrossSite (自動レビュー指摘で追加)。
+  //
+  // 併せて **課金・外部アクセスを伴う処理は GET に置かない** (POSTにしてある)。
+  // 「GETは一切副作用なし」ではない — 例えば /api/projects はプロジェクトDBを開くときに
+  // スキーマ適用が走る。守っているのは「開いただけでお金が動いたり外部を叩いたりしない」線
   if (!origin) return true;
   return allowed.includes(origin);
 }
@@ -38,8 +42,8 @@ export function isAllowedOrigin(origin: string | undefined | null, allowed: stri
  * `cross-site` を断れば、他所のページからの要求は方式を問わず落ちる。
  * curl・スクリプト・MCP はこのヘッダを送らないので影響を受けない。
  *
- * 「GETに副作用を持たせない」設計は**それはそれで守る** (副作用のあるものは POST にした)。
- * ここは、うっかり戻したときに事故らないための二重化 */
+ * 「課金・外部アクセスを伴う処理を GET に置かない」設計は**それはそれで守る**
+ * (該当する3本は POST にした)。ここは、うっかり戻したときに事故らないための二重化 */
 export function isBrowserCrossSite(secFetchSite: string | undefined | null): boolean {
   return secFetchSite === "cross-site";
 }

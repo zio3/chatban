@@ -4,7 +4,18 @@ import { defineConfig } from "@playwright/test";
 const BACKEND_PORT = 8799;
 const FRONTEND_PORT = 5199;
 
-// E2Eデータのリセットは e2e/clean-db.mjs (test:e2e の前段) で行う
+// E2Eデータのリセットは backend の webServer コマンドの前段で行う (e2e/clean-db.mjs)。
+//
+// **npm script ではなく webServer に置く。**#194: 以前は package.json の test:e2e に
+// `node e2e/clean-db.mjs && playwright test` と書いてあったが、`npx playwright test` で
+// 直接叩くと素通りする。実測 (2026-08-18): 素通りで3回回すと生きているタスクが
+// 56 → 112 → 224、プロジェクトDBが 7 → 13 → 25 に増え、**4件のテストが落ちた**
+// (失敗の原因が実装でなくテストの汚れ、という一番タチの悪いやつ)。
+// ここなら実行1回につき1回、サーバーがDBを掴む前に必ず走る。
+//
+// トップレベルに書くとワーカープロセスでも読み直されて複数回走り、サーバーがDBを
+// 掴んだ後の実行がWindowsでEBUSYになる。globalSetupも不可 —
+// PlaywrightはwebServerの起動をglobalSetupより先に行う。
 
 export default defineConfig({
   testDir: "./e2e",
@@ -17,7 +28,8 @@ export default defineConfig({
   },
   webServer: [
     {
-      command: "npm run start",
+      // 掃除 → 起動。cwd が backend なので clean-db.mjs は ../frontend 側を指す
+      command: "node ../frontend/e2e/clean-db.mjs && npm run start",
       cwd: "../backend",
       port: BACKEND_PORT,
       reuseExistingServer: false,

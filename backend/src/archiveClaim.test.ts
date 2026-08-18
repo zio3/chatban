@@ -260,6 +260,44 @@ test("旧カードの作り直し待ちもDBに残る (#195)", () => {
   assert.ok(listCardsNeedingSummary().includes(old.id), "旧カードの作り直し待ちがDBに残っていない");
 });
 
+// **再生成の経路は claim だけではない** (Codexレビュー指摘)。
+// rollUpOldCards / compactArchive は reassignTasksToCard、onTaskReopened は detachTaskFromCard を
+// 通ってから `await regenerateCard()` する。そこへ辿り着く前に落ちると本文が古いまま残るので、
+// **印は「中身を無効にする操作」の側で立てる**。3経路まとめてその2操作で覆える
+
+test("カードの顔ぶれを付け替えたら作り直し待ちが立つ (rollUp / compact の経路) (#195)", () => {
+  const a = makeDoneTask("付け替えられるDone");
+  const card = createSummaryCard();
+  claimTasksForCard([a], card.id);
+  updateCardContent(card.id, "作り直し済み", [{ text: "要素", checked: false }]);
+  clearCardNeedsSummary(card.id);
+  assert.ok(!listCardsNeedingSummary().includes(card.id), "前提が崩れている");
+
+  // rollUpOldCards / compactArchive がやること (この後に白紙化して再生成する)
+  reassignTasksToCard([a], card.id);
+
+  assert.ok(
+    listCardsNeedingSummary().includes(card.id),
+    "付け替えたのに作り直し待ちが立っていない (白紙のまま落ちると拾えない)"
+  );
+});
+
+test("カードからタスクを外したら作り直し待ちが立つ (再オープンの経路) (#195)", () => {
+  const id = makeDoneTask("再オープンされるDone");
+  const other = makeDoneTask("カードに残るDone");
+  const card = createSummaryCard();
+  claimTasksForCard([id, other], card.id);
+  updateCardContent(card.id, "作り直し済み", [{ text: "要素", checked: false }]);
+  clearCardNeedsSummary(card.id);
+
+  detachTaskFromCard(id); // onTaskReopened がやること
+
+  assert.ok(
+    listCardsNeedingSummary().includes(card.id),
+    "外したのに作り直し待ちが立っていない (タスクはtodoに戻るので done の掃除でも拾えない)"
+  );
+});
+
 test.after(() => {
   // better-sqlite3 がDBを掴んだままだと消せないことがある。消せなくてもテストは失敗させない
   try {

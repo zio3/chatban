@@ -499,6 +499,12 @@ export function detachTaskFromCard(taskId: number) {
   const r = db().prepare("SELECT summary_card_id FROM tasks WHERE id = ?").get(taskId) as any;
   const cardId = r?.summary_card_id;
   db().prepare("UPDATE tasks SET archived = 0, summary_card_id = NULL WHERE id = ?").run(taskId);
+  // #195: **中身を無効にした側で作り直し待ちを立てる。**呼び出し側 (onTaskReopened) は
+  // このあと regenerateCard を await するが、そこへ辿り着く前に落ちると本文が古いまま残る。
+  // しかもタスクは todo 等に戻るので `listUnfoldedDoneIds` にも出ず、二重に取りこぼす
+  // (Codexレビュー指摘)。**印は「無効にする操作」と同じ場所で立てる** — 呼び出し側ごとに
+  // 書くと、経路が増えたときに必ず片方だけ漏れる (#114 で書き込みを1本にしたのと同じ理由)
+  if (cardId) markCardNeedsSummary(cardId);
   if (cardId) {
     const card = getSummaryCard(cardId);
     if (card) {
@@ -532,6 +538,10 @@ export function reassignTasksToCard(taskIds: number[], cardId: number) {
   const stmt = db().prepare("UPDATE tasks SET summary_card_id = ? WHERE id = ?");
   for (const id of taskIds) stmt.run(cardId, id);
   db().prepare("UPDATE summary_cards SET task_ids = ? WHERE id = ?").run(JSON.stringify(taskIds), cardId);
+  // #195: 顔ぶれが変わったので本文はもう古い。**作り直し待ちをここで立てる** —
+  // rollUpOldCards / compactArchive はこの後に白紙化して regenerateCard を await するが、
+  // そこへ辿り着く前に落ちると**白紙のまま**残り、起動時にも拾われなかった (Codexレビュー指摘)
+  markCardNeedsSummary(cardId);
 }
 
 /** #195: 要約の作り直しを待っているカード。**起動時の掃除が拾う。**
@@ -541,6 +551,12 @@ export function listCardsNeedingSummary(): number[] {
   return (
     db().prepare("SELECT id FROM summary_cards WHERE needs_summary = 1 ORDER BY id").all() as { id: number }[]
   ).map((r) => r.id);
+}
+
+/** 作り直し待ちを立てる。**カードの中身を無効にする操作から呼ぶ** (claim / reassign / detach)。
+ * 立てる場所を「無効にする操作」に寄せてあるので、再生成の経路が増えても取りこぼさない */
+export function markCardNeedsSummary(cardId: number): void {
+  db().prepare("UPDATE summary_cards SET needs_summary = 1 WHERE id = ?").run(cardId);
 }
 
 /** 作り直しが済んだ印。**中身を書けたときだけ消す** (書けていないのに消すと、

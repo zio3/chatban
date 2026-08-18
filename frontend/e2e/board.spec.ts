@@ -1906,3 +1906,40 @@ test("live_tasks と done_tasks に何が入るかは、契約に書いてある
   // 「時間で消える」と書くと、エージェントは待てば直ると判断してしまう
   expect(desc, "「短時間」と書くと待てば直ると読まれる").not.toContain("短時間");
 });
+
+test("チャットに番号だけ打つと、LLMを呼ばずにそのタスクを開く (#197)", async ({ page }) => {
+  // 「検索窓が欲しい、とくに番号でアクセスしたいケースが増えてきた」への答え。
+  // 専用の検索窓は作らず、常設のチャット (#74) を入口にした。
+  // 開く仕掛け (openTask / jumpToBoard) は #59 / #111 で既に在ったので、足したのは入口だけ
+  const id = await createTask("番号ジャンプの的");
+  await page.goto("/");
+  const input = page.getByPlaceholder("ボードに話しかける…", { exact: false });
+
+  // `#<id>` で開く
+  await input.fill(`#${id}`);
+  await input.press("Enter");
+  await expect(page.getByTestId("task-detail-panel")).toBeVisible();
+  await expect(page.getByText(`#${id} をひらきます。`)).toBeVisible();
+  // **LLMを呼んでいない。**E2E環境には鍵が無いので、LLMへ行っていれば
+  // 「考え中…」を経て失敗が出る。出ないことがそのまま証拠になる
+  await expect(page.getByText("考え中…")).toBeHidden();
+
+  // 井桁なしの数字だけでも開く (パネルを閉じてから確かめる)
+  await page.getByTestId("task-detail-panel").getByTitle("閉じる").click();
+  await expect(page.getByTestId("task-detail-panel")).toBeHidden();
+  await input.fill(String(id));
+  await input.press("Enter");
+  await expect(page.getByTestId("task-detail-panel")).toBeVisible();
+});
+
+test("存在しない番号は横取りせず、普通の発言としてLLMへ渡す (#197)", async ({ page }) => {
+  // 「2026」のような数字だけの発言を番号ジャンプが食べてしまわないこと。
+  // zio判断: パターンに合っても、その番号が無ければ通常のチャット
+  await page.goto("/");
+  const input = page.getByPlaceholder("ボードに話しかける…", { exact: false });
+  await input.fill("999999");
+  await input.press("Enter");
+  // パネルは開かない。発言はチャットへ流れる (E2E環境では鍵が無いので結果は失敗でよい)
+  await expect(page.getByTestId("task-detail-panel")).toBeHidden();
+  await expect(page.getByText("999999")).toBeVisible();
+});

@@ -135,7 +135,7 @@ node setup.mjs
 - **キーは受け取りません。**表示されたパス(`~/.openai/apikey.txt` など)に、自分で1行だけ書いてください。打ち込んだ値がターミナルやシェル履歴に残らないので、置いたあとに気にすることがありません
 - **`backend/config.json` が既にあれば触りません。**キーやモデルIDを自分で書き換えていても消えません
 - 対話せずに進めるなら `node setup.mjs --provider openai`(`anthropic` / `ollama` / `orcarouter`)
-- 置いたあとに `node setup.mjs --check` で、宛先・キー・モデルIDが揃っているかを確かめられます(用途別の3モデルへ1回ずつ投げるので、わずかに課金されます)
+- 置いたあとに `node setup.mjs --check` で、宛先・キー・モデルIDが揃っているかを確かめられます(実際にLLMへ小さく投げるので、わずかに課金されます)
 
 起動は表示される案内の通りです(Windows は `.\start-dev.ps1`、macOS / Linux はターミナル2つ)。
 
@@ -152,7 +152,7 @@ cd backend; npm install; cd ../frontend; npm install; cd ..
 # 2. LLMの設定 — 使うプロバイダの見本を1枚コピーしてキーを書く
 copy backend\examples\config.openai.json backend\config.json
 
-# 3. 疎通確認 (用途別の3モデルすべてに1回ずつ投げます)
+# 3. 疎通確認 (設定されたモデルへ小さなリクエストを1回投げます)
 cd backend; npx tsx scripts/check-config.ts; cd ..
 
 # 4. 起動 (DBバックアップ → 両サーバーを別ウィンドウで起動 → ヘルスチェック)

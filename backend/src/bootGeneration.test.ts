@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -90,11 +91,15 @@ test("settings に残っていた旧世代を引き継ぐ (1へ戻さない)", a
   }
 });
 
-test("同じDBへ同時に初回移行が走っても、起動に失敗しない", () => {
+test("初回移行を実プロセスで同時に走らせても、全部起動でき、番号も重複しない", async () => {
   // 「読む→判断する→書く」を素で並べていると、2プロセスが同時に初回移行へ入って
   // 両方が max=NULL を見て同じ id を INSERT し、片方が PRIMARY KEY 制約で落ちる (9周目の指摘)。
-  // 実プロセスは起こしにくいので、同じファイルへ2本の接続を張って順に流し、
-  // **2回目が落ちないこと・番号が巻き戻らないこと**を見る (移行が冪等であることの確認)
+  //
+  // **このテストの限界を先に書いておく。**実装から `.immediate()` を外して同じ手順を流しても、
+  // 6本中0本しか落ちなかった (実測)。競合の窓が狭く、プロセス起動のばらつきのほうが大きいので、
+  // **BEGIN IMMEDIATE が要ることの証明にはならない**。ここが見ているのは
+  // 「実際の起動経路を並行に走らせて、落ちず・番号が重複しない」ところまで。
+  // 排他そのものは実装側の BEGIN IMMEDIATE + INSERT OR IGNORE で担保している
   const dir3 = fs.mkdtempSync(path.join(os.tmpdir(), "chatban-bootgen-race-"));
   const file = path.join(dir3, "chatban-admin.db");
   const legacy = 1_787_000_000_000;
@@ -105,35 +110,36 @@ test("同じDBへ同時に初回移行が走っても、起動に失敗しない
   seed.prepare("INSERT INTO settings (key, value) VALUES ('boot.generation', ?)").run(String(legacy));
   seed.close();
 
-  // 同じ内容の移行を2回流す = 「2プロセスが同じ初回移行に入った」と同じ状態になる
-  const opened = [new (admin.constructor as any)(file), new (admin.constructor as any)(file)];
-  try {
-    for (const db of opened) {
-      db.pragma("busy_timeout = 2000");
-      db.exec(
-        "CREATE TABLE IF NOT EXISTS boot_generations (id INTEGER PRIMARY KEY AUTOINCREMENT, started_at TEXT NOT NULL DEFAULT (datetime('now','localtime')))"
-      );
-    }
-    // 1本目: settings の行を消して移行する。2本目: 行はもう無いので何もしない
-    for (const db of opened) {
-      assert.doesNotThrow(() => {
-        db.transaction(() => {
-          const row = db.prepare("SELECT value FROM settings WHERE key = 'boot.generation'").get();
-          if (!row) return;
-          const n = Number(row.value);
-          const max = db.prepare("SELECT MAX(id) m FROM boot_generations").get().m;
-          if (max === null || max < n) {
-            db.prepare("INSERT OR IGNORE INTO boot_generations (id) VALUES (?)").run(n);
-            db.prepare("DELETE FROM boot_generations WHERE id < ?").run(n);
-          }
-          db.prepare("DELETE FROM settings WHERE key = 'boot.generation'").run();
-        }).immediate();
+  // 子プロセスは store.ts をそのまま読み込む = 本物の起動経路 (ensureAdminSchema → 移行) を通る
+  const child = path.join(dir3, "boot.mjs");
+  const storeUrl = new URL("./store.ts", import.meta.url).href;
+  fs.writeFileSync(
+    child,
+    `const { nextBootGeneration } = await import(${JSON.stringify(storeUrl)});\nconsole.log(nextBootGeneration());\n`
+  );
+
+  const boot = () =>
+    new Promise<{ code: number | null; out: string; err: string }>((resolve) => {
+      let out = "";
+      let err = "";
+      const p = spawn(process.execPath, ["--import", "tsx", child], {
+        env: { ...process.env, CHATBAN_DATA_DIR: dir3 },
       });
-    }
-    const next = Number(opened[1].prepare("INSERT INTO boot_generations DEFAULT VALUES").run().lastInsertRowid);
-    assert.equal(next, legacy + 1, "2回流しても番号は巻き戻らない");
+      p.stdout.on("data", (d) => (out += d));
+      p.stderr.on("data", (d) => (err += d));
+      p.on("close", (code) => resolve({ code, out, err }));
+    });
+
+  try {
+    const results = await Promise.all([boot(), boot(), boot(), boot()]);
+    const failed = results.filter((r) => r.code !== 0);
+    assert.equal(failed.length, 0, `起動に失敗したものがある: ${failed.map((f) => f.err).join(" / ")}`);
+
+    // 標準出力の最後の行が世代番号 (移行のログが混ざる回がある)
+    const generations = results.map((r) => Number(r.out.trim().split("\n").at(-1)));
+    for (const g of generations) assert.ok(Number.isSafeInteger(g) && g > legacy, `旧値より大きいはず: ${g}`);
+    assert.equal(new Set(generations).size, generations.length, `世代が重複した: ${generations.join(", ")}`);
   } finally {
-    for (const db of opened) db.close();
     fs.rmSync(dir3, { recursive: true, force: true });
   }
 });

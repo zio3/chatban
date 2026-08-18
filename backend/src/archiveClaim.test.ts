@@ -298,6 +298,32 @@ test("カードからタスクを外したら作り直し待ちが立つ (再オ
   );
 });
 
+test("**途中で失敗したら何も書かない** (印だけ立つ・索引だけ古い を作らない) (#195)", () => {
+  // Codexの求めた「各SQLの間で停止した状態」は、**1つのトランザクションにした時点で
+  // 観測できなくなる** (commit するかしないかのどちらか) ので、代わりに
+  // **途中で例外を起こして巻き戻ることを見る**。2件目の値を壊して2文目を失敗させる
+  const kept = makeDoneTask("巻き戻し後も元のカードに居るDone");
+  const home = createSummaryCard();
+  claimTasksForCard([kept], home.id);
+  updateCardContent(home.id, "元のまとめ", [{ text: "要素", checked: false }]);
+  clearCardNeedsSummary(home.id);
+
+  const other = createSummaryCard();
+  assert.throws(
+    () => reassignTasksToCard([kept, {} as unknown as number], other.id),
+    "壊れた入力なのに例外が飛んでいない (前提が崩れている)"
+  );
+
+  // 1文目は成功していたが、巻き戻っているので所有先は変わっていない
+  assert.deepEqual(
+    tasksOfCard(home.id).map((t) => t.id),
+    [kept],
+    "巻き戻っていない (所有先だけ変わった状態が残った)"
+  );
+  assert.deepEqual(tasksOfCard(other.id), [], "移動先に入ってしまっている");
+  assert.ok(!listCardsNeedingSummary().includes(other.id), "書けていないのに印だけ立っている");
+});
+
 test.after(() => {
   // better-sqlite3 がDBを掴んだままだと消せないことがある。消せなくてもテストは失敗させない
   try {

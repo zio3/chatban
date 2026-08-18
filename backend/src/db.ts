@@ -496,6 +496,13 @@ export function createCardWithClaimedTasks(
 //  getOrCreateActiveCard が #105 で消えていて既に動かず、中身は #195 の起動時掃除と同じ)
 
 export function detachTaskFromCard(taskId: number) {
+  // #195: **タスク行・カードの索引・作り直し待ちの印を1つのトランザクションで書く** (Codexレビュー指摘)。
+  // 別々に書くと、途中で止まったときに「タスクは外れたのに索引は古い」「印だけ立っていない」
+  // といった中間状態が残る。**印を立てる前に止まると回復不能**なので、ここは分けてはいけない
+  return db().transaction(() => detachInTransaction(taskId))();
+}
+
+function detachInTransaction(taskId: number) {
   const r = db().prepare("SELECT summary_card_id FROM tasks WHERE id = ?").get(taskId) as any;
   const cardId = r?.summary_card_id;
   db().prepare("UPDATE tasks SET archived = 0, summary_card_id = NULL WHERE id = ?").run(taskId);
@@ -535,6 +542,13 @@ export function deleteSummaryCards(ids: number[]) {
 }
 
 export function reassignTasksToCard(taskIds: number[], cardId: number) {
+  // #195: こちらも1つのトランザクションで (Codexレビュー指摘)。
+  // tasks → summary_cards.task_ids → needs_summary の順に別々に書くと、
+  // 途中で止まったときに**所有先だけ変わって印が無い**状態が残り、起動時の掃除から外れる
+  db().transaction(() => reassignInTransaction(taskIds, cardId))();
+}
+
+function reassignInTransaction(taskIds: number[], cardId: number) {
   const stmt = db().prepare("UPDATE tasks SET summary_card_id = ? WHERE id = ?");
   for (const id of taskIds) stmt.run(cardId, id);
   db().prepare("UPDATE summary_cards SET task_ids = ? WHERE id = ?").run(JSON.stringify(taskIds), cardId);

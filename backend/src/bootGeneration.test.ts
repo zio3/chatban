@@ -90,6 +90,54 @@ test("settings に残っていた旧世代を引き継ぐ (1へ戻さない)", a
   }
 });
 
+test("同じDBへ同時に初回移行が走っても、起動に失敗しない", () => {
+  // 「読む→判断する→書く」を素で並べていると、2プロセスが同時に初回移行へ入って
+  // 両方が max=NULL を見て同じ id を INSERT し、片方が PRIMARY KEY 制約で落ちる (9周目の指摘)。
+  // 実プロセスは起こしにくいので、同じファイルへ2本の接続を張って順に流し、
+  // **2回目が落ちないこと・番号が巻き戻らないこと**を見る (移行が冪等であることの確認)
+  const dir3 = fs.mkdtempSync(path.join(os.tmpdir(), "chatban-bootgen-race-"));
+  const file = path.join(dir3, "chatban-admin.db");
+  const legacy = 1_787_000_000_000;
+  const seed = new (admin.constructor as any)(file);
+  seed.exec(
+    "CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime')))"
+  );
+  seed.prepare("INSERT INTO settings (key, value) VALUES ('boot.generation', ?)").run(String(legacy));
+  seed.close();
+
+  // 同じ内容の移行を2回流す = 「2プロセスが同じ初回移行に入った」と同じ状態になる
+  const opened = [new (admin.constructor as any)(file), new (admin.constructor as any)(file)];
+  try {
+    for (const db of opened) {
+      db.pragma("busy_timeout = 2000");
+      db.exec(
+        "CREATE TABLE IF NOT EXISTS boot_generations (id INTEGER PRIMARY KEY AUTOINCREMENT, started_at TEXT NOT NULL DEFAULT (datetime('now','localtime')))"
+      );
+    }
+    // 1本目: settings の行を消して移行する。2本目: 行はもう無いので何もしない
+    for (const db of opened) {
+      assert.doesNotThrow(() => {
+        db.transaction(() => {
+          const row = db.prepare("SELECT value FROM settings WHERE key = 'boot.generation'").get();
+          if (!row) return;
+          const n = Number(row.value);
+          const max = db.prepare("SELECT MAX(id) m FROM boot_generations").get().m;
+          if (max === null || max < n) {
+            db.prepare("INSERT OR IGNORE INTO boot_generations (id) VALUES (?)").run(n);
+            db.prepare("DELETE FROM boot_generations WHERE id < ?").run(n);
+          }
+          db.prepare("DELETE FROM settings WHERE key = 'boot.generation'").run();
+        }).immediate();
+      });
+    }
+    const next = Number(opened[1].prepare("INSERT INTO boot_generations DEFAULT VALUES").run().lastInsertRowid);
+    assert.equal(next, legacy + 1, "2回流しても番号は巻き戻らない");
+  } finally {
+    for (const db of opened) db.close();
+    fs.rmSync(dir3, { recursive: true, force: true });
+  }
+});
+
 test("採番は safe integer の範囲でしか返さない", () => {
   // ここを超えると JSON を経由した時点で隣接する世代が同じ値に丸まり、全順序が壊れる。
   // 起動を止めて気づかせるほうを選んでいる

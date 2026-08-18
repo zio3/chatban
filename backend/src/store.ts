@@ -645,21 +645,29 @@ export function nextBootGeneration(): number {
  *
  * 旧値が読めなければ何もしない (1から始まる) */
 function migrateBootGeneration(db: Database.Database) {
-  const legacy = db.prepare("SELECT value FROM settings WHERE key = 'boot.generation'").get() as
-    | { value: string }
-    | undefined;
-  if (!legacy) return;
-  const n = Number(legacy.value);
-  if (Number.isSafeInteger(n) && n > 0) {
-    // 既に採番が進んでいるなら触らない (移行は1回で済むが、手で戻されたときに巻き戻さない)
-    const max = (db.prepare("SELECT MAX(id) m FROM boot_generations").get() as { m: number | null }).m;
-    if (max === null || max < n) {
-      db.prepare("INSERT INTO boot_generations (id) VALUES (?)").run(n);
-      db.prepare("DELETE FROM boot_generations WHERE id < ?").run(n);
-      log("schema", `起動世代を settings から引き継ぎました (#199): ${n}`);
+  // **まとめて1つの書き込みトランザクションにする (BEGIN IMMEDIATE)。**
+  // 「読む→判断する→書く」を素で並べると、2つのプロセスが同時に初回移行へ入ったときに
+  // 両方が max=NULL を見て同じ id を INSERT し、片方が PRIMARY KEY 制約で**起動に失敗する**
+  // (自動レビュー9周目の指摘)。immediate なら先にロックを取った側だけが読み書きし、
+  // もう片方は busy_timeout ぶん待ってから、書き込み済みの状態を読む。
+  // 念のため INSERT OR IGNORE にもしてある (待ち時間を超えた等で競り合っても落とさない)
+  db.transaction(() => {
+    const legacy = db.prepare("SELECT value FROM settings WHERE key = 'boot.generation'").get() as
+      | { value: string }
+      | undefined;
+    if (!legacy) return;
+    const n = Number(legacy.value);
+    if (Number.isSafeInteger(n) && n > 0) {
+      // 既に採番が進んでいるなら触らない (移行は1回で済むが、手で戻されたときに巻き戻さない)
+      const max = (db.prepare("SELECT MAX(id) m FROM boot_generations").get() as { m: number | null }).m;
+      if (max === null || max < n) {
+        db.prepare("INSERT OR IGNORE INTO boot_generations (id) VALUES (?)").run(n);
+        db.prepare("DELETE FROM boot_generations WHERE id < ?").run(n);
+        log("schema", `起動世代を settings から引き継ぎました (#199): ${n}`);
+      }
     }
-  }
-  db.prepare("DELETE FROM settings WHERE key = 'boot.generation'").run();
+    db.prepare("DELETE FROM settings WHERE key = 'boot.generation'").run();
+  }).immediate();
 }
 
 /** #115/#116: 新規プロジェクトの前提情報の下書き。

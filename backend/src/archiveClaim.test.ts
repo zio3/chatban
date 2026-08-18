@@ -3,6 +3,7 @@ import test from "node:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import Database from "better-sqlite3";
 
 /** #195: **畳む対象の見つけ方と押さえ方**を、実物のDBで確かめる。
  *
@@ -44,6 +45,11 @@ const {
   updateCardContent,
   updateTasks,
 } = await import("./db.js");
+
+/** 一時データディレクトリの中のプロジェクトDB。**故障注入のときだけ直に開く** */
+function projectFile(): string {
+  return fs.readdirSync(path.join(dataDir, "projects")).filter((n) => n.endsWith(".db"))[0];
+}
 
 /** 本番と同じ道でDoneまで運ぶ (review → 検収チェック → 確定)。
  * status を直に書き換えると mayEnterDone を迂回してしまい、試験したい状態と違うものができる */
@@ -322,6 +328,33 @@ test("**途中で失敗したら何も書かない** (印だけ立つ・索引�
   );
   assert.deepEqual(tasksOfCard(other.id), [], "移動先に入ってしまっている");
   assert.ok(!listCardsNeedingSummary().includes(other.id), "書けていないのに印だけ立っている");
+});
+
+test("**外す操作も途中で失敗したら何も書かない** (#195)", () => {
+  // reassignTasksToCard 側だけ試験していて、detachTaskFromCard の巻き戻しを見ていなかった
+  // (Codexレビュー指摘)。こちらは「タスクを外す → 印を立てる → カードの索引を書き直す」の
+  // 3段なので、**途中で落ちると印だけ立って索引が古い**という別の中間状態になりうる。
+  //
+  // 例外は**カードの task_ids を壊れたJSONにして**起こす (getSummaryCard の解析で落ちる)。
+  // 実装の内部を触らずに、タスク更新のあとで失敗させられる唯一の場所
+  const id = makeDoneTask("外す途中で失敗するDone");
+  const card = createSummaryCard();
+  claimTasksForCard([id], card.id);
+  clearCardNeedsSummary(card.id);
+
+  const raw = new Database(path.join(dataDir, "projects", projectFile()));
+  raw.prepare("UPDATE summary_cards SET task_ids = ? WHERE id = ?").run("{壊れたJSON", card.id);
+
+  assert.throws(() => detachTaskFromCard(id), "壊れたJSONなのに例外が飛んでいない (前提が崩れている)");
+
+  // タスクは畳まれたまま (外れていない)
+  const after = raw.prepare("SELECT archived, summary_card_id FROM tasks WHERE id = ?").get(id) as any;
+  assert.equal(after.archived, 1, "巻き戻っていない (タスクだけ外れた)");
+  assert.equal(after.summary_card_id, card.id, "巻き戻っていない (所属だけ外れた)");
+  // 印も立っていない (書けていないのに待ちだけ増やさない)
+  const flag = raw.prepare("SELECT needs_summary FROM summary_cards WHERE id = ?").get(card.id) as any;
+  assert.equal(flag.needs_summary, 0, "書けていないのに印だけ立っている");
+  raw.close();
 });
 
 test.after(() => {

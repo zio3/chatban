@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import http from "node:http";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import cors from "cors";
@@ -564,11 +565,17 @@ app.delete("/api/projects/:id", (req, res) => {
 // 版。書き換えるたびに増やし、GET・PATCH応答・配信イベントの全てに載せる。
 // 受け手は「自分が持っているより新しいときだけ適用する」ことで、HTTP応答と socket イベントの
 // 到着順が入れ替わっても古い値が新しい値を上書きしない (自動レビュー指摘)。
-// プロセス再起動で0に戻るが、そのとき socket は必ず切れるので、受け手は再接続時に GET し直す
+//
+// **版だけでは足りない。**プロセスを再起動すると版は0に戻るので、受け手が持っている版のほうが
+// 大きくなり、以後どの更新も適用されなくなる。かといって「GETだけ無条件」にすると、
+// GETの応答待ちの間に届いた新しい配信を、後から返ってきた古いGETが巻き戻す (2周目の指摘)。
+// 起動ごとに変わるIDを組にして、**別の起動なら無条件に採用、同じ起動なら版で比べる**。
+// これで両方の向きのレースが閉じる (tsx watch の再起動が毎日何十回も起きる #189 の実測もある)
+const SETTINGS_BOOT_ID = randomUUID();
 let settingsRevision = 0;
 
-function currentSettings(): { suggestEnabled: boolean; revision: number } {
-  return { suggestEnabled: suggestEnabled(), revision: settingsRevision };
+function currentSettings(): { suggestEnabled: boolean; revision: number; bootId: string } {
+  return { suggestEnabled: suggestEnabled(), revision: settingsRevision, bootId: SETTINGS_BOOT_ID };
 }
 
 app.get("/api/settings", (_req, res) => {

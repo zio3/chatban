@@ -1533,14 +1533,26 @@ test("AI提案チップのON/OFFはシステム全体で1つ。OFFなら提案�
   expect(await enabled()).toBe(false);
 
   // 版は書き換えるたびに増える。HTTP応答とsocketイベントの到着順が入れ替わっても
-  // 古い値が新しい値を上書きしないための手がかり
-  const before1 = ((await (await fetch(`${API}/api/settings`)).json()) as any).revision;
-  await fetch(`${API}/api/settings`, {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ suggestEnabled: false }),
-  });
-  expect(((await (await fetch(`${API}/api/settings`)).json()) as any).revision).toBeGreaterThan(before1);
+  // 古い値が新しい値を上書きしないための手がかり。
+  // 起動ID(bootId)と組で使う — 再起動すると版は0に戻るので、版だけだと
+  // 「持っている版のほうが大きい」まま永久に反映されなくなる
+  const snap = async () => (await (await fetch(`${API}/api/settings`)).json()) as any;
+  const before1 = await snap();
+  expect(typeof before1.bootId).toBe("string");
+  expect(before1.bootId).not.toBe("");
+  const patched = (await (
+    await fetch(`${API}/api/settings`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ suggestEnabled: false }),
+    })
+  ).json()) as any;
+  const after1 = await snap();
+  expect(after1.revision).toBeGreaterThan(before1.revision);
+  // 起動IDは同じプロセスの間は変わらない (変わると受け手が毎回無条件採用に倒れる)。
+  // 配信・PATCH応答・GET の3経路で同じ値であること
+  expect(patched.bootId).toBe(before1.bootId);
+  expect(after1.bootId).toBe(before1.bootId);
 
   // OFFなら空で返る。**「LLMを呼んでいないこと」は誰も確かめていない** —
   // #181 まで使っていた llm_calls の件数差はテーブルごと撤去され、共有ログの行数で数える形は

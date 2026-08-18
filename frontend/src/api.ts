@@ -48,7 +48,15 @@ export interface Settings {
   /** 版。書き換えるたびに増える。HTTP応答と socket イベントの到着順が入れ替わっても
    * 古い値で新しい値を上書きしないよう、受け手は「これが大きいときだけ適用する」 */
   revision: number;
+  /** サーバーの起動ID。再起動すると revision は0に戻るので、版だけでは
+   * 「持っている版のほうが大きい」まま永久に反映されなくなる。
+   * **別の起動なら無条件に採用、同じ起動なら版で比べる** */
+  bootId: string;
 }
+
+/** 書ける設定だけ。revision / bootId はサーバーが決める読み取り専用の値で、
+ * 送るとサーバー側で「知らないフィールド」として400になる (契約を型でも合わせる) */
+export type SettingsPatch = { suggestEnabled: boolean };
 
 export const api = {
   projects: () => apiFetch("/api/projects").then((r) => json<{ projects: Project[] }>(r)),
@@ -61,7 +69,7 @@ export const api = {
   activateProject: (id: number) =>
     apiFetch(`/api/projects/${id}/activate`, { method: "POST" }).then((r) => json<{ projects: Project[] }>(r)),
   settings: () => apiFetch("/api/settings").then((r) => json<Settings>(r)),
-  updateSettings: (patch: Partial<Settings>) =>
+  updateSettings: (patch: SettingsPatch) =>
     apiFetch("/api/settings", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },

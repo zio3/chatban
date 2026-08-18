@@ -59,20 +59,20 @@ export default function ProjectSettings() {
   // #199: アプリ全体の設定。プロジェクト一覧とは別に読む (プロジェクトの属性ではなくなったため)。
   // 別タブで切り替えたときも合わせる (タブごとに別プロジェクトを開ける #97 ので、複数開いている前提)
   const [settings, setSettings] = useState<Settings | null>(null);
-  // 版が同じか新しいときだけ入れる。PATCHのHTTP応答と socket の settings:changed は
-  // どちらが先に着くか決まっていないので、素直に上書きすると**古い応答が新しい状態を巻き戻す**
-  // (別タブで後から切り替えられた場合。自動レビュー指摘)
+  // **入ってくる経路 (初期GET / 再接続GET / PATCH応答 / socket配信) は全部ここを通す。**
+  // どれも到着順が決まっていないので、1つでも素通しにすると、そこだけ巻き戻しの穴になる
+  // (「GETだけ無条件」にして、GETの応答待ちに届いた新しい配信を古いGETが巻き戻す穴を作った)。
+  //
+  // 判定は2段。別の起動なら無条件に採用 (再起動で版は0に戻るので、版で比べると永久に
+  // 反映されなくなる)、同じ起動なら版が新しいときだけ採用する
   const applySettings = useCallback((s: Settings) => {
-    setSettings((prev) => (prev && s.revision < prev.revision ? prev : s));
+    setSettings((prev) => (prev && s.bootId === prev.bootId && s.revision < prev.revision ? prev : s));
   }, []);
   useEffect(() => {
-    // GET は**版で弾かずそのまま入れる**。サーバーを再起動すると版は0に戻るので、
-    // ここで版を比べると「持っている版のほうが大きい」まま永久に反映されなくなる。
-    // 取り直しはサーバーが権威という前提の操作なので、無条件でよい
     const load = () =>
       api
         .settings()
-        .then(setSettings)
+        .then(applySettings)
         .catch((e) => setError(String(e)));
     load();
     // 切れている間の変更はイベントが来ない。再接続したら取り直す

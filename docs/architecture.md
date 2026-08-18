@@ -176,7 +176,7 @@ todo → inprogress → review ←─ 完了報告も却下(rejected)もここ�
 - **箱はDBに持たない** (`archive.ts` のメモリ上に、プロジェクトごとに1個)。
   中身は「直近24時間に畳んだタスク」でしかなく、器としての寿命がセッションより短い。
   再起動すれば消えるが、消えて困るものは入っていない — タスク本体は `archived=1` でDBに残る
-- 24時間は**作成時刻からの相対**。カレンダー日で切ると、0時をまたいだ直後に押したときに
+- 24時間は**畳んだ時刻からの相対**。カレンダー日で切ると、0時をまたいだ直後に押したときに
   数分前の検収バッチが「昨日の分」として消える
 - 3段目で消えるのは器のほうで、タスクは `archived=1` のまま残る。引くのは一覧ではなく
   `search_tasks` と番地 (「#10がやりたい」で指させる)
@@ -213,11 +213,11 @@ DateTimeOffset に相当する型が無く (TEXT/INTEGER/REAL/BLOB/NULL のみ)�
 オフセットを測り、想定 (既定 `+09:00`、`CHATBAN_TZ_OFFSET` で変更可) と違えば
 理由と直し方を出して `process.exit(1)` する (`backend/src/timezone.ts`)。
 
-## チャットのツール (12)
+## チャットのツール (9)
 
 `create_tasks` / `update_tasks` / `delete_tasks`(ゴミ箱行き) / `restore_tasks` /
 `update_task_context` / `reorder_tasks` /
-`search_tasks` / `query_log` / `update_project_context` / `set_view`
+`search_tasks` / `query_log` / `update_project_context`
 
 **読み取りは `query_log` (SQL) に寄せている (#108)**。人間のWebUIは画面が決まっているので
 固定のクエリ関数を使うが、チャット/MCPは「何をどう見たいか」が毎回違うのでSQLを組ませる。

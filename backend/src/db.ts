@@ -192,7 +192,7 @@ export function updateTasks(patches: { id: number; patch: TaskPatch }[]): (Task 
     else if (cur.status === "done" && next.status !== "done") reopened.push(id);
     return getTask(id);
   });
-  // 完了/再開の遷移をアプリ層に通知 (Doneアーカイブ+要約の再生成トリガー)
+  // 完了/再開の遷移をアプリ層に通知 (#200: Done列の畳み直し。同期で走る)
   if (completed.length > 0) hooks.tasksCompleted?.(completed);
   for (const id of reopened) hooks.taskReopened?.(id);
   return results;
@@ -336,7 +336,13 @@ export function archiveTasks(taskIds: number[]): { id: number; title: string }[]
   )();
 }
 
-/** doneから戻したタスクを板へ返す (畳んであれば外す) */
+/** doneから戻したタスクを板へ返す (畳んであれば外す)。
+ *
+ * **条件を付けないのは意図的。**畳む側 (archiveTasks) は「畳んでよいものか」を書く時点で
+ * 確かめる必要があるが、こちらは逆で、**必ず板へ返さないといけない**。条件を付けると
+ * 想定外の状態のときに黙って board から消えたままになる — #195 で `summary_card_id IS NULL` を
+ * 安全のつもりで足して、壊れた行を復旧できなくしたのと同じ形になる。
+ * 対称にすること自体は目的ではない (自動レビュー指摘への回答) */
 export function unarchiveTask(taskId: number): void {
   db().prepare("UPDATE tasks SET archived = 0 WHERE id = ?").run(taskId);
 }

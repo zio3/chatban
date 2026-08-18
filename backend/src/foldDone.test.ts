@@ -114,6 +114,26 @@ test("24時間より古いものは箱から落ちる (板に出ない)", () => 
   assert.ok(!listLooseDoneIds().includes(first), "1段目に戻ってきている");
 });
 
+test("**読み取りは状態を変えない** — 板を眺めているだけでは箱の中身が消えない", () => {
+  // foldedContainer は GET /api/board と broadcastBoard から呼ばれ、broadcastBoard は
+  // タスクの追加・更新・ゴミ箱・チャット・MCP操作など**Doneと無関係な経路**から何度も走る。
+  // ここで期限切れを捨てて書き戻すと、「押した瞬間にしか動かない」が嘘になる (自動レビュー指摘)
+  flush();
+  const a = makeDoneTask("期限切れになるやつ");
+  const b = makeDoneTask("生きているやつ");
+  foldDoneColumn(P, []);
+  const box = foldedContainer(P)!;
+  box.find((t) => t.id === a)!.foldedAt = Date.now() - 25 * 3600_000;
+
+  assert.deepEqual(foldedContainer(P)?.map((t) => t.id), [b], "期限切れが見えている");
+  // 何度読んでも同じ。読み取りが状態を削っていたら、2回目以降で b まで消えたり件数が変わる
+  assert.deepEqual(foldedContainer(P)?.map((t) => t.id), [b], "読むたびに結果が変わる");
+  // 実際に捨てるのは次に畳むとき
+  const c = makeDoneTask("次のバッチ");
+  foldDoneColumn(P, [c]);
+  assert.deepEqual(foldedContainer(P)?.map((t) => t.id), [b], "畳むときに期限切れが落ちていない");
+});
+
 test("doneから戻すと箱から外れて板へ返る", () => {
   flush();
   const a = makeDoneTask("戻される");

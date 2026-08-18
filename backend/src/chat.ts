@@ -25,6 +25,7 @@ import {
 import { currentProjectId, suggestEnabled } from "./store.js";
 import { chatCompletion } from "./llm.js";
 import { getModel } from "./config.js";
+import { foldedContainer } from "./archive.js";
 import { log } from "./log.js";
 import type { TaskStatus, UiAction } from "./types.js";
 
@@ -675,7 +676,9 @@ export async function generateSuggestions(): Promise<{ label: string; message: s
   const skip = suggestSkipReason({
     enabled: suggestEnabled(), // #199: システム全体で1つの設定 (プロジェクト別ではない)
     chatBusy: isChatBusy(currentProjectId()),
-    emptyBoard: listTasks().length === 0,
+    // #200: 畳んだ箱も見る。**入口ごとにズレると事故る** — 画面側 (App.tsx の isEmptyBoard) は
+    // 箱を見ているので、ここだけタスクしか見ないと「板には箱が出ているのに提案だけ空」になる
+    emptyBoard: listTasks().length === 0 && (foldedContainer(currentProjectId()) ?? []).length === 0,
   });
   if (skip) return [];
   const systemPrompt = buildSystemPrompt();

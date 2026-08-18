@@ -25,6 +25,7 @@ import {
   setActiveProjectId,
   setProjectArchived,
   setSuggestEnabled,
+  suggestEnabled,
   trashProject,
   withProject,
 } from "./store.js";
@@ -516,7 +517,7 @@ app.patch("/api/projects/:id", (req, res) => {
   // 存在確認をしないと、更新自体は0件で静かに通ったあと broadcastBoard(id) が投げて500になる。
   // 設定を古いタブで開いたまま別タブで削除する、という普通の競合で踏む (自動レビュー指摘)
   if (!getProject(id)) return res.status(404).json({ error: `project #${req.params.id} not found` });
-  const { name, archived, suggestEnabled: suggest } = req.body ?? {};
+  const { name, archived } = req.body ?? {};
   // 何も書き始める前にまとめて確かめる (途中まで適用して500、を作らない)。
   // 既定プロジェクトの無効化はDB層が投げるので、ここで先に同じ判定を通す —
   // 名前を変えた後に投げると「500なのに名前だけ変わる」になる
@@ -527,11 +528,8 @@ app.patch("/api/projects/:id", (req, res) => {
     });
   if (typeof name === "string" && name.trim()) renameProject(id, name.trim());
   if (typeof archived === "boolean") setProjectArchived(id, archived);
-  // #167: 提案チップのON/OFF。次の /api/suggestions から効く (再起動不要)
-  if (typeof suggest === "boolean") {
-    setSuggestEnabled(id, suggest);
-    log("settings", `suggest #${id} -> ${suggest ? "on" : "off"}`);
-  }
+  // #167 → #199: 提案チップのON/OFF はここで受けていた。システム全体で1つの設定になったので
+  // PATCH /api/settings へ移した (プロジェクトのPATCHで全体設定を書き換えるのは形が合わない)
   io.emit("project:changed", { projects: projectSummaries() });
   broadcastBoard(id);
   res.json({ ok: true, projects: projectSummaries() });
@@ -559,6 +557,26 @@ app.delete("/api/projects/:id", (req, res) => {
 // #182: 供給元は backend/config.json (config.ts)。env から設定ファイルへ移した —
 // 宛先・キー・APIの形式・モデル3つは常にセットで動くので、1枚にまとめて
 // examples/ から丸ごとコピーさせれば、間違った組み合わせが作れなくなる
+
+// #199: アプリ全体の設定。いまは提案チップのON/OFF 1つだけ。
+// **接続設定 (宛先・キー・モデル) はここに戻さない** — #182 で config.json 1枚に集約した。
+// ここに置くのは「持ち主の好み」だけで、実効値がDBと設定ファイルに二重化するものは置かない
+app.get("/api/settings", (_req, res) => {
+  res.json({ suggestEnabled: suggestEnabled() });
+});
+
+app.patch("/api/settings", (req, res) => {
+  const { suggestEnabled: suggest } = req.body ?? {};
+  // 提案チップのON/OFF。次の /api/suggestions から効く (再起動不要)
+  if (typeof suggest === "boolean") {
+    setSuggestEnabled(suggest);
+    log("settings", `suggest -> ${suggest ? "on" : "off"}`);
+  }
+  const settings = { suggestEnabled: suggestEnabled() };
+  // タブは複数開いている前提 (#97) なので、片方で切ったらもう片方のトグルも合わせる
+  io.emit("settings:changed", settings);
+  res.json({ ok: true, ...settings });
+});
 
 // プロジェクト前提情報の閲覧 (#73)。編集はチャット経由のみ (update_project_context)
 app.get("/api/project-context", (_req, res) => {

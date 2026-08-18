@@ -696,7 +696,7 @@ export function suggestSkipReason(state: {
 
 export async function generateSuggestions(): Promise<{ label: string; message: string }[]> {
   const skip = suggestSkipReason({
-    enabled: suggestEnabled(currentProjectId()),
+    enabled: suggestEnabled(), // #199: システム全体で1つの設定 (プロジェクト別ではない)
     chatBusy: isChatBusy(currentProjectId()),
     emptyBoard: listTasks().length === 0 && listSummaryCards().length === 0,
   });

@@ -389,18 +389,26 @@ export function createSummaryCard(): SummaryCard {
  * タスク側とカード側の更新は**1つのトランザクションにする**。まさにこの札が扱っている
  * 「途中でプロセスが止まる」が間に起きると、**`archived = 1` なのにカードの task_ids は空**
  * という、`listUnfoldedDoneIds` では拾えない状態が残る (同上) */
-export function claimTasksForCard(taskIds: number[], cardId: number): number[] {
-  return db().transaction((): number[] => claimInTransaction(taskIds, cardId))();
+/** claim の結果。`staleCards` は**中身が変わったので要約を作り直すべき旧カード** —
+ * 作り直しはLLMを呼ぶ非同期処理なので、トランザクションの中ではやらず呼び出し側へ渡す */
+export interface ClaimResult {
+  claimed: number[];
+  staleCards: number[];
+}
+
+export function claimTasksForCard(taskIds: number[], cardId: number): ClaimResult {
+  return db().transaction((): ClaimResult => claimInTransaction(taskIds, cardId))();
 }
 
 /** claim の中身。**トランザクションの中でだけ呼ぶ** (外側の口が2つあるので切り出してある) */
-function claimInTransaction(taskIds: number[], cardId: number): number[] {
+function claimInTransaction(taskIds: number[], cardId: number): ClaimResult {
   const readOwner = db().prepare("SELECT summary_card_id FROM tasks WHERE id = ?");
   const claimStmt = db().prepare(
     "UPDATE tasks SET archived = 1, summary_card_id = ? WHERE id = ? AND status = 'done' AND archived = 0 AND trashed_at IS NULL"
   );
-  const readCard = db().prepare("SELECT task_ids FROM summary_cards WHERE id = ?");
+  const readCard = db().prepare("SELECT task_ids, frozen FROM summary_cards WHERE id = ?");
   const writeCard = db().prepare("UPDATE summary_cards SET task_ids = ? WHERE id = ?");
+  const dropCard = db().prepare("DELETE FROM summary_cards WHERE id = ?");
 
   // **押さえる前の持ち主を控える。**#196 の競合で「archived=0 なのに古いカードIDが残る」行が
   // ありうるので、その行を押さえたときは**古いカードの索引から外す**必要がある。
@@ -411,7 +419,7 @@ function claimInTransaction(taskIds: number[], cardId: number): number[] {
   for (const id of taskIds) previousOwner.set(id, (readOwner.get(id) as any)?.summary_card_id ?? null);
 
   const claimed = taskIds.filter((id) => claimStmt.run(cardId, id).changes > 0);
-  if (claimed.length === 0) return claimed;
+  if (claimed.length === 0) return { claimed, staleCards: [] };
 
   // 古い持ち主の索引から外す (カード単位でまとめて1回書く)
   const orphanedBy = new Map<number, number[]>();
@@ -420,18 +428,32 @@ function claimInTransaction(taskIds: number[], cardId: number): number[] {
     if (prev == null || prev === cardId) continue;
     orphanedBy.set(prev, [...(orphanedBy.get(prev) ?? []), id]);
   }
+  //
+  // **索引だけでなく、旧カードの本文も始末する** (Codexレビュー指摘)。
+  // 索引からIDを外すだけだと、**出ていったタスクを説明する古い要約が残り続ける**。
+  // 最後の1件が出ていった場合は `taskIds=[]` の空カードが恒久的に居座る。
+  //   - 空になった  → 消す (frozen は消さない。人間が整頓して固定した過去ログなので、
+  //                   本文の作り直しに回して**チェック済み要素だけ残す**)
+  //   - 残件がある → 作り直しに回す (本文がいまの顔ぶれと合っていない)
+  // 作り直し自体はLLMを呼ぶので、ここではやらず staleCards として返す
+  const staleCards: number[] = [];
   for (const [oldCardId, ids] of orphanedBy) {
     const row = readCard.get(oldCardId) as any;
     if (!row) continue; // 既に消えているカード (#196 の壊れ方)。索引ごと無いので何もしなくてよい
     const remain = (JSON.parse(row.task_ids) as number[]).filter((x) => !ids.includes(x));
     writeCard.run(JSON.stringify(remain), oldCardId);
+    if (remain.length === 0 && !row.frozen) {
+      dropCard.run(oldCardId);
+      continue;
+    }
+    staleCards.push(oldCardId);
   }
 
   // 新しいカードの索引に、押さえられたものだけ載せる
   const ids = new Set<number>(JSON.parse((readCard.get(cardId) as any).task_ids));
   for (const id of claimed) ids.add(id);
   writeCard.run(JSON.stringify([...ids]), cardId);
-  return claimed;
+  return { claimed, staleCards };
 }
 
 /** #195: **カードの作成から claim までを1つのトランザクションで行う。**
@@ -442,18 +464,20 @@ function claimInTransaction(taskIds: number[], cardId: number): number[] {
  * **その要件を自分の実装が破っていた**ことになる。
  *
  * 押さえられたものが無ければカードごと巻き戻して `null` を返す (呼び出し側は何もしない) */
-export function createCardWithClaimedTasks(taskIds: number[]): { card: SummaryCard; claimed: number[] } | null {
-  return db().transaction((): { card: SummaryCard; claimed: number[] } | null => {
+export function createCardWithClaimedTasks(
+  taskIds: number[]
+): { card: SummaryCard; claimed: number[]; staleCards: number[] } | null {
+  return db().transaction((): { card: SummaryCard; claimed: number[]; staleCards: number[] } | null => {
     const info = db()
       .prepare("INSERT INTO summary_cards (title, elements, task_ids) VALUES (?, ?, ?)")
       .run("完了タスクの要約", "[]", "[]");
     const cardId = Number(info.lastInsertRowid);
-    const claimed = claimInTransaction(taskIds, cardId);
+    const { claimed, staleCards } = claimInTransaction(taskIds, cardId);
     if (claimed.length === 0) {
       db().prepare("DELETE FROM summary_cards WHERE id = ?").run(cardId);
       return null;
     }
-    return { card: getSummaryCard(cardId)!, claimed };
+    return { card: getSummaryCard(cardId)!, claimed, staleCards };
   })();
 }
 

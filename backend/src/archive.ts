@@ -271,10 +271,16 @@ export async function onTasksCompleted(taskIds: number[]): Promise<SummaryCard |
     log("archive", `tasksCompleted [${taskIds.join(",")}]: 畳める対象が無かったのでカードは作らない`);
     return undefined;
   }
-  const { card, claimed } = result;
+  const { card, claimed, staleCards } = result;
   if (claimed.length < taskIds.length) {
     const skipped = taskIds.filter((id) => !claimed.includes(id));
     log("archive", `tasksCompleted: #${skipped.join(", #")} は畳まなかった (done以外・ゴミ箱・畳み済みのいずれか)`);
+  }
+  // **タスクが出ていった旧カードの本文も作り直す** (Codexレビュー指摘)。索引だけ直すと、
+  // 出ていったタスクを説明する古い要約が残る。空になった旧カードは claim の中で消えている
+  for (const stale of staleCards) {
+    log("archive", `card#${stale} は構成が変わったので作り直します (タスクが card#${card.id} へ移動)`);
+    await regenerateCard(stale);
   }
   return regenerateCard(card.id);
 }

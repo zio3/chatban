@@ -35,9 +35,11 @@ const {
   listSummaryCards,
   listUnfoldedDoneIds,
   reassignTasksToCard,
+  setCardFrozen,
   setChecked,
   tasksOfCard,
   trashTask,
+  updateCardContent,
   updateTasks,
 } = await import("./db.js");
 
@@ -84,11 +86,62 @@ test("**archived=0 なのに古いカードIDが残った行も畳み直せる**
   reassignTasksToCard([id], stale.id);
 
   const card = createSummaryCard();
-  assert.deepEqual(claimTasksForCard([id], card.id), [id], "壊れた行を畳み直せていない");
+  assert.deepEqual(claimTasksForCard([id], card.id).claimed, [id], "壊れた行を畳み直せていない");
   assert.deepEqual(tasksOfCard(card.id).map((t) => t.id), [id]);
   // **古いカードの索引からも外れていること。**外さないと同じIDが2枚に載り (実測: stale:[1] fresh:[1])、
-  // UIの件数が二重になるうえ、rollUpOldCards / compactArchive が古い索引から拾い直す
-  assert.deepEqual(getSummaryCard(stale.id)?.taskIds ?? [], [], "古いカードの索引にIDが残っている");
+  // UIの件数が二重になるうえ、rollUpOldCards / compactArchive が古い索引から拾い直す。
+  // **空になった旧カードは消えていること** — 索引だけ外すと、出ていったタスクを説明する
+  // 古い要約が taskIds=[] のまま恒久的に残る (Codexレビュー指摘)
+  assert.equal(getSummaryCard(stale.id), undefined, "空になった旧カードが残っている");
+});
+
+test("旧カードに残件があれば消さず、作り直しの対象として返す (#195)", () => {
+  // **本文の始末まで見る。**索引だけ直しても、出ていったタスクを説明する古い要約が残る。
+  // 前のテストが旧カードに elements を持たせていなかったので、この問題を検出できていなかった
+  const moving = makeDoneTask("別のカードへ移すDone");
+  const staying = makeDoneTask("旧カードに残るDone");
+  const old = createSummaryCard();
+  claimTasksForCard([moving, staying], old.id);
+  updateCardContent(old.id, "移動前のまとめ", [
+    { text: `#${moving} と #${staying} を完了`, checked: false },
+  ]);
+
+  // moving だけを新カードへ移せる状態にする (#196 の壊れ方と同じ形)
+  detachTaskFromCard(moving);
+  reassignTasksToCard([moving, staying], old.id);
+
+  const fresh = createSummaryCard();
+  const { claimed, staleCards } = claimTasksForCard([moving], fresh.id);
+  assert.deepEqual(claimed, [moving]);
+
+  const oldCard = getSummaryCard(old.id);
+  assert.ok(oldCard, "残件があるのに旧カードが消えている");
+  assert.deepEqual(oldCard!.taskIds, [staying], "旧カードの索引が直っていない");
+  // **古い本文がそのまま残っているので、作り直しの対象として返す**
+  // (作り直しはLLMを呼ぶ非同期処理なので、呼び出し側 archive.ts がやる)
+  assert.ok(staleCards.includes(old.id), "残件のある旧カードが作り直しの対象に入っていない");
+  assert.ok(
+    oldCard!.elements.some((e) => e.text.includes(`#${moving}`)),
+    "前提が崩れている (古い本文が残っていない)"
+  );
+});
+
+test("整頓済み(frozen)の旧カードは空でも消さない (#195)", () => {
+  // frozen は人間が整頓して固定した過去ログ。**空になったからと消すと、人が確かめた文が消える**。
+  // 作り直しの対象として返し、regenerateCard の既定 (チェック済み要素だけ残す) に委ねる
+  const id = makeDoneTask("整頓済みカードから出ていくDone");
+  const old = createSummaryCard();
+  claimTasksForCard([id], old.id);
+  updateCardContent(old.id, "過去ログ", [{ text: "人が確かめた要素", checked: true }]);
+  setCardFrozen(old.id);
+
+  detachTaskFromCard(id);
+  reassignTasksToCard([id], old.id);
+
+  const fresh = createSummaryCard();
+  const { staleCards } = claimTasksForCard([id], fresh.id);
+  assert.ok(getSummaryCard(old.id), "frozen の過去ログを消している");
+  assert.ok(staleCards.includes(old.id), "frozen の旧カードが作り直しの対象に入っていない");
 });
 
 test("カードの作成と claim は同時に起きる — 空カードを残さない (#195)", () => {
@@ -116,7 +169,7 @@ test("押さえられたものだけを返す (#195)", () => {
   const b = makeDoneTask("押さえられるB");
   const card = createSummaryCard();
 
-  const claimed = claimTasksForCard([a, b], card.id);
+  const { claimed } = claimTasksForCard([a, b], card.id);
   assert.deepEqual(claimed.sort(), [a, b].sort());
   assert.deepEqual(
     tasksOfCard(card.id).map((t) => t.id).sort(),
@@ -130,9 +183,9 @@ test("**同じタスクを二度は押さえられない** — 二重取りの�
   const first = createSummaryCard();
   const second = createSummaryCard();
 
-  assert.deepEqual(claimTasksForCard([id], first.id), [id], "1回目で押さえられていない");
+  assert.deepEqual(claimTasksForCard([id], first.id).claimed, [id], "1回目で押さえられていない");
   // 起動時の掃除と通常のフックが同じIDを拾った状況。**後から来たほうは空で返る**
-  assert.deepEqual(claimTasksForCard([id], second.id), [], "2回目も押さえられてしまった");
+  assert.deepEqual(claimTasksForCard([id], second.id).claimed, [], "2回目も押さえられてしまった");
   // 先に押さえたカードから奪われていないこと (以前は無条件UPDATEだったので奪えた)
   assert.deepEqual(tasksOfCard(first.id).map((t) => t.id), [id]);
   assert.deepEqual(tasksOfCard(second.id).map((t) => t.id), [], "奪ったカード側に入っている");
@@ -146,7 +199,7 @@ test("**探したあとにゴミ箱へ入れられたら押さえない** — �
   // 要約処理は rollUpOldCards() を await するので、実際にこの隙間がある
   trashTask(id);
 
-  assert.deepEqual(claimTasksForCard([id], card.id), [], "ゴミ箱のタスクを押さえてしまった");
+  assert.deepEqual(claimTasksForCard([id], card.id).claimed, [], "ゴミ箱のタスクを押さえてしまった");
   assert.deepEqual(tasksOfCard(card.id), [], "ゴミ箱のタスクがカードに入っている");
   assert.ok(getTask(id)?.trashedAt, "ゴミ箱から出てしまっている");
 });
@@ -157,7 +210,7 @@ test("**探したあとにDoneから戻されたら押さえない** (#105の幽
 
   updateTasks([{ id, patch: { status: "todo" } }]); // 人間がDoneから引き戻した
 
-  assert.deepEqual(claimTasksForCard([id], card.id), [], "done以外を押さえてしまった");
+  assert.deepEqual(claimTasksForCard([id], card.id).claimed, [], "done以外を押さえてしまった");
   // 押さえていたら「todoなのに archived=1 でボードから消える」幽霊になる (#105)
   assert.deepEqual(tasksOfCard(card.id), [], "差し戻したタスクがカードに入っている");
 });

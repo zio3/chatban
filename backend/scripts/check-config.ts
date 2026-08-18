@@ -2,7 +2,7 @@
  *
  *   npx tsx scripts/check-config.ts
  *
- * 用途別の3スロットすべてに**小さなリクエストを1回ずつ**投げて、宛先・キー・モデルIDが
+ * 設定されたモデルに**小さなリクエストを1回ずつ**投げて、宛先・キー・モデルIDが
  * 揃っているかを見る。セットアップ直後に「動くかどうか」を、チャット画面を開く前に確かめられる。
  *
  * **設定を1つ間違えただけでも、症状は同じ「チャットが動かない」になる。**
@@ -14,8 +14,6 @@ import { chatCompletion } from "../src/llm.js";
 
 const SLOTS: { slot: ModelSlot; what: string }[] = [
   { slot: "main", what: "対話 (チャット)" },
-  { slot: "archive", what: "Done要約の要素分解" },
-  { slot: "cheap", what: "タイトル生成などの定型処理" },
 ];
 
 let cfg;
@@ -66,4 +64,4 @@ if (ng > 0) {
   );
   process.exit(1);
 }
-console.log("\n3スロットとも通りました。");
+console.log("\nすべて通りました。");

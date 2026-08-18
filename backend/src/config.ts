@@ -8,7 +8,7 @@ import { log } from "./log.js";
 /** #182: LLMの接続設定。**env ではなく JSON ファイルで持つ。**
  *
  * envを捨てた理由は「プロバイダを選ぶ」を「ファイルを1枚コピーする」にするため。
- * envだと baseURL / apiStyle / モデル3つを個別に埋めることになり、**組み合わせを間違えられる**
+ * envだと baseURL / apiStyle / モデルを個別に埋めることになり、**組み合わせを間違えられる**
  * (OpenAIの宛先にAnthropicのモデルID、など)。4つは常にセットで動くので、1枚にまとめて
  * examples/ から丸ごとコピーさせれば、間違った組み合わせが存在しなくなる。
  *
@@ -17,7 +17,10 @@ import { log } from "./log.js";
  * 環境ごとに違う値なので、プロバイダの選択に巻き込むと、サンプルをコピーしただけで上書きされる。 */
 
 export type ApiStyle = "chat" | "messages";
-export type ModelSlot = "main" | "archive" | "cheap";
+/** #202: かつては main / archive / cheap の3つだった。#200 で要約の蒸留を撤去し、
+ * LLMを呼ぶのは対話 (と提案チップ) だけになったので main 1つに戻した。
+ * 使わないスロットを必須のまま残すと、**使わない値を書かないと起動しない** */
+export type ModelSlot = "main";
 
 export interface LlmConfig {
   apiKey: string;
@@ -79,8 +82,6 @@ const schema = z
     apiStyle: z.enum(["chat", "messages"]),
     models: z.object({
       main: nonBlank("main"),
-      archive: nonBlank("archive"),
-      cheap: nonBlank("cheap"),
     }),
   })
   .refine((c) => Boolean(c.apiKey || c.apiKeyFile), {

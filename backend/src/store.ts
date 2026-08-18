@@ -581,20 +581,30 @@ const SUGGEST_KEY = "suggest.enabled";
  * 2つのプロセスが同じ旧値を読んで同じ世代を名乗る (自動レビュー指摘)。単一の UPSERT なら
  * SQLite の書き込みロックの中で完結するので、必ず別々の番号になる。
  *
- * 値が壊れていた場合は、1へ戻さず**現在のUNIX秒**を採る。1に戻すと過去の世代より小さくなり、
- * 旧プロセスの応答を「新しい」と誤って採用してしまう。UNIX秒は起動回数 (せいぜい数万) より
- * 必ず大きいので、単調性がそこで途切れない。行が無い初回も同じ値から始める —
+ * 値が壊れていた場合は、1へ戻さず**現在時刻 (エポックからのミリ秒)** を採る。1に戻すと過去の
+ * 世代より小さくなり、旧プロセスの応答を「新しい」と誤って採用してしまう。行が無い初回も同じ —
  * 「新規DB」と「壊れて消した」は区別できないので、安全な側に揃えておく。
+ *
+ * **秒ではなくミリ秒。**一度この値になった後は起動のたびに +1 で進むので、次にまた壊れたときの
+ * 現在時刻が「前回の時刻 + 起動回数」より大きくないと単調性が破れる。秒だと1秒未満の間隔で
+ * 何度も起動すれば追い抜かれるが、ミリ秒なら「経過ミリ秒 > その間の起動回数」で常に成り立つ
+ * (自動レビュー6周目の補足)。safe integer (9.0e15) に対して現在値は 1.8e12 なので余裕がある。
+ *
+ * **文字列で渡す。**数値で束縛すると better-sqlite3 が REAL として渡し、
+ * `CAST(... AS TEXT)` が `"1787019867.0"` になる (実測)。次の起動でこれが数字列判定に落ちて
+ * また現在時刻へ逃げる、という連鎖になり、同じミリ秒内の起動が同じ世代を名乗る
+ * (自動レビュー6周目の指摘)。
  *
  * 数字列かどうかは `NOT GLOB '*[^0-9]*'` で見る。**`GLOB '[0-9]*'` では足りない** —
  * これは先頭1文字しか見ないので `123x` や `12.3` を通し、CASTで黙って切り捨てられる
  * (自動レビュー5周目の指摘) */
 export function nextBootGeneration(): number {
-  const fallback = Math.floor(Date.now() / 1000);
+  // 桁だけの文字列にする (String(1.8e12) は指数表記にならない。上のsafe integerの余裕もその前提)
+  const fallback = String(Date.now());
   const row = admin
     .prepare(
       `INSERT INTO settings (key, value, updated_at)
-         VALUES ('boot.generation', CAST(@fallback AS TEXT), datetime('now', 'localtime'))
+         VALUES ('boot.generation', @fallback, datetime('now', 'localtime'))
        ON CONFLICT(key) DO UPDATE SET
          value = CAST(
            CASE WHEN settings.value <> '' AND settings.value NOT GLOB '*[^0-9]*'

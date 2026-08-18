@@ -1519,6 +1519,29 @@ test("AI提案チップのON/OFFはシステム全体で1つ。OFFなら提案�
   });
   expect(await enabled()).toBe(false);
 
+  // 入口で確かめる。**書き換えるものが1つも無い要求を成功にしない** —
+  // 綴り違いや型違いが200で通ると、呼んだ側は反映されたつもりで待ち続ける
+  for (const bad of [{}, { suggestEnabled: "false" }, { suggestEnabled: null }, { suggestEnable: false }]) {
+    const r = await fetch(`${API}/api/settings`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(bad),
+    });
+    expect(r.status, `${JSON.stringify(bad)} が通ってしまった`).toBe(400);
+  }
+  // 断ったあとも値は動いていない (途中まで適用して400、を作らない)
+  expect(await enabled()).toBe(false);
+
+  // 版は書き換えるたびに増える。HTTP応答とsocketイベントの到着順が入れ替わっても
+  // 古い値が新しい値を上書きしないための手がかり
+  const before1 = ((await (await fetch(`${API}/api/settings`)).json()) as any).revision;
+  await fetch(`${API}/api/settings`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ suggestEnabled: false }),
+  });
+  expect(((await (await fetch(`${API}/api/settings`)).json()) as any).revision).toBeGreaterThan(before1);
+
   // OFFなら空で返る。**「LLMを呼んでいないこと」は誰も確かめていない** —
   // #181 まで使っていた llm_calls の件数差はテーブルごと撤去され、共有ログの行数で数える形は
   // 開発サーバーの書き込みで誤判定しうる (自動レビュー指摘)。

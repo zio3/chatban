@@ -59,17 +59,31 @@ export default function ProjectSettings() {
   // #199: アプリ全体の設定。プロジェクト一覧とは別に読む (プロジェクトの属性ではなくなったため)。
   // 別タブで切り替えたときも合わせる (タブごとに別プロジェクトを開ける #97 ので、複数開いている前提)
   const [settings, setSettings] = useState<Settings | null>(null);
-  useEffect(() => {
-    api
-      .settings()
-      .then(setSettings)
-      .catch((e) => setError(String(e)));
-    const onSettings = (s: Settings) => setSettings(s);
-    socket.on("settings:changed", onSettings);
-    return () => {
-      socket.off("settings:changed", onSettings);
-    };
+  // 版が同じか新しいときだけ入れる。PATCHのHTTP応答と socket の settings:changed は
+  // どちらが先に着くか決まっていないので、素直に上書きすると**古い応答が新しい状態を巻き戻す**
+  // (別タブで後から切り替えられた場合。自動レビュー指摘)
+  const applySettings = useCallback((s: Settings) => {
+    setSettings((prev) => (prev && s.revision < prev.revision ? prev : s));
   }, []);
+  useEffect(() => {
+    // GET は**版で弾かずそのまま入れる**。サーバーを再起動すると版は0に戻るので、
+    // ここで版を比べると「持っている版のほうが大きい」まま永久に反映されなくなる。
+    // 取り直しはサーバーが権威という前提の操作なので、無条件でよい
+    const load = () =>
+      api
+        .settings()
+        .then(setSettings)
+        .catch((e) => setError(String(e)));
+    load();
+    // 切れている間の変更はイベントが来ない。再接続したら取り直す
+    // (board / project は App.tsx が同じことをしている。ここだけ取りこぼすと永久にズレたまま)
+    socket.on("connect", load);
+    socket.on("settings:changed", applySettings);
+    return () => {
+      socket.off("connect", load);
+      socket.off("settings:changed", applySettings);
+    };
+  }, [applySettings]);
 
   async function run(fn: () => Promise<unknown>) {
     setBusy(true);
@@ -100,9 +114,10 @@ export default function ProjectSettings() {
             disabled={busy || !settings}
             onClick={() =>
               settings &&
-              // socket の settings:changed でも届くが、応答でも直に入れる
-              // (socket が切れているときにボタンが反応しないように見えるのを防ぐ)
-              run(async () => setSettings(await api.updateSettings({ suggestEnabled: !settings.suggestEnabled })))
+              // socket の settings:changed でも届くが、応答でも入れる
+              // (socket が切れているときにボタンが反応しないように見えるのを防ぐ)。
+              // どちらが先に着くか決まっていないので、版で新しいほうを採る
+              run(async () => applySettings(await api.updateSettings({ suggestEnabled: !settings.suggestEnabled })))
             }
             className={`rounded-lg border px-3 py-1.5 text-xs disabled:opacity-30 ${
               settings?.suggestEnabled

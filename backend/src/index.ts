@@ -561,18 +561,38 @@ app.delete("/api/projects/:id", (req, res) => {
 // #199: アプリ全体の設定。いまは提案チップのON/OFF 1つだけ。
 // **接続設定 (宛先・キー・モデル) はここに戻さない** — #182 で config.json 1枚に集約した。
 // ここに置くのは「持ち主の好み」だけで、実効値がDBと設定ファイルに二重化するものは置かない
+// 版。書き換えるたびに増やし、GET・PATCH応答・配信イベントの全てに載せる。
+// 受け手は「自分が持っているより新しいときだけ適用する」ことで、HTTP応答と socket イベントの
+// 到着順が入れ替わっても古い値が新しい値を上書きしない (自動レビュー指摘)。
+// プロセス再起動で0に戻るが、そのとき socket は必ず切れるので、受け手は再接続時に GET し直す
+let settingsRevision = 0;
+
+function currentSettings(): { suggestEnabled: boolean; revision: number } {
+  return { suggestEnabled: suggestEnabled(), revision: settingsRevision };
+}
+
 app.get("/api/settings", (_req, res) => {
-  res.json({ suggestEnabled: suggestEnabled() });
+  res.json(currentSettings());
 });
 
 app.patch("/api/settings", (req, res) => {
-  const { suggestEnabled: suggest } = req.body ?? {};
+  const body = req.body ?? {};
+  const KNOWN = ["suggestEnabled"];
+  // 入口で確かめる。**書き換えるものが1つも無い要求を200で返さない** — 綴り違いや型違いが
+  // 「成功したのに何も変わらない」で通ると、呼んだ側は反映されたつもりで待ち続ける (自動レビュー指摘)。
+  // 知らないフィールドも名指しで断る (無視して通すと、消えた設定を書き続けても気づけない)
+  const unknown = Object.keys(body).filter((k) => !KNOWN.includes(k));
+  if (unknown.length > 0)
+    return res.status(400).json({ error: `知らない設定です: ${unknown.join(", ")} (書けるのは ${KNOWN.join(", ")})` });
+  if (typeof body.suggestEnabled !== "boolean")
+    return res.status(400).json({ error: "suggestEnabled には true / false を渡してください" });
+
   // 提案チップのON/OFF。次の /api/suggestions から効く (再起動不要)
-  if (typeof suggest === "boolean") {
-    setSuggestEnabled(suggest);
-    log("settings", `suggest -> ${suggest ? "on" : "off"}`);
-  }
-  const settings = { suggestEnabled: suggestEnabled() };
+  setSuggestEnabled(body.suggestEnabled);
+  settingsRevision += 1;
+  log("settings", `suggest -> ${body.suggestEnabled ? "on" : "off"} (rev ${settingsRevision})`);
+
+  const settings = currentSettings();
   // タブは複数開いている前提 (#97) なので、片方で切ったらもう片方のトグルも合わせる
   io.emit("settings:changed", settings);
   res.json({ ok: true, ...settings });

@@ -45,6 +45,9 @@ export interface Project {
 export interface Settings {
   /** AI提案チップ(#75)を出すか。OFFの間はLLMを呼ばない */
   suggestEnabled: boolean;
+  /** 版。書き換えるたびに増える。HTTP応答と socket イベントの到着順が入れ替わっても
+   * 古い値で新しい値を上書きしないよう、受け手は「これが大きいときだけ適用する」 */
+  revision: number;
 }
 
 export const api = {

@@ -10,6 +10,7 @@ import TaskDetailPanel from "./components/TaskDetailPanel";
 import { useChatTurn } from "./hooks/useChatTurn";
 import type { Attachment } from "./hooks/useAttachments";
 import { socket } from "./socket";
+import { parseTaskJump } from "./taskJump";
 import type { ChatEntry, FoldedTask, Task } from "./types";
 
 interface Toast {
@@ -49,14 +50,6 @@ export default function App() {
   // 「押されるまで待っている状態」を作らないための割り切り — ボタンは入力の近道であって、
   // 承認の経路ではない (経路にすると #127 で外した提案カードに逆戻りする)
   const [askOptions, setAskOptions] = useState<string[]>([]);
-  const sendFromChat = useCallback(
-    (message: string, attachments?: Attachment[]) => {
-      setAskOptions([]);
-      mainChat.send(message, attachments);
-    },
-    [mainChat.send]
-  );
-
   // #86: プロジェクト一覧。切り替えるとボード・チャット・前提情報が総取っ替えになる
   const [projects, setProjects] = useState<Project[]>([]);
   const loadProjects = useCallback(() => {
@@ -186,6 +179,53 @@ export default function App() {
       setTimeout(() => el.classList.remove("task-flash"), 1700);
     }, 60);
   }, []);
+
+  // #197: 番号だけの発言 (`193` / `#193`) は、LLMを呼ばずにそのタスクを開く。
+  // 「検索窓が欲しい、とくに番号でアクセスしたいケースが増えてきた」への答えだが、
+  // **専用の検索窓は作らない** — チャットは常設 (#74) でどこからでも打てるし、
+  // 開く仕掛け (openTask / jumpToBoard) は要約カードのリンク (#59) と依存チップ (#111) で
+  // 既に在る。足りないのは番号を打ち込む入口だけだった。
+  //
+  // 番号が存在しないときは**普通の発言としてLLMへ渡す** (zio判断)。
+  // 「2026」のような数字だけの発言を横取りしない
+  const taskExists = useCallback(
+    async (id: number) => {
+      if (tasks.some((t) => t.id === id)) return true; // ボード上なら往復しない
+      // アーカイブ済みかもしれない。要約カードの #xx リンクと同じ経路で確かめる
+      return api
+        .getTask(id)
+        .then(() => true)
+        .catch(() => false);
+    },
+    [tasks]
+  );
+
+  const sendFromChat = useCallback(
+    async (message: string, attachments?: Attachment[]) => {
+      setAskOptions([]);
+      // 添付があるときは番号ジャンプにしない (画像を貼って「193」は、その画像についての発言)
+      const id = attachments?.length ? null : parseTaskJump(message);
+      if (id !== null && (await taskExists(id))) {
+        // DBには残さない (リロードで消えてよい)。LLMを通っていないので保存の経路が無い。
+        //
+        // ただし**次のターンではLLMの履歴に入る**。useChatTurn が履歴から外すのは
+        // pending と error だけで、ここで積む2行はどちらでもない (types.ts の
+        // 「履歴としてLLMには送らない」は error 行の話)。
+        // それでよい — 画面に出ているものが見えていないと、「さっき#193を開いたよね」が
+        // 噛み合わなくなる。会話ではないから消す、より、見えているものは見せる、を採る
+        mainChat.setLog((prev) => [
+          ...prev,
+          { role: "user", content: message },
+          { role: "assistant", content: `#${id} をひらきます。` },
+        ]);
+        openTask(id); // 存在は確認済み。ボードに無ければ内部でもう一度引くが、番号を打つ頻度なら安い
+        jumpToBoard(id); // ボード上にあればスクロールして光らせる (無ければ何もしない)
+        return;
+      }
+      mainChat.send(message, attachments);
+    },
+    [mainChat.send, mainChat.setLog, taskExists, openTask, jumpToBoard]
+  );
 
   // Review→Doneの検収 (#57)。カードの検収OKチェックはマーキングのみで、
   // 「検収済みN件をDoneへ」ボタンで初めて確定する (Doneへの唯一のUI経路。D&Dは禁止)

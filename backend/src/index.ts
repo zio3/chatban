@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import http from "node:http";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import cors from "cors";
@@ -25,6 +24,7 @@ import {
   reportOrphanFiles,
   setActiveProjectId,
   setProjectArchived,
+  nextBootGeneration,
   setSuggestEnabled,
   suggestEnabled,
   trashProject,
@@ -569,13 +569,21 @@ app.delete("/api/projects/:id", (req, res) => {
 // **版だけでは足りない。**プロセスを再起動すると版は0に戻るので、受け手が持っている版のほうが
 // 大きくなり、以後どの更新も適用されなくなる。かといって「GETだけ無条件」にすると、
 // GETの応答待ちの間に届いた新しい配信を、後から返ってきた古いGETが巻き戻す (2周目の指摘)。
-// 起動ごとに変わるIDを組にして、**別の起動なら無条件に採用、同じ起動なら版で比べる**。
-// これで両方の向きのレースが閉じる (tsx watch の再起動が毎日何十回も起きる #189 の実測もある)
-const SETTINGS_BOOT_ID = randomUUID();
+//
+// 起動ごとのランダムIDを組にする案も採らない。**同一性しか分からず順序が分からない**ので、
+// 旧プロセスで始まった遅延応答が、再起動後のプロセスの状態を「別の起動だから」と巻き戻す
+// (3周目の指摘)。**世代を単調増加させて (世代, 版) を全順序にする** — こうすると
+// どの経路がどの順で着いても「古いほうを捨てる」だけで決まる。
+// tsx watch の再起動が毎日何十回も起きる (#189 の実測) 以上、再起動をまたぐ順序は要る
+const SETTINGS_BOOT_GENERATION = nextBootGeneration();
 let settingsRevision = 0;
 
-function currentSettings(): { suggestEnabled: boolean; revision: number; bootId: string } {
-  return { suggestEnabled: suggestEnabled(), revision: settingsRevision, bootId: SETTINGS_BOOT_ID };
+function currentSettings(): { suggestEnabled: boolean; revision: number; bootGeneration: number } {
+  return {
+    suggestEnabled: suggestEnabled(),
+    revision: settingsRevision,
+    bootGeneration: SETTINGS_BOOT_GENERATION,
+  };
 }
 
 app.get("/api/settings", (_req, res) => {

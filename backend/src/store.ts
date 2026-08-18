@@ -557,6 +557,30 @@ export function projectSummaries(): ProjectSummary[] {
 // ここから呼ぶと循環参照になる。admin を直接使う
 const SUGGEST_KEY = "suggest.enabled";
 
+/** #199: 起動の世代番号。プロセスが上がるたびに1つ増え、DBに残るので**再起動をまたいで単調増加**する。
+ *
+ * 設定の版 (revision) はプロセス内のカウンタなので再起動で0に戻る。受け手が
+ * 「持っている版より新しいときだけ適用する」判定をすると、再起動後の更新が永久に適用されない。
+ * かといって起動ごとのランダムIDだと**同一性しか分からず順序が分からない** — 旧プロセスの
+ * 遅延応答が新プロセスの状態を巻き戻せてしまう (自動レビュー3周目の指摘)。
+ * 世代を単調増加させると (世代, 版) の組が全順序になり、どの経路の到着順でも「古いほうを捨てる」で決まる。
+ *
+ * 起動ごとに1行書くだけ。auth.% / model.% / suggest.enabled.% の掃除には当たらないキー名にしてある */
+export function nextBootGeneration(): number {
+  const r = admin.prepare("SELECT value FROM settings WHERE key = 'boot.generation'").get() as
+    | { value: string }
+    | undefined;
+  // 壊れた値・欠損は0扱い。増やす方向にしか動かないので、読めなければ1から振り直せばよい
+  const prev = Number(r?.value);
+  const next = (Number.isFinite(prev) ? prev : 0) + 1;
+  admin
+    .prepare(
+      "INSERT INTO settings (key, value, updated_at) VALUES ('boot.generation', ?, datetime('now', 'localtime')) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at"
+    )
+    .run(String(next));
+  return next;
+}
+
 export function suggestEnabled(): boolean {
   const r = admin.prepare("SELECT value FROM settings WHERE key = ?").get(SUGGEST_KEY) as
     | { value: string }

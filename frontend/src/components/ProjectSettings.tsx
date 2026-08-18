@@ -3,6 +3,20 @@ import { api, type Project, type Settings } from "../api";
 import { socket } from "../socket";
 import { gotoProject, projectIdFromUrl } from "../project";
 
+/** #199: 届いた設定が、いま持っているものより古いか。
+ *
+ * (起動世代, 版) の辞書順で比べる。**世代だけ・版だけでは足りない** —
+ * 版はプロセス内カウンタなので再起動で0に戻り、版だけだと再起動後の更新が永久に適用されない。
+ * 起動ごとのランダムIDだと同一性しか分からず順序が無いので、旧プロセスで始まった遅延応答が
+ * 新プロセスの状態を「別の起動だから」と巻き戻す。世代を単調増加させると全順序になり、
+ * どの経路がどの順で着いても「古いほうを捨てる」だけで決まる。
+ *
+ * 同じ (世代, 版) は同じ内容なので、どちらを採っても結果は変わらない (古いとは呼ばない) */
+export function isOlder(incoming: Settings, current: Settings): boolean {
+  if (incoming.bootGeneration !== current.bootGeneration) return incoming.bootGeneration < current.bootGeneration;
+  return incoming.revision < current.revision;
+}
+
 // #86: プロジェクト管理。プロジェクト = SQLiteファイル1つ。
 // 切り替えるとボード・チャット・前提情報がまとめて入れ替わる。
 // タスクの#IDはプロジェクトごとに1から始まる (#IDは会話の語彙なので短いほうがいい)。
@@ -61,12 +75,9 @@ export default function ProjectSettings() {
   const [settings, setSettings] = useState<Settings | null>(null);
   // **入ってくる経路 (初期GET / 再接続GET / PATCH応答 / socket配信) は全部ここを通す。**
   // どれも到着順が決まっていないので、1つでも素通しにすると、そこだけ巻き戻しの穴になる
-  // (「GETだけ無条件」にして、GETの応答待ちに届いた新しい配信を古いGETが巻き戻す穴を作った)。
-  //
-  // 判定は2段。別の起動なら無条件に採用 (再起動で版は0に戻るので、版で比べると永久に
-  // 反映されなくなる)、同じ起動なら版が新しいときだけ採用する
+  // (「GETだけ無条件」にして、GETの応答待ちに届いた新しい配信を古いGETが巻き戻す穴を作った)
   const applySettings = useCallback((s: Settings) => {
-    setSettings((prev) => (prev && s.bootId === prev.bootId && s.revision < prev.revision ? prev : s));
+    setSettings((prev) => (prev && isOlder(s, prev) ? prev : s));
   }, []);
   useEffect(() => {
     const load = () =>

@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { extractChoices, suggestSkipReason } from "./chat.js";
-import { differs } from "./archive.js";
 import { readFileSync } from "node:fs";
 import { tools } from "./chat.js";
 import { DONE_GATE_RULE, isDueDate, isTaskStatus, mayEnterDone } from "./db.js";
@@ -93,28 +92,6 @@ test("選択肢だけの行が残っても空行は畳む", () => {
   const r = extractChoices("どうしますか。\n\n[[はい]] [[いいえ]]\n\n押さずに打っても構いません。");
   assert.deepEqual(r.options, ["はい", "いいえ"]);
   assert.equal(r.text, "どうしますか。\n\n押さずに打っても構いません。");
-});
-
-// アーカイブ要約の世代チェック。regenerateCard は「読む → LLMを待つ(10〜100秒) → 保存」
-// なので、待っている間にカードの顔ぶれが変わったら結果を捨てる必要がある。
-// 実測で、2件で生成を始めて途中で1件外すと、外したはずのタスクが要約に残った。
-
-test("顔ぶれが変わっていなければ保存する", () => {
-  assert.equal(differs([1, 2, 3], [1, 2, 3]), false);
-  assert.equal(differs([], []), false);
-});
-
-test("タスクが外れたら古い結果として捨てる", () => {
-  assert.equal(differs([2], [1, 2]), true); // 生成中にDoneから戻された
-  assert.equal(differs([], [1]), true); // 最後の1件が外れた
-});
-
-test("タスクが増えても捨てる (次の検収バッチが合流した)", () => {
-  assert.equal(differs([1, 2, 3], [1, 2]), true);
-});
-
-test("同じ件数でも中身が違えば捨てる", () => {
-  assert.equal(differs([1, 3], [1, 2]), true);
 });
 
 // #126 → #180: 発言者を決める pickSpeaker のテストがここにあった。

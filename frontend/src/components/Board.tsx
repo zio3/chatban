@@ -270,7 +270,6 @@ function Column({
   col,
   tasks,
   summaryCards,
-  archiveWorking,
   onOpenTask,
   approvedIds,
   onToggleApproved,
@@ -281,7 +280,6 @@ function Column({
   col: (typeof COLUMNS)[number];
   tasks: Task[];
   summaryCards?: SummaryCard[];
-  archiveWorking?: boolean;
   onOpenTask: (id: number) => void;
   /** Review列のみ: 検収OKマークの集合と一括確定 (#57) */
   approvedIds?: Set<number>;
@@ -322,16 +320,6 @@ function Column({
           </span>
         </span>
       </div>
-      {/* 完了→要約合流は非同期(15〜30秒)なので、再生成中はスピナーで明示 (#56) */}
-      {archiveWorking && (
-        <div
-          data-testid="archive-working"
-          className="flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-2 text-xs text-emerald-700"
-        >
-          <span className="h-3 w-3 shrink-0 animate-spin rounded-full border-2 border-emerald-500 border-t-transparent" />
-          要約カードを再生成中…
-        </div>
-      )}
       {/* Done列: 要約カード常駐 (アクティブ→過去ログの順) */}
       {summaryCards &&
         [...summaryCards]
@@ -373,7 +361,6 @@ export default function Board({
   tasks,
   allTasks,
   summaryCards,
-  archiveWorking,
   onMove,
   onOpenTask,
   approvedIds,
@@ -384,7 +371,6 @@ export default function Board({
   /** 依存の判定に使う母集団。フィルタで隠れているものも含む全件 (#41/#90) */
   allTasks: Task[];
   summaryCards: SummaryCard[];
-  archiveWorking?: boolean;
   onMove: (move: MovePayload) => void;
   onOpenTask: (id: number) => void;
   approvedIds: Set<number>;
@@ -443,7 +429,6 @@ export default function Board({
             col={col}
             tasks={byStatus(col.key)}
             summaryCards={col.key === "done" ? summaryCards : undefined}
-            archiveWorking={col.key === "done" ? archiveWorking : undefined}
             onOpenTask={onOpenTask}
             approvedIds={col.key === "review" ? approvedIds : undefined}
             onToggleApproved={col.key === "review" ? onToggleApproved : undefined}

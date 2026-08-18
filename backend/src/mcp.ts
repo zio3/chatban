@@ -38,7 +38,6 @@ import {
   updateTasks,
 } from "./db.js";
 import { boardDelta, formatBoardUpdate } from "./boardState.js";
-import { archiveState } from "./hooks.js";
 import { contextReference, contextTemplateHint } from "./contextTemplate.js";
 import { currentProjectId, getProject } from "./store.js";
 import type { TaskStatus } from "./types.js";
@@ -301,10 +300,6 @@ export function buildMcpServer(onEvent: (kind: "board" | "proposals") => void): 
                 "(既存の記述はそのプロジェクトの決めごとなので、参考の文言で置き換えない)。" +
                 "どれを選ぶか判断がつかないときは、人間に聞いてから書く",
             }
-          : {}),
-        // #108: 要約の再生成は15〜80秒かかる。生成中に「完了した」と誤認しないように知らせる
-        ...(archiveState.running.get(currentProjectId())
-          ? { archiveRunning: "要約カードを再生成中。結果を見るなら少し待って引き直すこと" }
           : {}),
       });
     }

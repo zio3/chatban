@@ -27,7 +27,6 @@ export default function App() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [toast, setToast] = useState<Toast | null>(null);
   const [detailTaskId, setDetailTaskId] = useState<number | null>(null);
-  const [archiveWorking, setArchiveWorking] = useState(false);
   // #21/#33: ボード以外の閲覧ビューへの遷移 (簡易タブ)
   const [view, setView] = useState<"board" | "context" | "settings" | "trash">("board");
 
@@ -107,7 +106,6 @@ export default function App() {
       if (p.summaryCards) setSummaryCards(p.summaryCards);
     };
     // Done要約カードの非同期再生成中インジケータ (#56)
-    const onArchive = (p: { count: number }) => setArchiveWorking(p.count > 0);
     // プロジェクトが切り替わったら全部読み直す (他のタブ/端末での切り替えにも追従する)
     const onProject = (p: { projects: Project[] }) => {
       setProjects(p.projects);
@@ -122,13 +120,11 @@ export default function App() {
     };
     socket.on("connect", onConnect);
     socket.on("board:changed", onBoard);
-    socket.on("archive:working", onArchive);
     socket.on("project:changed", onProject);
     loadProjects();
     return () => {
       socket.off("connect", onConnect);
       socket.off("board:changed", onBoard);
-      socket.off("archive:working", onArchive);
       socket.off("project:changed", onProject);
     };
   }, [reload, loadProjects]);
@@ -385,7 +381,6 @@ export default function App() {
             tasks={visibleTasks}
             allTasks={visibleTasks}
             summaryCards={summaryCards}
-            archiveWorking={archiveWorking}
             onMove={moveTask}
             onOpenTask={openTask}
             approvedIds={approvedIds}

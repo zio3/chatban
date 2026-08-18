@@ -243,18 +243,14 @@ export function updateTask(id: number, patch: TaskPatch): Task | undefined {
  * 自然言語UIでは解釈ミスが必ず起きる。「消せます?」が delete_tasks を呼んで実データが消えた事故を受け、
  * 「間違えないようにする」のではなく「間違えても取り返しがつく」形に変えた。
  * プロンプトの確認ルールは漏れるが、消えていないという事実は漏れない (#69 done封鎖と同じ考え方) */
-/** #195: **畳み損なったDone。**Doneへ確定すると `done_at` が入り、そのあと非同期の要約処理が
- * `archived=1` を付けてボードから外す。この2つは別の書き込みなので、間でプロセスが止まると
- * `status='done'` なのに `archived=0` のタスクが残る (要約は15〜30秒かかるので窓は小さくない)。
+/** #200: **Done列の1段目 (バラバラ)。**検収した直後のタスクは `status='done'` のまま
+ * `archived=0` で、個別カードとして列に並ぶ。「もう一回確認したい」がここで済む。
  *
- * 残ると、ボードにDoneが居座り、要約カードにも入らない = **蒸留されないまま完了扱いになる**。
+ * 次にDoneボタンを押したとき、この顔ぶれがまとめてコンテナへ入る (2段目)。
+ * つまり**列に居残る条件がそのまま畳む対象の定義**になっていて、専用の印も回収処理も要らない。
  *
- * 拾う仕掛けは作らない。**次にDoneを畳むとき、一緒に畳む** (onTasksCompleted を見る) —
- * 専用の回収処理を起動時などに置くと、そのために引き金・分岐・状態を持つことになる。
- * 落ちること自体が稀なので、**次の検収まで残っていて構わない**という判断 (zio)。
- *
- * 条件は3つとも要る。`trashed_at` を見ないと**ゴミ箱に入れたDoneまで畳み直す** */
-export function listUnfoldedDoneIds(): number[] {
+ * 条件は3つとも要る。`trashed_at` を見ないと**ゴミ箱に入れたDoneまで畳む** */
+export function listLooseDoneIds(): number[] {
   return (
     db()
       .prepare("SELECT id FROM tasks WHERE status = 'done' AND archived = 0 AND trashed_at IS NULL ORDER BY id")
@@ -330,6 +326,9 @@ export interface SummaryCard {
   title: string;
   elements: SummaryElement[];
   taskIds: number[];
+  /** #200: 中身のタイトル。コンテナは折りたたむだけなので、開いたときに出すものが要る。
+   * 畳んだタスクは archived=1 で listTasks() に載らないため、画面側では引けない */
+  tasks: { id: number; title: string }[];
   frozen: boolean;
   createdAt: string;
 }
@@ -340,6 +339,9 @@ function rowToCard(r: any): SummaryCard {
     title: r.title,
     elements: JSON.parse(r.elements),
     taskIds: JSON.parse(r.task_ids),
+    tasks: db()
+      .prepare("SELECT id, title FROM tasks WHERE summary_card_id = ? ORDER BY id")
+      .all(r.id) as { id: number; title: string }[],
     frozen: !!r.frozen,
     createdAt: r.created_at,
   };
@@ -354,47 +356,79 @@ export function getSummaryCard(id: number): SummaryCard | undefined {
   return r ? rowToCard(r) : undefined;
 }
 
-// #105: 完了タスクの合流先を検収バッチごとに新規作成する。
-// 以前は「frozenでない最後のカード」に合流し続けたため、整頓するまで1枚が無限に育ち、
-// 直近の作業と数時間前の作業が同じカードに畳まれて解像度が落ちていた。
-// 人間が「このまとまりを完了にする」と決めた単位(=検収バッチ)をそのまま粒度にする。
-// 分けるのは後からできないが、統合は compact_archive と日次まとめでできる = 細かい側に倒す。
-export function createSummaryCard(): SummaryCard {
-  const info = db()
-    .prepare("INSERT INTO summary_cards (title, elements, task_ids) VALUES (?, ?, ?)")
-    .run("完了タスクの要約", "[]", "[]");
-  return getSummaryCard(Number(info.lastInsertRowid))!;
+/** #200: Done列の2段目 (コンテナ)。1回の畳み込みにつき1枚作る。
+ *
+ * 見出しはコードで作る。以前はLLMに内容ラベルを書かせていたが、**要約は読まれていなかった**
+ * (実運用2週間の観察)。やったことの記録は git のコミットとPR本文に差分つきで残っていて、
+ * カードはその劣化コピーだった。Done列は「ゴミ箱に行くまでのロスタイム」であって陳列棚ではない。 */
+function cardTitle(count: number): string {
+  const now = new Date();
+  const d = now.toLocaleDateString("ja-JP", { month: "numeric", day: "numeric" });
+  const t = now.toLocaleTimeString("ja-JP", { hour: "2-digit", minute: "2-digit" });
+  return `${d} ${t} の検収 (${count}件)`;
 }
 
-/** #195: **畳む対象を条件つきUPDATEで押さえる。**返すのは実際に押さえられたIDだけ。
+/** #200: バラバラのDoneをコンテナへ畳む。**押さえられたIDだけ**を返す。
  *
- * 以前は `assignTaskToCard(taskId, cardId)` が**無条件のUPDATE**だった。だが呼び出し側は
- * 「読んだ時点で done だった」を根拠に書いており、`rollUpOldCards()` の await を挟むので
- * **読んでから書くまでに状態が変わりうる**:
+ * 条件つきUPDATEで押さえるのは #195 から引き継ぎ。読んだ時点ではなく**書く時点**で確かめる。
+ * ただし今回は畳み込み全体が同期の1トランザクションなので、読みと書きの間に await が無い —
+ * 「読んでから書くまでに状態が変わる」窓自体が閉じている。条件は二重の安全に過ぎない。
  *
- * - ゴミ箱へ入れられた → `status` は done のままなので素通りし、**ゴミ箱と要約カードの両方に入る**
- * - Doneから戻された   → 「todoなのに archived=1 でボードから消える」幽霊になる (#105)
- * - 別の畳み処理が先に押さえた → **後から来たカードが奪い、先発カードには古いIDが残る**
- *
- * どれも「読んだ時点の事実」で書いていたのが原因なので、**書くときに条件を付ける**。
- * タスク行とカードの索引は**1つのトランザクション**で書く (途中で止まると、
- * 畳んだのに索引に無い = どちらの掃除でも見つからない状態が残るため) */
-export function claimTasksForCard(taskIds: number[], cardId: number): number[] {
+ * カードとタスク行を1トランザクションで書くのは、途中で止まると
+ * 「畳んだのに索引に無い」= どちらの掃除でも見つからない状態が残るため。 */
+export function foldIntoContainer(taskIds: number[]): SummaryCard | undefined {
   const claimStmt = db().prepare(
     "UPDATE tasks SET archived = 1, summary_card_id = ? WHERE id = ? AND status = 'done' AND archived = 0 AND trashed_at IS NULL"
   );
-  const readCard = db().prepare("SELECT task_ids FROM summary_cards WHERE id = ?");
-  const writeCard = db().prepare("UPDATE summary_cards SET task_ids = ? WHERE id = ?");
-  return db().transaction((): number[] => {
+  const insertCard = db().prepare("INSERT INTO summary_cards (title, elements, task_ids) VALUES (?, '[]', '[]')");
+  const writeCard = db().prepare("UPDATE summary_cards SET title = ?, task_ids = ? WHERE id = ?");
+  const dropCard = db().prepare("DELETE FROM summary_cards WHERE id = ?");
+  return db().transaction((): SummaryCard | undefined => {
+    const cardId = Number(insertCard.run("").lastInsertRowid);
     const claimed = taskIds.filter((id) => claimStmt.run(cardId, id).changes > 0);
-    if (claimed.length === 0) return claimed;
-    const ids = new Set<number>(JSON.parse((readCard.get(cardId) as any).task_ids));
-    for (const id of claimed) ids.add(id);
-    writeCard.run(JSON.stringify([...ids]), cardId);
-    return claimed;
+    if (claimed.length === 0) {
+      // 押さえられるものが無いなら**空のコンテナを残さない**
+      dropCard.run(cardId);
+      return undefined;
+    }
+    writeCard.run(cardTitle(claimed.length), JSON.stringify(claimed), cardId);
+    return getSummaryCard(cardId);
   })();
 }
 
+/** #200: Done列の3段目。作成から `hours` 時間が経ったコンテナを板から降ろす。
+ * **タスクは消さない** — `archived=1` のまま残り、search_tasks で引ける。
+ * 消えるのは器のほうで、「引けば出るが、視界には出てこない」状態になる。
+ *
+ * カレンダー日ではなく**作成時刻からの相対**にしてある。日で切ると深夜に踏む
+ * (0時をまたいだ直後にDoneを押すと、数分前の検収バッチが「昨日の分」として消える)。
+ * この仕組みの本体は「押した瞬間に完結する」ことなので、押した時刻からの相対で揃える。
+ *
+ * 対象は `elements` が空のカードだけ。**蒸留をやめる前に作られた要約カードは残す** —
+ * あれは常駐させる前提で作ったものなので、ロスタイムの規則を後から当てない。 */
+export function expireContainers(hours: number): number[] {
+  const rows = db()
+    .prepare(
+      `SELECT id FROM summary_cards
+        WHERE elements = '[]' AND frozen = 0
+          AND created_at <= datetime('now', 'localtime', ?)`
+    )
+    .all(`-${hours} hours`) as { id: number }[];
+  if (rows.length === 0) return [];
+  const ids = rows.map((r) => r.id);
+  const unlink = db().prepare("UPDATE tasks SET summary_card_id = NULL WHERE summary_card_id = ?");
+  const drop = db().prepare("DELETE FROM summary_cards WHERE id = ?");
+  db().transaction(() => {
+    for (const id of ids) {
+      // 先に参照を外してからカードを消す。逆にすると宙に浮いた summary_card_id が残る
+      unlink.run(id);
+      drop.run(id);
+    }
+  })();
+  return ids;
+}
+
+/** doneから戻されたタスクをコンテナから外す。戻り値は外した先のカードID */
 export function detachTaskFromCard(taskId: number) {
   const r = db().prepare("SELECT summary_card_id FROM tasks WHERE id = ?").get(taskId) as any;
   const cardId = r?.summary_card_id;
@@ -413,30 +447,11 @@ export function tasksOfCard(cardId: number): Task[] {
   return (db().prepare("SELECT * FROM tasks WHERE summary_card_id = ? ORDER BY id").all(cardId) as any[]).map(rowToTask);
 }
 
-export function updateCardContent(cardId: number, title: string | null, elements: SummaryElement[]) {
-  const cur = getSummaryCard(cardId);
-  if (!cur) return;
-  db().prepare("UPDATE summary_cards SET title = ?, elements = ? WHERE id = ?").run(
-    title ?? cur.title,
-    JSON.stringify(elements),
-    cardId
-  );
-}
-
 export function deleteSummaryCards(ids: number[]) {
   const stmt = db().prepare("DELETE FROM summary_cards WHERE id = ?");
   for (const id of ids) stmt.run(id);
 }
 
-export function reassignTasksToCard(taskIds: number[], cardId: number) {
-  const stmt = db().prepare("UPDATE tasks SET summary_card_id = ? WHERE id = ?");
-  for (const id of taskIds) stmt.run(cardId, id);
-  db().prepare("UPDATE summary_cards SET task_ids = ? WHERE id = ?").run(JSON.stringify(taskIds), cardId);
-}
-
-export function setCardFrozen(cardId: number): void {
-  db().prepare("UPDATE summary_cards SET frozen = 1 WHERE id = ?").run(cardId);
-}
 
 export function getProjectContext(): string {
   const r = db().prepare("SELECT text FROM project_context WHERE id = 1").get() as { text: string } | undefined;

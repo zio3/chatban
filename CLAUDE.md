@@ -22,6 +22,7 @@ E2E専用: backend 8799 / frontend 5199 / DB e2e-test.db (開発サーバーと�
 
 ```powershell
 .\start-dev.ps1                        # DBバックアップ→両サーバー起動→ヘルスチェック
+cd backend; npm test                   # ユニット (node:test)
 cd frontend; npm run test:e2e          # Playwright E2E (LLM呼び出しなし)
 cd backend; npx tsc --noEmit           # 型チェック (frontendも同様)
 ```

@@ -37,7 +37,13 @@ export interface Project {
   openTasks: number;
   /** #117: このプロジェクト用のMCP接続先 */
   mcpUrl: string;
-  /** #167: AI提案チップを出すか。動画撮影中は毎回違うチップが出るので切れるようにした */
+}
+
+/** #199: アプリ全体の設定。プロジェクトごとではなく1つ。
+ * 提案チップのON/OFF は #167 で Project の属性として入れたが、
+ * 「使うかどうか」は持ち主の好みでプロジェクトの性質ではないので、ここへ移した */
+export interface Settings {
+  /** AI提案チップ(#75)を出すか。OFFの間はLLMを呼ばない */
   suggestEnabled: boolean;
 }
 
@@ -51,10 +57,14 @@ export const api = {
     }).then((r) => json<{ ok: boolean }>(r)),
   activateProject: (id: number) =>
     apiFetch(`/api/projects/${id}/activate`, { method: "POST" }).then((r) => json<{ projects: Project[] }>(r)),
-  updateProject: (
-    id: number,
-    patch: { name?: string; archived?: boolean; suggestEnabled?: boolean }
-  ) =>
+  settings: () => apiFetch("/api/settings").then((r) => json<Settings>(r)),
+  updateSettings: (patch: Settings) =>
+    apiFetch("/api/settings", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch),
+    }).then((r) => json<Settings>(r)),
+  updateProject: (id: number, patch: { name?: string; archived?: boolean }) =>
     apiFetch(`/api/projects/${id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },

@@ -25,6 +25,7 @@ import {
   setActiveProjectId,
   setProjectArchived,
   setSuggestEnabled,
+  suggestEnabled,
   trashProject,
   withProject,
 } from "./store.js";
@@ -516,7 +517,7 @@ app.patch("/api/projects/:id", (req, res) => {
   // 存在確認をしないと、更新自体は0件で静かに通ったあと broadcastBoard(id) が投げて500になる。
   // 設定を古いタブで開いたまま別タブで削除する、という普通の競合で踏む (自動レビュー指摘)
   if (!getProject(id)) return res.status(404).json({ error: `project #${req.params.id} not found` });
-  const { name, archived, suggestEnabled: suggest } = req.body ?? {};
+  const { name, archived } = req.body ?? {};
   // 何も書き始める前にまとめて確かめる (途中まで適用して500、を作らない)。
   // 既定プロジェクトの無効化はDB層が投げるので、ここで先に同じ判定を通す —
   // 名前を変えた後に投げると「500なのに名前だけ変わる」になる
@@ -527,11 +528,8 @@ app.patch("/api/projects/:id", (req, res) => {
     });
   if (typeof name === "string" && name.trim()) renameProject(id, name.trim());
   if (typeof archived === "boolean") setProjectArchived(id, archived);
-  // #167: 提案チップのON/OFF。次の /api/suggestions から効く (再起動不要)
-  if (typeof suggest === "boolean") {
-    setSuggestEnabled(id, suggest);
-    log("settings", `suggest #${id} -> ${suggest ? "on" : "off"}`);
-  }
+  // #167 → #199: 提案チップのON/OFF はここで受けていた。システム全体で1つの設定になったので
+  // PATCH /api/settings へ移した (プロジェクトのPATCHで全体設定を書き換えるのは形が合わない)
   io.emit("project:changed", { projects: projectSummaries() });
   broadcastBoard(id);
   res.json({ ok: true, projects: projectSummaries() });
@@ -559,6 +557,38 @@ app.delete("/api/projects/:id", (req, res) => {
 // #182: 供給元は backend/config.json (config.ts)。env から設定ファイルへ移した —
 // 宛先・キー・APIの形式・モデル3つは常にセットで動くので、1枚にまとめて
 // examples/ から丸ごとコピーさせれば、間違った組み合わせが作れなくなる
+
+// #199: アプリ全体の設定。いまは提案チップのON/OFF 1つだけ。
+// **接続設定 (宛先・キー・モデル) はここに戻さない** — #182 で config.json 1枚に集約した。
+// ここに置くのは「持ち主の好み」だけで、実効値がDBと設定ファイルに二重化するものは置かない
+app.get("/api/settings", (_req, res) => {
+  res.json({ suggestEnabled: suggestEnabled() });
+});
+
+app.patch("/api/settings", (req, res) => {
+  const body = req.body ?? {};
+  const KNOWN = ["suggestEnabled"];
+  // 入口で確かめる。**書き換えるものが1つも無い要求を200で返さない** — 綴り違いや型違いが
+  // 「成功したのに何も変わらない」で通ると、呼んだ側は反映されたつもりで待ち続ける (自動レビュー指摘)。
+  // 知らないフィールドも名指しで断る (無視して通すと、消えた設定を書き続けても気づけない)
+  const unknown = Object.keys(body).filter((k) => !KNOWN.includes(k));
+  if (unknown.length > 0)
+    return res.status(400).json({ error: `知らない設定です: ${unknown.join(", ")} (書けるのは ${KNOWN.join(", ")})` });
+  if (typeof body.suggestEnabled !== "boolean")
+    return res.status(400).json({ error: "suggestEnabled には true / false を渡してください" });
+
+  // 提案チップのON/OFF。次の /api/suggestions から効く (再起動不要)
+  setSuggestEnabled(body.suggestEnabled);
+  log("settings", `suggest -> ${body.suggestEnabled ? "on" : "off"}`);
+
+  // タブは複数開いている前提 (#97) なので、片方で切ったらもう片方のトグルも合わせる。
+  // **中身は載せない。**受け手はこれを合図に GET し直す — project:changed と同じ形。
+  // 値を配ると「HTTP応答と配信のどちらが先に着くか」を受け手が解く羽目になり、
+  // そのために版と起動世代を持つところまで行った (自動レビューで10周かけた)。
+  // サーバーが権威で、クライアントは常に取り直す。これなら順序の問題自体が起きない
+  io.emit("settings:changed");
+  res.json({ ok: true, suggestEnabled: suggestEnabled() });
+});
 
 // プロジェクト前提情報の閲覧 (#73)。編集はチャット経由のみ (update_project_context)
 app.get("/api/project-context", (_req, res) => {

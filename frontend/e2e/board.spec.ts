@@ -1490,37 +1490,68 @@ test("ツール説明に書いてあるテーブルは、実際に引けるも�
   expect(fromDesc).not.toContain("settings");
 });
 
-test("AI提案チップはプロジェクトごとにOFFにできる。OFFなら提案は空で返る (#167)", async ({ page }) => {
-  // 動画を撮り直すたびに違うチップが出ると同じ画面をもう一度撮れない、という実務上の困りごとから。
-  // 撮影用プロジェクトだけ切れることが要件 (タブごとに別プロジェクトを開けるため #97)
-  const enabledOf = async (id: number) => {
-    const d = (await (await fetch(`${API}/api/projects`)).json()) as any;
-    return d.projects.find((p: any) => p.id === id)?.suggestEnabled;
-  };
+test("AI提案チップのON/OFFはシステム全体で1つ。OFFなら提案は空で返る (#167 → #199)", async ({ page }) => {
+  // #167 ではプロジェクトごとの設定だった (撮影用だけ切れるように)。#199 で全体1つに変えた —
+  // 「使うかどうか」は持ち主の好みでプロジェクトの性質ではなく、プロジェクト単位だと
+  // 新しく作るたびに既定ONで始まって1件ずつ切り直すことになっていたため。
+  // **ここで固定したいのは、その逆転** = 切ったら後から作ったプロジェクトも含めて全部切れる
+  const enabled = async () => ((await (await fetch(`${API}/api/settings`)).json()) as any).suggestEnabled;
 
-  // 巻き込まれない相手をこのテスト内で作る。他のテストが作ったプロジェクトに依存すると、
-  // 単体で流したときや実行順が変わったときに落ちる
-  const other = (await (
-    await fetch(`${API}/api/projects`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: "E2E-提案OFFの巻き込まれ確認" }),
-    })
-  ).json()) as any;
-  const otherId = other.project.id as number;
+  // 既定はON
+  expect(await enabled()).toBe(true);
+  // プロジェクトの属性ではなくなったので、一覧には出ない
+  const before = (await (await fetch(`${API}/api/projects`)).json()) as any;
+  expect(before.projects[0]).not.toHaveProperty("suggestEnabled");
 
-  // 既定はON。設定を持たないプロジェクトを勝手にOFFにしない
-  expect(await enabledOf(1)).toBe(true);
-  expect(await enabledOf(otherId)).toBe(true);
-
-  await fetch(`${API}/api/projects/1`, {
+  await fetch(`${API}/api/settings`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ suggestEnabled: false }),
   });
-  expect(await enabledOf(1)).toBe(false);
-  // 切ったのは1だけ。他のプロジェクトは巻き込まれない
-  expect(await enabledOf(otherId)).toBe(true);
+  expect(await enabled()).toBe(false);
+
+  // OFFにした**後で**作ったプロジェクトも切れたまま。#167 の形ではここが ON に戻っていて、
+  // プロジェクトを作るたびに切り直すことになっていた
+  await fetch(`${API}/api/projects`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name: "E2E-全体OFFが新規にも効くか" }),
+  });
+  expect(await enabled()).toBe(false);
+
+  // 入口で確かめる。**書き換えるものが1つも無い要求を成功にしない** —
+  // 綴り違いや型違いが200で通ると、呼んだ側は反映されたつもりで待ち続ける
+  for (const bad of [{}, { suggestEnabled: "false" }, { suggestEnabled: null }, { suggestEnable: false }]) {
+    const r = await fetch(`${API}/api/settings`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(bad),
+    });
+    expect(r.status, `${JSON.stringify(bad)} が通ってしまった`).toBe(400);
+  }
+  // 断ったあとも値は動いていない (途中まで適用して400、を作らない)
+  expect(await enabled()).toBe(false);
+
+  // 配信は**合図だけ**で中身を載せない。受け手はこれを見て GET し直す (projects と同じ形)。
+  // 値を配ると受け手が「HTTP応答と配信のどちらが先か」を解く羽目になるので、そうしない
+  const sock = io(API, { query: { project: 1 }, transports: ["websocket"] });
+  // 接続が確立してからPATCHする。繋ぎに行った直後に叩くと配信のほうが先に出て取りこぼす
+  await new Promise<void>((resolve, reject) => {
+    sock.on("connect", () => resolve());
+    setTimeout(() => reject(new Error("socketが繋がらなかった")), 5000);
+  });
+  const broadcast = new Promise<void>((resolve, reject) => {
+    sock.on("settings:changed", () => resolve());
+    setTimeout(() => reject(new Error("settings:changed が届かなかった")), 5000);
+  });
+  await fetch(`${API}/api/settings`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ suggestEnabled: false }),
+  });
+  await broadcast;
+  sock.close();
+  expect(await enabled()).toBe(false);
 
   // OFFなら空で返る。**「LLMを呼んでいないこと」は誰も確かめていない** —
   // #181 まで使っていた llm_calls の件数差はテーブルごと撤去され、共有ログの行数で数える形は
@@ -1531,14 +1562,51 @@ test("AI提案チップはプロジェクトごとにOFFにできる。OFFなら
   const s = (await (await fetch(`${API}/api/suggestions`, { method: "POST" })).json()) as any;
   expect(s.suggestions).toEqual([]);
 
-  // UIのトグルはラベルで状態が読める (押せるが何も起きないボタンにしない)
+  // UIのトグルはラベルで状態が読める (押せるが何も起きないボタンにしない)。
+  // プロジェクト行の中ではなく「全体の設定」に1つだけ在る
   await page.goto("/");
   await page.getByRole("button", { name: "⚙ 設定" }).click();
-  const toggle = page.getByTestId("suggest-toggle-1");
-  await expect(toggle).toHaveText("💡 提案OFF");
+  const toggle = page.getByTestId("suggest-toggle");
+  await expect(toggle).toHaveCount(1);
+  await expect(toggle).toHaveText("💡 AI提案チップ OFF");
   await toggle.click();
-  await expect(toggle).toHaveText("💡 提案ON");
-  expect(await enabledOf(1)).toBe(true);
+  await expect(toggle).toHaveText("💡 AI提案チップ ON");
+  expect(await enabled()).toBe(true);
+});
+
+test("設定は全体で1つなので、片方のタブで切ると開いているもう片方も追従する (#199)", async ({ browser }) => {
+  // 「4経路を同じ判定に通す」のうち socket 配信の経路が、実際の画面で効いていることを見る。
+  // ペイロードの形 (bootGeneration / revision) は別テストで確かめてあるが、
+  // **受け取った側が本当に描き替わるか**はUIを2つ開かないと分からない。
+  // 版の比較を入れたので「新しい配信を古い応答が巻き戻す」と、ここが落ちる。
+  //
+  // 設定は全体で1つ = **テストをまたいで残る状態**なので、他のテストの結果に乗らないよう
+  // 開く前に自分でONへ揃える (前のテストが落ちて戻し損ねたときに道連れで落ちない)
+  await fetch(`${API}/api/settings`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ suggestEnabled: true }),
+  });
+  const a = await browser.newPage();
+  const b = await browser.newPage();
+  for (const p of [a, b]) {
+    await p.goto("/");
+    await p.getByRole("button", { name: "⚙ 設定" }).click();
+    await expect(p.getByTestId("suggest-toggle")).toHaveText("💡 AI提案チップ ON");
+  }
+
+  await a.getByTestId("suggest-toggle").click();
+  await expect(a.getByTestId("suggest-toggle")).toHaveText("💡 AI提案チップ OFF");
+  // 押していない側も追従する (リロードは挟まない)
+  await expect(b.getByTestId("suggest-toggle")).toHaveText("💡 AI提案チップ OFF");
+
+  // 逆向きも同じ。片方向だけ効いて見える実装 (押した側のstateだけ更新) を通さない
+  await b.getByTestId("suggest-toggle").click();
+  await expect(b.getByTestId("suggest-toggle")).toHaveText("💡 AI提案チップ ON");
+  await expect(a.getByTestId("suggest-toggle")).toHaveText("💡 AI提案チップ ON");
+
+  await a.close();
+  await b.close();
 });
 
 test("チャットの処理中は提案チップを生成しない (#162)", async () => {

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { api, type Project } from "../api";
+import { api, type Project, type Settings } from "../api";
 import { socket } from "../socket";
 import { gotoProject, projectIdFromUrl } from "../project";
 
@@ -56,6 +56,32 @@ export default function ProjectSettings() {
     };
   }, [load]);
 
+  // #199: アプリ全体の設定。プロジェクト一覧とは別に読む (プロジェクトの属性ではなくなったため)。
+  // 別タブで切り替えたときも合わせる (タブごとに別プロジェクトを開ける #97 ので、複数開いている前提)。
+  //
+  // **配信は合図として受け、値は必ず取り直す** — projects と同じ形。
+  // イベントに値を載せて直接 state に入れると、HTTP応答と配信のどちらが先に着くか分からず、
+  // 古い値が新しい値を上書きしうる。それを解こうとして版と起動世代を持つところまで行ったが、
+  // 「サーバーが権威、クライアントは常に取り直す」なら順序の問題自体が起きない
+  const [settings, setSettings] = useState<Settings | null>(null);
+  const loadSettings = useCallback(() => {
+    api
+      .settings()
+      .then(setSettings)
+      .catch((e) => setError(String(e)));
+  }, []);
+  useEffect(() => {
+    loadSettings();
+    // 切れている間の変更は合図が来ない。再接続したら取り直す
+    // (board / project は App.tsx が同じことをしている。ここだけ取りこぼすと永久にズレたまま)
+    socket.on("connect", loadSettings);
+    socket.on("settings:changed", loadSettings);
+    return () => {
+      socket.off("connect", loadSettings);
+      socket.off("settings:changed", loadSettings);
+    };
+  }, [loadSettings]);
+
   async function run(fn: () => Promise<unknown>) {
     setBusy(true);
     setError(null);
@@ -72,6 +98,40 @@ export default function ProjectSettings() {
 
   return (
     <div className="space-y-3">
+      {/* #167 → #199: AI提案チップ(#75)のON/OFF。元はプロジェクトごとの設定だったが、
+          「使うかどうか」は持ち主の好みでプロジェクトの性質ではないので、全体で1つにした。
+          プロジェクト単位だと、新しく作るたびに既定ONで始まって1件ずつ切り直すことになっていた。
+          OFFの間はLLMを呼ばない — 開発中は保存のたびにサーバーが再起動してキャッシュが飛ぶので、
+          切っていないと提案チップだけで1日1,000万トークン規模で流れる (#189の実測) */}
+      <div className="rounded-xl border border-slate-200 bg-white p-4">
+        <h2 className="text-base font-bold">全体の設定</h2>
+        <div className="mt-3 flex flex-wrap items-center gap-3">
+          <button
+            data-testid="suggest-toggle"
+            disabled={busy || !settings}
+            onClick={() =>
+              settings &&
+              run(async () => {
+                await api.updateSettings({ suggestEnabled: !settings.suggestEnabled });
+                loadSettings();
+              })
+            }
+            className={`rounded-lg border px-3 py-1.5 text-xs disabled:opacity-30 ${
+              settings?.suggestEnabled
+                ? "border-slate-300 bg-slate-50 text-slate-600 hover:border-slate-400"
+                : "border-amber-300 bg-amber-50 font-bold text-amber-700"
+            }`}
+          >
+            {settings?.suggestEnabled ? "💡 AI提案チップ ON" : "💡 AI提案チップ OFF"}
+          </button>
+          <p className="text-[11px] text-slate-500">
+            チャット入力欄の上に出る ✨ 付きの提案。ボードを読んでLLMが毎回作るので、
+            <strong>OFFの間は呼び出しも課金も止まります</strong>。動画を撮るときは切っておくと、
+            撮り直しのたびに違うチップが出て画面が変わるのを防げます。
+          </p>
+        </div>
+      </div>
+
       <div>
         <h2 className="text-base font-bold">プロジェクト</h2>
         <p className="mt-1 text-xs text-slate-500">
@@ -136,26 +196,6 @@ export default function ProjectSettings() {
                   className="rounded-md border border-slate-200 bg-slate-50 px-2 py-0.5 font-mono text-[10px] text-slate-500 hover:border-indigo-300 hover:text-indigo-600"
                 >
                   {copied === p.id ? "✓ コピーしました" : `🔌 ${p.mcpUrl}`}
-                </button>
-                {/* #167: AI提案チップ(#75)のON/OFF。デモ動画を撮り直すたびに違うチップが出ると
-                    同じ画面をもう一度撮れないため。OFFの間はLLMを呼ばないのでコストも止まる。
-                    プロジェクトごとに持つので、撮影用を切っても開発用のタブは生きたまま (#97) */}
-                <button
-                  data-testid={`suggest-toggle-${p.id}`}
-                  disabled={busy}
-                  onClick={() => run(() => api.updateProject(p.id, { suggestEnabled: !p.suggestEnabled }))}
-                  title={
-                    p.suggestEnabled
-                      ? "AI提案チップを出さないようにする (動画撮影中など)"
-                      : "AI提案チップを出すようにする"
-                  }
-                  className={`rounded-md border px-2 py-0.5 text-[10px] disabled:opacity-30 ${
-                    p.suggestEnabled
-                      ? "border-slate-200 bg-slate-50 text-slate-500 hover:border-slate-400"
-                      : "border-amber-300 bg-amber-50 font-bold text-amber-700"
-                  }`}
-                >
-                  {p.suggestEnabled ? "💡 提案ON" : "💡 提案OFF"}
                 </button>
                 <span className="ml-auto flex gap-1.5">
                   {p.id !== projectIdFromUrl() && (

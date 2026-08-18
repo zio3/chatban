@@ -31,6 +31,16 @@ const PROJECT_DIR = join(DATA_DIR, "projects");
 function open(path: string): Database.Database {
   mkdirSync(dirname(path), { recursive: true });
   const db = new Database(path);
+  // #199: 既定は0 (待たずに即 SQLITE_BUSY)。開発中は start-dev.ps1 の起動と tsx watch の
+  // 再起動が重なりうるし、E2Eサーバーと開発サーバーも同時に動く。書き込みが一瞬かち合っただけで
+  // 起動に失敗するのは割に合わないので、少しだけ待つ (自動レビュー指摘)。
+  //
+  // **journal_mode より先に設定する。**WALへの切り替え自体がロックを取るので、後に置くと
+  // その競合だけ待てない (自動レビュー5周目の指摘)。
+  //
+  // 2秒。better-sqlite3 は同期APIなので、待っている間はNodeのイベントループごと止まる。
+  // 長くすると「BUSYで落ちる」が「無反応」に変わるだけなので、競合が一瞬であることに賭ける側に置く
+  db.pragma("busy_timeout = 2000");
   db.pragma("journal_mode = WAL");
   return db;
 }
@@ -70,9 +80,16 @@ CREATE TABLE IF NOT EXISTS settings (
   // env だけになったので、DBに残っていると**画面から変えられない値が実効値として優先され続ける**
   // (「設定したのに効かない」ではなく「消したのに効き続ける」ほうの事故)。
   //
+  // #199: プロジェクト別の提案チップ設定 (suggest.enabled.<projectId>) も消す。キーから projectId を
+  // 外してシステム全体で1つ (suggest.enabled) にしたので、古い行は誰にも読まれない。
+  // 移行処理は書かない — 実データの settings には suggest.enabled.* が0件だった (誰もOFFにしていない)。
+  // 新旧でキーの形が違うので、DELETE の LIKE は新しいキー (末尾にドットが無い) には当たらない
+  //
   // 消えたときだけ記録する。**鍵の値そのものはログに出さない** (消した記録が漏洩経路になっては本末転倒)
-  const purged = db.prepare("DELETE FROM settings WHERE key LIKE 'auth.%' OR key LIKE 'model.%'").run().changes;
-  if (purged > 0) log("schema", `認証とモデルの設定 ${purged}件を削除しました (#180 / #181)`);
+  const purged = db
+    .prepare("DELETE FROM settings WHERE key LIKE 'auth.%' OR key LIKE 'model.%' OR key LIKE 'suggest.enabled.%'")
+    .run().changes;
+  if (purged > 0) log("schema", `認証・モデル・プロジェクト別提案設定 ${purged}件を削除しました (#180 / #181 / #199)`);
 
   // #181: 計測系のテーブルを落とす。llm_calls (呼び出しごとのトークン・単価・概算額) と
   // model_prices (182件の料金表)。**読まないだけにして残さない** — #179/#180 と同じ判断で、
@@ -506,8 +523,8 @@ export interface ProjectSummary {
   openTasks: number;
   /** #117: このプロジェクト用のMCP接続先 (.mcp.json に貼る) */
   mcpUrl: string;
-  /** #167: AI提案チップを出すか。デモ動画の撮影中は毎回違うチップが出ると撮り直しになるため切れるようにした */
-  suggestEnabled: boolean;
+  // #167 → #199: AI提案チップのON/OFF はここに在った。システム全体で1つの設定にしたので
+  // プロジェクトの属性ではなくなり、/api/settings へ移した
 }
 
 export function projectSummaries(): ProjectSummary[] {
@@ -531,7 +548,6 @@ export function projectSummaries(): ProjectSummary[] {
           .prepare("SELECT COUNT(*) AS c FROM tasks WHERE archived = 0 AND status != 'done' AND trashed_at IS NULL")
           .get() as { c: number }
       ).c,
-      suggestEnabled: suggestEnabled(p.id),
     };
   });
 }
@@ -539,32 +555,35 @@ export function projectSummaries(): ProjectSummary[] {
 /** #167: AI提案チップ(#75)を出すかどうか。プロジェクトごとに持つ。
  *
  * 動画を撮り直すたびに違うチップが出るので同じ画面をもう一度撮れない、という実務上の困りごとから。
- * プロジェクト単位にしたのは、撮影用プロジェクトだけ切っておけば開発用のタブは生かしたままにできるため
- * (タブごとに別プロジェクトを開ける #97)。
  *
- * 設定キーに projectId を含めるだけにして、テーブルは足していない。既定はON —
- * 設定が無いプロジェクト(新規作成された直後など)を勝手にOFFにしない */
+ * #199: 設定キーから projectId を外し、システム全体で1つにした。
+ * 元は `suggest.enabled.<projectId>` で、OFFの記録はそのIDにだけ付いていた。
+ * 「行が無ければON」が既定なので、**新しいプロジェクトを作るたびに既定ONで始まり、1件ずつ切り直す**
+ * ことになっていた。「この機能を使うかどうか」はプロジェクトの性質ではなく持ち主の好みなので、
+ * プロジェクト単位で持つ理由がない (個人利用特化 #180/#181 で「別々にしたい人がいるかも」の前提も消えた)。
+ *
+ * 既定はON。テーブルは足さず settings の1行だけ */
 // settings の読み書きは db.ts にも同じものがあるが、db.ts はこのファイルを import しているので
 // ここから呼ぶと循環参照になる。admin を直接使う
-const SUGGEST_KEY = (projectId: number) => `suggest.enabled.${projectId}`;
+const SUGGEST_KEY = "suggest.enabled";
 
-export function suggestEnabled(projectId: number): boolean {
-  const r = admin.prepare("SELECT value FROM settings WHERE key = ?").get(SUGGEST_KEY(projectId)) as
+export function suggestEnabled(): boolean {
+  const r = admin.prepare("SELECT value FROM settings WHERE key = ?").get(SUGGEST_KEY) as
     | { value: string }
     | undefined;
   return r?.value !== "0";
 }
 
-export function setSuggestEnabled(projectId: number, enabled: boolean): void {
+export function setSuggestEnabled(enabled: boolean): void {
   // OFFのときだけ書き、ONに戻したら消す。既定(ON)の行をDBに残さないので、
-  // settings を見たときに「意図して切っているプロジェクト」だけが並ぶ
-  if (enabled) admin.prepare("DELETE FROM settings WHERE key = ?").run(SUGGEST_KEY(projectId));
+  // settings を見たときに「意図して切っている」ときだけ行が在る
+  if (enabled) admin.prepare("DELETE FROM settings WHERE key = ?").run(SUGGEST_KEY);
   else
     admin
       .prepare(
         "INSERT INTO settings (key, value, updated_at) VALUES (?, '0', datetime('now', 'localtime')) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at"
       )
-      .run(SUGGEST_KEY(projectId));
+      .run(SUGGEST_KEY);
 }
 
 /** #115/#116: 新規プロジェクトの前提情報の下書き。

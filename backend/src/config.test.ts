@@ -24,7 +24,7 @@ const VALID = {
   apiKey: "sk-test",
   baseURL: "https://api.openai.com/v1",
   apiStyle: "chat",
-  models: { main: "gpt-5.4-mini-2026-03-17", archive: "gpt-5.6-luna", cheap: "gpt-5.6-luna" },
+  models: { main: "gpt-5.4-mini-2026-03-17" },
 };
 const noFiles = (p: string): string => {
   throw new Error(`読めません: ${p}`);
@@ -87,13 +87,19 @@ test("知らない apiStyle は起動時に弾かれる", () => {
   assert.throws(() => parseLlmConfig({ ...VALID, apiStyle: "anthropic" }, noFiles), /apiStyle/);
 });
 
-test("models は3つのどれが欠けても、欠けた項目を名指しで落ちる", () => {
-  // 1つだけ試すと「archiveだけ必須」という実装でも通ってしまう
-  for (const slot of ["main", "archive", "cheap"] as const) {
-    const models: Record<string, string> = { ...VALID.models };
-    delete models[slot];
-    assert.throws(() => parseLlmConfig({ ...VALID, models }, noFiles), new RegExp(`models\\.${slot}`), `${slot} が欠けても落ちない`);
-  }
+test("models.main が欠けたら名指しで落ちる", () => {
+  // #202: かつては main/archive/cheap の3つを回して確かめていた。#200 で蒸留を撤去し、
+  // LLMを呼ぶのは対話だけになったので main 1つ。**使わないスロットを必須のまま残すと、
+  // 使わない値を書かないと起動しない**ので、スキーマごと落とした
+  const models: Record<string, string> = {};
+  assert.throws(() => parseLlmConfig({ ...VALID, models }, noFiles), /models\.main/, "main が欠けても落ちない");
+});
+
+test("知らないスロットが残っていても起動は止めない (古い config.json を壊さない)", () => {
+  // #202 で archive/cheap を落としたが、**手元の config.json には残っている**。
+  // 余分なキーで弾くと、更新した瞬間に起動しなくなる
+  const models = { ...VALID.models, archive: "gpt-5.6-luna", cheap: "gpt-5.6-luna" };
+  assert.equal(parseLlmConfig({ ...VALID, models }, noFiles).models.main, VALID.models.main);
 });
 
 test("models の値が空白だけなら弾かれる", () => {

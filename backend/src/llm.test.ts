@@ -85,7 +85,7 @@ function useStyle(apiStyle: "chat" | "messages", main = "test-model") {
     apiKey: SECRET,
     baseURL,
     apiStyle,
-    models: { main, archive: main, cheap: main },
+    models: { main },
   });
 }
 

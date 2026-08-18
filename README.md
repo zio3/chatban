@@ -92,7 +92,7 @@ Claude Code や Codex CLI を使っているなら、clone したディレクト
 ```
 このリポジトリをローカルで動かせるようにして。
 ブラウザで開いて、チャットに話しかけたらカードが生える状態がゴール。
-LLMの接続先は <OpenAI / Anthropic / Ollama> を使う。
+LLMの接続先は <OpenAI / Anthropic> を使う。
 ```
 
 渡すのはこの3つだけで足ります。**ゴール**・**接続先**・そして踏み外してほしくない境界:
@@ -164,7 +164,6 @@ macOS / Linux では、2 が `cp backend/examples/config.openai.json backend/con
 | 設定の不備を名指しで怒られる | `apiStyle` の綴り違い、`models` の3つのどれかが空、`apiKeyFile` の指す先が空(空のキーで動き出して401になるより早いので、そこで止めています)、`baseURL` がhttp://の外部宛(キーが平文で飛ぶので弾いています)。メッセージの通りに直します。**起動時ではなく、`check-config.ts` か最初のLLM操作のときに出ます**(設定は必要になってから読むので、起動そのものは通ってしまいます) |
 | `model_not_found` | モデルIDの書き方が宛先と合っていません。直接APIは接頭辞なし (`gpt-5.4-mini-2026-03-17`)、OrcaRouter経由は `provider/model` 形式 |
 | ポートが埋まっている | 症状は**どう起動したかで変わります**。`start-dev.ps1` は既にListenしているポートを「already running」として起動しないので、**古いサーバーを見続けている**ことがあります。手動起動なら backend は `EADDRINUSE` で止まり、Viteは**別ポート(5174など)へ逃げます** — この場合は画面が開くのに、**そのオリジンが許可リストに無いので書き込み系のAPIが403**になります(`CHATBAN_ALLOWED_ORIGINS` の既定は5173)。いずれも**残っているプロセスを探してツリーごと止めるのが先**です(Listenしているプロセスだけ落とすと `tsx watch` の親が残って再発します) |
-| Ollama構成で接続できない | `ollama serve` が動いているか、`ollama list` にそのモデルがあるかを確認します |
 
 **ポート番号を変えるときは、1か所では済みません。**8787/5173 は既定値として複数の場所に散っています(個人利用のツールなので、1か所に集める整備をしていません)。変えるほうによって直す先が違います:
 
@@ -179,7 +178,6 @@ macOS / Linux では、2 が `cp backend/examples/config.openai.json backend/con
 |---|---|---|
 | `config.openai.json` | OpenAI直 | 動作確認済み |
 | `config.anthropic.json` | Anthropic直 | `apiStyle: "messages"`。プロンプトキャッシュが効きます |
-| `config.local.json` | Ollama | **APIキー不要**。要約とタイトル生成は十分速い一方、チャットからのタスク登録は取りこぼします |
 | `config.orcarouter.json` | OrcaRouter | 1つのキーで多くのモデル。モデルIDは `provider/model` 形式 |
 
 ```jsonc

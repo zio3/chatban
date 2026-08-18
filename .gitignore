@@ -9,7 +9,6 @@ dist/
 # 公開リポジトリなので「あとで消す」は効かない
 backend/data/
 backend/e2e-data/
-backend/backup/
 .env
 logs/
 test-results/

@@ -2,9 +2,9 @@ import {
   detachTaskFromCard,
   createSummaryCard,
   getSummaryCard,
-  assignTaskToCard,
+  claimTasksForCard,
   deleteSummaryCards,
-  getTask,
+  listUnfoldedDoneIds,
   listSummaryCards,
   reassignTasksToCard,
   setCardFrozen,
@@ -257,18 +257,32 @@ export async function onTasksCompleted(taskIds: number[]): Promise<SummaryCard |
   if (taskIds.length === 0) return undefined;
   await rollUpOldCards(); // 先に古いぶんを畳んでから、今回のバッチを新しいカードにする
 
-  // #105: 要約生成は15〜30秒かかる。その間にDoneから戻されたタスクをアーカイブすると
-  // 「todoなのに archived=1 でボードから消える」幽霊ができるので、いまも done のものだけ入れる
-  const stillDone = taskIds.filter((id) => getTask(id)?.status === "done");
-  if (stillDone.length === 0) {
-    log("archive", `tasksCompleted [${taskIds.join(",")}]: 全件doneでなくなっていたのでアーカイブしない`);
+  // #195: **前回までに畳み損なったDoneも一緒に畳む。**
+  // 「確定 → (非同期で) 要約」の間にプロセスが止まると `status='done'` のまま `archived=0` で残り、
+  // ボードに居座ったうえ要約にも入らない (蒸留されないまま完了扱いになる)。
+  //
+  // **拾うための引き金は作らない。**起動時などに専用の回収処理を置くと、そのために
+  // 状態と分岐を持つことになる。ここは毎回の検収で必ず通る道なので、**相乗りさせれば足りる** —
+  // 落ちること自体が稀で、次の検収まで残っていても実害が小さい (zio判断)。
+  // 拾えなかったぶんは、そのまた次の検収で拾われる
+  const orphans = listUnfoldedDoneIds().filter((id) => !taskIds.includes(id));
+  if (orphans.length > 0) log("archive", `畳み損なっていた #${orphans.join(", #")} も一緒に畳みます`);
+
+  // #105: 要約生成は15〜30秒かかる。その間にDoneから戻されたタスクを畳むと
+  // 「todoなのに archived=1 でボードから消える」幽霊ができる。
+  // #195: その判定は claim (条件つきUPDATE) が持つ — 読んだ時点ではなく**書く時点**で確かめる
+  const card = createSummaryCard();
+  const claimed = claimTasksForCard([...taskIds, ...orphans], card.id);
+  if (claimed.length === 0) {
+    // 押さえられるものが無いなら**カードを残さない** (中身の無い要約が板に並ぶのを避ける)
+    deleteSummaryCards([card.id]);
+    log("archive", `tasksCompleted [${taskIds.join(",")}]: 畳める対象が無かったのでカードは作らない`);
     return undefined;
   }
-  if (stillDone.length < taskIds.length) {
-    log("archive", `tasksCompleted: ${taskIds.length - stillDone.length}件はdoneでなくなっていたので除外`);
+  const skipped = [...taskIds, ...orphans].filter((id) => !claimed.includes(id));
+  if (skipped.length > 0) {
+    log("archive", `tasksCompleted: #${skipped.join(", #")} は畳まなかった (done以外・ゴミ箱・畳み済みのいずれか)`);
   }
-  const card = createSummaryCard();
-  for (const id of stillDone) assignTaskToCard(id, card.id);
   return regenerateCard(card.id);
 }
 

@@ -43,6 +43,18 @@ test("再起動をまたいでも増え続ける (DBを開き直しても戻ら�
   assert.equal(next, last + 1);
 });
 
+test("sqlite_sequence が壊されても、残した1行から復帰する", () => {
+  // 次の採番は max(seq, テーブル内の最大rowid) + 1 なので、1行残していることが保険になる。
+  // 直接 UPDATE で直そうとすると `MAX(seq, ?)` が型順序で比べるせいで 'abc' や NULL を
+  // 修復できず、次の採番が1に戻る (8周目の指摘。ここが落ちればその退行に気づける)
+  const last = nextBootGeneration();
+  for (const bad of ["'abc'", "NULL", "-5"]) {
+    admin.exec(`UPDATE sqlite_sequence SET seq = ${bad} WHERE name = 'boot_generations'`);
+    const n = nextBootGeneration();
+    assert.ok(n > last, `seq=${bad} でも戻らない (実際: ${n} <= ${last})`);
+  }
+});
+
 test("settings に残っていた旧世代を引き継ぐ (1へ戻さない)", async () => {
   // #199 の途中まで settings の 'boot.generation' 行で持っていた。引き継がずに1から始めると、
   // 開いたままのタブが持っている世代のほうが大きくなり、以後の更新が全部「古い」と判定される。
@@ -66,6 +78,11 @@ test("settings に残っていた旧世代を引き継ぐ (1へ戻さない)", a
       "旧キーは消える"
     );
     assert.equal(fresh.nextBootGeneration(), legacy + 1, "旧値の続きから振る");
+    // sqlite_sequence を直接UPDATEせず、明示rowidのINSERTで引き継いでいる。
+    // seq が壊れていても直る形なので、seq が整数として整っていることも見ておく
+    const s = fresh.admin.prepare("SELECT seq, typeof(seq) t FROM sqlite_sequence WHERE name = 'boot_generations'").get();
+    assert.equal(s.t, "integer");
+    assert.ok(s.seq >= legacy);
   } finally {
     fresh.admin.close();
     process.env.CHATBAN_DATA_DIR = dir;

@@ -612,7 +612,11 @@ export function setSuggestEnabled(enabled: boolean): void {
  * SQLite の AUTOINCREMENT は sqlite_sequence に最大値を持ち、**行を消しても再利用しない**。
  * つまり単調性はDBが保証する。INSERT 1文なので原子性も書き込みロックの中で閉じる。
  * TEXT を数値として解釈する経路が消えるので、破損値も時計依存も無くなる。
- * 履歴は要らないので、採番したら古い行は落とす (sqlite_sequence は残るので番号は戻らない) */
+ *
+ * 履歴は要らないので、採番したら古い行は落とす。**ただし1行は必ず残る** —
+ * 次の採番は max(sqlite_sequence.seq, テーブル内の最大rowid) + 1 なので、
+ * 残した1行が sqlite_sequence の破損 (外部から 'abc' や NULL を書かれた等) に対する保険になる。
+ * 全部消すと保険も消えるので、`WHERE id < ?` で自分より小さいものだけ落とす */
 export function nextBootGeneration(): number {
   const id = Number(admin.prepare("INSERT INTO boot_generations DEFAULT VALUES").run().lastInsertRowid);
   // **safe integer の範囲で確かめる。**ここを超えると JSON を経由した時点で隣接する世代が
@@ -631,7 +635,15 @@ export function nextBootGeneration(): number {
  * 引き継がずに1から始めると、**開いたままのタブが持っている世代のほうが大きくなり**、
  * 以後どの更新も「古い」と判定されて反映されなくなる (このPRの中で番号の桁が
  * エポックミリ秒まで上がっているので、放っておくと必ずそうなる)。
- * sqlite_sequence を旧値まで進めてから捨てる。旧値が読めなければ何もしない (1から始まる) */
+ *
+ * **sqlite_sequence を直接いじらない。**旧値の行を rowid 指定で1件入れるだけにする。
+ * AUTOINCREMENT のテーブルへ明示 rowid で INSERT すると SQLite が seq をその値まで上げてくれる
+ * ので、こちらで整合を取る必要がない。直接 UPDATE していたときは
+ * `SET seq = MAX(seq, ?)` と書いていたが、SQLite のスカラー MAX は型順序で比べるので
+ * seq が壊れて `'abc'` や NULL になっていると修復されず、次の採番が rowid=1 に戻る
+ * (実測。自動レビュー8周目の指摘)。明示 INSERT ならその壊れ方も直る (これも実測)。
+ *
+ * 旧値が読めなければ何もしない (1から始まる) */
 function migrateBootGeneration(db: Database.Database) {
   const legacy = db.prepare("SELECT value FROM settings WHERE key = 'boot.generation'").get() as
     | { value: string }
@@ -639,12 +651,13 @@ function migrateBootGeneration(db: Database.Database) {
   if (!legacy) return;
   const n = Number(legacy.value);
   if (Number.isSafeInteger(n) && n > 0) {
-    // AUTOINCREMENT のテーブルを作った時点で sqlite_sequence 自体は在るが、行はまだ無い
-    db.prepare(
-      "INSERT INTO sqlite_sequence (name, seq) SELECT 'boot_generations', ? WHERE NOT EXISTS (SELECT 1 FROM sqlite_sequence WHERE name = 'boot_generations')"
-    ).run(n);
-    db.prepare("UPDATE sqlite_sequence SET seq = MAX(seq, ?) WHERE name = 'boot_generations'").run(n);
-    log("schema", `起動世代を settings から引き継ぎました (#199): ${n}`);
+    // 既に採番が進んでいるなら触らない (移行は1回で済むが、手で戻されたときに巻き戻さない)
+    const max = (db.prepare("SELECT MAX(id) m FROM boot_generations").get() as { m: number | null }).m;
+    if (max === null || max < n) {
+      db.prepare("INSERT INTO boot_generations (id) VALUES (?)").run(n);
+      db.prepare("DELETE FROM boot_generations WHERE id < ?").run(n);
+      log("schema", `起動世代を settings から引き継ぎました (#199): ${n}`);
+    }
   }
   db.prepare("DELETE FROM settings WHERE key = 'boot.generation'").run();
 }

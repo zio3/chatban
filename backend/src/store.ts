@@ -31,11 +31,17 @@ const PROJECT_DIR = join(DATA_DIR, "projects");
 function open(path: string): Database.Database {
   mkdirSync(dirname(path), { recursive: true });
   const db = new Database(path);
-  db.pragma("journal_mode = WAL");
   // #199: 既定は0 (待たずに即 SQLITE_BUSY)。開発中は start-dev.ps1 の起動と tsx watch の
   // 再起動が重なりうるし、E2Eサーバーと開発サーバーも同時に動く。書き込みが一瞬かち合っただけで
-  // 起動に失敗するのは割に合わないので、少しだけ待つ (自動レビュー指摘)
-  db.pragma("busy_timeout = 5000");
+  // 起動に失敗するのは割に合わないので、少しだけ待つ (自動レビュー指摘)。
+  //
+  // **journal_mode より先に設定する。**WALへの切り替え自体がロックを取るので、後に置くと
+  // その競合だけ待てない (自動レビュー5周目の指摘)。
+  //
+  // 2秒。better-sqlite3 は同期APIなので、待っている間はNodeのイベントループごと止まる。
+  // 長くすると「BUSYで落ちる」が「無反応」に変わるだけなので、競合が一瞬であることに賭ける側に置く
+  db.pragma("busy_timeout = 2000");
+  db.pragma("journal_mode = WAL");
   return db;
 }
 
@@ -575,18 +581,24 @@ const SUGGEST_KEY = "suggest.enabled";
  * 2つのプロセスが同じ旧値を読んで同じ世代を名乗る (自動レビュー指摘)。単一の UPSERT なら
  * SQLite の書き込みロックの中で完結するので、必ず別々の番号になる。
  *
- * 値が壊れていた場合 (数字以外) は、1へ戻さず**現在のUNIX秒**を採る。1に戻すと過去の世代より
- * 小さくなり、旧プロセスの応答を「新しい」と誤って採用してしまう。UNIX秒は起動回数
- * (せいぜい数万) より必ず大きいので、単調性がそこで途切れない */
+ * 値が壊れていた場合は、1へ戻さず**現在のUNIX秒**を採る。1に戻すと過去の世代より小さくなり、
+ * 旧プロセスの応答を「新しい」と誤って採用してしまう。UNIX秒は起動回数 (せいぜい数万) より
+ * 必ず大きいので、単調性がそこで途切れない。行が無い初回も同じ値から始める —
+ * 「新規DB」と「壊れて消した」は区別できないので、安全な側に揃えておく。
+ *
+ * 数字列かどうかは `NOT GLOB '*[^0-9]*'` で見る。**`GLOB '[0-9]*'` では足りない** —
+ * これは先頭1文字しか見ないので `123x` や `12.3` を通し、CASTで黙って切り捨てられる
+ * (自動レビュー5周目の指摘) */
 export function nextBootGeneration(): number {
   const fallback = Math.floor(Date.now() / 1000);
   const row = admin
     .prepare(
       `INSERT INTO settings (key, value, updated_at)
-         VALUES ('boot.generation', '1', datetime('now', 'localtime'))
+         VALUES ('boot.generation', CAST(@fallback AS TEXT), datetime('now', 'localtime'))
        ON CONFLICT(key) DO UPDATE SET
          value = CAST(
-           CASE WHEN settings.value GLOB '[0-9]*' THEN CAST(settings.value AS INTEGER) + 1
+           CASE WHEN settings.value <> '' AND settings.value NOT GLOB '*[^0-9]*'
+                THEN CAST(settings.value AS INTEGER) + 1
                 ELSE @fallback END
            AS TEXT),
          updated_at = datetime('now', 'localtime')
@@ -594,8 +606,14 @@ export function nextBootGeneration(): number {
     )
     .get({ fallback }) as { value: string } | undefined;
   const next = Number(row?.value);
-  // RETURNING が空・非数値で返ることは無い想定だが、ここで0を返すと全順序が崩れるので落ちる方を選ぶ
-  if (!Number.isFinite(next) || next <= 0) throw new Error(`boot.generation を採番できませんでした: ${row?.value}`);
+  // **safe integer の範囲で確かめる。**ここを超えると JSON を経由した時点で隣接する世代が
+  // 同じ値に丸まり、isOlder の全順序が壊れる (SQLite側も INTEGER の上限で REAL 化しうる)。
+  // 0や壊れた値を黙って返すより、起動を止めて気づかせる方を選ぶ
+  if (!Number.isSafeInteger(next) || next <= 0)
+    throw new Error(
+      `boot.generation を採番できませんでした (値: ${row?.value})。` +
+        `管理DB (data/chatban-admin.db) の settings から key='boot.generation' の行を削除すると、次の起動で振り直します`
+    );
   return next;
 }
 

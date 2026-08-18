@@ -7,13 +7,11 @@ import {
   updateTasksAsAgent,
 } from "./agentWrite.js";
 import { cleanAgentText } from "./text.js";
-import { compactArchive } from "./archive.js";
 import { getBoardPromptSection } from "./promptState.js";
 import {
   createTask,
   trashTask,
   getTask,
-  listSummaryCards,
   listTasks,
   PUBLIC_TABLES,
   queryLogHelp,
@@ -27,6 +25,7 @@ import {
 import { currentProjectId, suggestEnabled } from "./store.js";
 import { chatCompletion } from "./llm.js";
 import { getModel } from "./config.js";
+import { foldedContainer } from "./archive.js";
 import { log } from "./log.js";
 import type { TaskStatus, UiAction } from "./types.js";
 
@@ -71,11 +70,11 @@ export const QUERY_LOG_DESCRIPTION = [
   // #181: この行は PUBLIC_TABLES から生成する。説明に手で書くと、テーブルを増減したときに
   // 説明・コード・テストの3箇所を人間が揃える前提になり、実際にズレた (project_context の漏れ)
   `引けるもの: ${PUBLIC_TABLES.join(" / ")}`,
-  "chat_messages(id, role, content, trace, usage, task_id, created_at。role='user' が持ち主の発言、'assistant' がこのアシスタント。usage は所要時間とラウンド数だけ — トークン計測は #181 で撤去した) / summary_cards(id, title, elements, task_ids, frozen, created_at) / project_context(id, text, version, updated_at。全文は get_project_context のほうが読みやすい)",
-  "tasks(id, title, status, summary, context, context_version, due, blocked_by, rejected, checked_at, done_at, trashed_at, sort, archived, summary_card_id, created_at, updated_at)",
+  "chat_messages(id, role, content, trace, usage, task_id, created_at。role='user' が持ち主の発言、'assistant' がこのアシスタント。usage は所要時間とラウンド数だけ — トークン計測は #181 で撤去した) / project_context(id, text, version, updated_at。全文は get_project_context のほうが読みやすい)",
+  "tasks(id, title, status, summary, context, context_version, due, blocked_by, rejected, checked_at, done_at, trashed_at, sort, archived, created_at, updated_at)",
   "checked_at = 人が実物で確かめた日時 (nullなら未検収)。status とは別物で、done は列が動いたこと・checked_at は検収が進んだこと。片方からもう片方を推測しない。この窓口は読み取り専用で、checked_at を書く手段はどこにも無い (印を付けられるのは人間だけ)",
   "会話で「#112」と呼ぶタスクは tasks.id = 112 のこと(主キー)。番号はプロジェクトごとに1から振られる。特定の1件を見るときは WHERE id=<番号> で引く",
-  "日付の列を取り違えない。created_at=登録日 / updated_at=最終更新(その後の編集でも動く) / done_at=Doneへ確定した日 / checked_at=人が確かめた日。完了の集計には done_at を使う(created_at だと登録日を数えてしまう)。summary_cards.created_at も完了日ではない — 日次まとめで統合されると最初のカードの日付を引き継ぐ",
+  "日付の列を取り違えない。created_at=登録日 / updated_at=最終更新(その後の編集でも動く) / done_at=Doneへ確定した日 / checked_at=人が確かめた日。完了の集計には done_at を使う(created_at だと登録日を数えてしまう)",
   "done_at のうち 2026-08-10 以前のものは、列を作る前に終わったぶんを updated_at から埋めた近似値(完了後に触っていなければ最終更新=完了日時)。日単位の集計には使えるが、分単位の議論には使わない",
   "done_tasks ビューを使う。完了したもの(done_at が入っているもの)だけを、完了が新しい順に抜いたもの。日付は done_day 列に入っているので date() を書かなくてよい。live_tasks の対で、生きている=live_tasks / 終わった=done_tasks",
   // #175: **どの status がどちらに入るかを書く。**「生きている / 終わった」だけだと
@@ -98,8 +97,6 @@ export const QUERY_LOG_DESCRIPTION = [
   "例(1件の詳細。経緯メモの全文と版): SELECT title, status, summary, context, context_version, blocked_by FROM tasks WHERE id=112",
   "例(直近の動き。「なにやってたっけ」): SELECT id, status, title, summary, updated_at FROM live_tasks ORDER BY updated_at DESC LIMIT 15",
   "例(ゴミ箱の中身): SELECT id, title, trashed_at FROM tasks WHERE trashed_at IS NOT NULL ORDER BY trashed_at DESC",
-  "summary_cards = Doneに畳んだ完了の要約。frozen=0 は現役のカードで、日をまたぐと同じ日のものが1枚に統合されていく。frozen=1 は人間が「整頓」を押して固定した過去ログで、もう統合されず内容も変わらない(旧称 settled)",
-  "例(Doneの要約カード): SELECT id, title, task_ids, frozen FROM summary_cards ORDER BY id DESC",
   "例(検収待ちで、まだ人が確かめていないもの): SELECT id, title, summary FROM live_tasks WHERE status='review' AND checked_at IS NULL",
   "例(1件の経緯メモ全文): SELECT context, context_version FROM tasks WHERE id=112",
   "例(いつ何を言われたか): SELECT created_at, substr(content,1,120) c FROM chat_messages WHERE role='user' ORDER BY id DESC LIMIT 30",
@@ -354,14 +351,6 @@ export const tools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
   {
     type: "function",
     function: {
-      name: "compact_archive",
-      description: "要約カードを1枚の過去ログに統合する",
-      parameters: { type: "object", properties: {} },
-    },
-  },
-  {
-    type: "function",
-    function: {
       name: "update_project_context",
       description: PROJECT_CONTEXT_WRITE_DESCRIPTION,
       parameters: {
@@ -469,15 +458,6 @@ async function execTool(name: string, args: any, uiActions: UiAction[], events: 
         return { ok: false, error, ...queryLogHelp(error) };
       }
     }
-    case "compact_archive": {
-      try {
-        const result = await compactArchive();
-        events.add("board");
-        return { ok: true, ...result };
-      } catch (e: any) {
-        return { ok: false, error: e?.message ?? String(e) };
-      }
-    }
     case "update_project_context": {
       const r = setProjectContext(args.text ?? "", args.version);
       if (!r.ok)
@@ -514,9 +494,8 @@ export function buildSystemPrompt(taskFocus?: ReturnType<typeof getTask>, view?:
     "- 共通の前提・決まりごと(締切、方針、用語など)を伝えられたら update_project_context で前提情報に反映する。",
     "- 特定タスクの経緯・決定事項・補足(「#22は◯◯方式でいくことにした」等)は update_task_context でそのタスクの経緯メモに記録する。",
     "- summary は「いまどうなっているか」。進捗・完了報告は summary に一言で書き、詳細な根拠は経緯メモ(context)に書く。",
-    "- 「ログ整頓して」は compact_archive を使う。完了タスクのアーカイブは自動なので手動操作は不要。",
     "- 過去の判断や経緯・過去の会話を聞かれたら(「なんで◯◯にしたんだっけ」「あんな話してたっけ」)、索引のタイトルだけで答えず search_tasks で本文と会話ログを引く。言い換え・英日表記を自分で並べて渡し、空振りしたら語を変えて引き直す。検索結果のsnippetは断片なので、理由を答える前に query_log で経緯メモの全文を読む。時期や条件で絞りたいとき(「8/9の午前に何を話していたか」等)は query_log を使う。",
-    "- 削除と却下は文脈で使い分ける: 誤登録・重複・ダミー(「消して」「間違えた」)は delete_tasks (ゴミ箱行きで復元可。返答で復元方法を説明する必要はない)。やらない決定(「見送り」「却下」「やらないことにした」)は削除せず update_tasks で status=review + rejected=true にし、reason に却下の根拠を書いて「却下としてReviewに置きました。検収で確定します」と返す (検収後、決定として要約アーカイブに残る)。",
+    "- 削除と却下は文脈で使い分ける: 誤登録・重複・ダミー(「消して」「間違えた」)は delete_tasks (ゴミ箱行きで復元可。返答で復元方法を説明する必要はない)。やらない決定(「見送り」「却下」「やらないことにした」)は削除せず update_tasks で status=review + rejected=true にし、reason に却下の根拠を書いて「却下としてReviewに置きました。検収で確定します」と返す (検収後、決定としてDone列に残る)。",
     "- 「消して」がタスクそのものを指すのか、タイトルや文言の一部の修正を指すのか曖昧なときは、操作せず確認する (実例:「#95だけ発言者の話が入っていて不自然なので消せますか?」はタイトルの修正依頼だったが、タスクごと削除してしまった)。",
     "- ボードから退場するもの(完了・却下)は必ずReviewを通り、人間の検収チェックで確定する。チャットからdoneへ直行する経路は存在しない。",
     "- 着手したが前提が足りず進められないときは、勝手に却下にも完了にもしない。summary に「前提不足で保留 (◯◯が必要)」と現況を書き、必要な情報を人に尋ねる。status をどこに置くかはプロジェクトの前提情報の定義に従う (列の意味はプロジェクトごとに違う)。",
@@ -603,7 +582,6 @@ const TOOL_LABELS: Record<string, string> = {
   restore_tasks: "ゴミ箱から復元",
   set_view: "ビューを切替",
   update_project_context: "前提情報を更新",
-  compact_archive: "過去ログを整頓",
   reorder_tasks: "並び順を変更",
   search_tasks: "経緯を検索",
   query_log: "記録を集計",
@@ -698,7 +676,9 @@ export async function generateSuggestions(): Promise<{ label: string; message: s
   const skip = suggestSkipReason({
     enabled: suggestEnabled(), // #199: システム全体で1つの設定 (プロジェクト別ではない)
     chatBusy: isChatBusy(currentProjectId()),
-    emptyBoard: listTasks().length === 0 && listSummaryCards().length === 0,
+    // #200: 畳んだ箱も見る。**入口ごとにズレると事故る** — 画面側 (App.tsx の isEmptyBoard) は
+    // 箱を見ているので、ここだけタスクしか見ないと「板には箱が出ているのに提案だけ空」になる
+    emptyBoard: listTasks().length === 0 && (foldedContainer(currentProjectId()) ?? []).length === 0,
   });
   if (skip) return [];
   const systemPrompt = buildSystemPrompt();

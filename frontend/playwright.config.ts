@@ -26,7 +26,7 @@ export default defineConfig({
         // #86: プロジェクトごとにDBが分かれたので、E2Eは専用のデータディレクトリを使う
         // (存在しなければ空のプロジェクトが1つ自動生成される)
         CHATBAN_DATA_DIR: "e2e-data",
-        AUTO_ARCHIVE: "0", // done移動でLLM要約が走らないように
+        AUTO_ARCHIVE: "0", // #200: Done列の畳み直しを止める (テストはDoneを1件ずつ見たい)
       },
     },
     {

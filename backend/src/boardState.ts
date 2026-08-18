@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { getProjectContextRow, listSummaryCards, listTasks } from "./db.js";
+import { getProjectContextRow, listTasks } from "./db.js";
 import { currentProjectId } from "./store.js";
 import { log } from "./log.js";
 
@@ -12,7 +12,8 @@ import { log } from "./log.js";
 //
 // 設計は promptState.ts (#50) と同じ「スナップショットを2つ比べる」方式で、変更ログは持たない。
 // 書き込み経路にフックを刺さずに済み、追加・変更に加えて**消滅**も同じ計算で拾える
-// (「要約カードに畳まれて消えた」は updated_at では絶対に拾えない — Done要約が主戦場になる以上ここは効く)。
+// (「畳まれてボードから消えた」は updated_at では絶対に拾えない — 畳み込みは archived を
+//  立てるだけで updated_at を動かさないため。#200 で要約カードは撤去したが、この事情は同じ)。
 //
 // promptState と分けているのは用途が違うため: あちらはプロンプトのプレフィックスをバイト単位で
 // 安定させるための表示テキスト、こちらはMCPの応答に載せる「何がどう変わったか」。
@@ -45,7 +46,6 @@ export interface BoardSnapshot {
   syncToken: string;
   takenAt: number;
   tasks: Map<number, TaskFacts>;
-  cards: Map<number, string>;
   /** 前提情報は**本文を持たない (#187)**。応答に載せるのも版だけで、
    * 中身が要るなら get_project_context を呼ばせる。
    * 3,000字級の本文がボードを取るたびに乗るのを止めるのが目的 (#186 と同じ問題) */
@@ -87,22 +87,6 @@ let counter = 0;
 
 const snapshots = new Map<number, BoardSnapshot[]>();
 
-/** 要約カードの索引。**区切り文字で連結しない** — 要素に同じ文字列を書けるので、
- * ['B / C'] と ['B', 'C'] が同じ索引になり、カードの分割・編集を見逃す (自動レビュー指摘) */
-function cardIndex(title: string, elements: string[]): string {
-  return JSON.stringify([title, elements]);
-}
-
-/** 索引から人が読める形へ戻す。差分の文面に出すのは連結した見た目のほうでよい */
-function cardLabel(index: string): string {
-  try {
-    const [title, elements] = JSON.parse(index) as [string, string[]];
-    return `${title} :: ${elements.join(" / ")}`;
-  } catch {
-    return index;
-  }
-}
-
 /** いまのボードを写し取る。DBに触るのはここだけで、差分計算(diffBoards)は純粋関数にしてある */
 export function captureBoard(): Omit<BoardSnapshot, "syncToken" | "takenAt"> {
   const tasks = new Map<number, TaskFacts>(
@@ -121,10 +105,7 @@ export function captureBoard(): Omit<BoardSnapshot, "syncToken" | "takenAt"> {
       },
     ])
   );
-  const cards = new Map<number, string>(
-    listSummaryCards().map((c) => [c.id, cardIndex(c.title, c.elements.map((e) => e.text))])
-  );
-  return { tasks, cards, projectContextVersion: getProjectContextRow().version };
+  return { tasks, projectContextVersion: getProjectContextRow().version };
 }
 
 /** 列ごとの「並んでいるIDの列」。sort の数値ではなくこの並びを比べる。
@@ -197,8 +178,8 @@ function fieldChanges(prev: TaskFacts, cur: TaskFacts): string[] {
  * 古い一覧が残ったまま差分を渡されると自力でマージを迫られる。IDだけを指す差分にしない。
  */
 export function diffBoards(
-  prev: Pick<BoardSnapshot, "tasks" | "cards" | "projectContextVersion">,
-  cur: Pick<BoardSnapshot, "tasks" | "cards" | "projectContextVersion">
+  prev: Pick<BoardSnapshot, "tasks" | "projectContextVersion">,
+  cur: Pick<BoardSnapshot, "tasks" | "projectContextVersion">
 ): string[] {
   const changes: string[] = [];
   const curLists = columnLists(cur.tasks);
@@ -266,14 +247,6 @@ export function diffBoards(
     changes.push(`並び順が変わった。現在の順は ${lines.join(" / ")}`);
   }
 
-  for (const [id, idx] of cur.cards) {
-    const before = prev.cards.get(id);
-    if (!before) changes.push(`+ 要約カード#${id} が追加された (${cardLabel(idx)})`);
-    else if (before !== idx) changes.push(`~ 要約カード#${id} が更新された (${cardLabel(idx)})`);
-  }
-  for (const [id, idx] of prev.cards) {
-    if (!cur.cards.has(id)) changes.push(`- 要約カード#${id} が統合され消滅した (${cardLabel(idx)})`);
-  }
 
   // 版で比べる。本文を持っていないので中身の差は出せないが、そもそも出すつもりが無い
   // (差分に3,000字が乗る)。「変わった」とだけ言って get_project_context を呼ばせる

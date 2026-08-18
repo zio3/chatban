@@ -3,10 +3,10 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import cors from "cors";
 import express from "express";
 import { Server } from "socket.io";
-import { onTaskReopened, onTasksCompleted } from "./archive.js";
+import { foldDoneColumn, foldedContainer, onTaskReopened } from "./archive.js";
 import { generateSuggestions, runChatTurn } from "./chat.js";
 import { warnIfConfigNotIgnored } from "./config.js";
-import { archiveState, hooks } from "./hooks.js";
+import { hooks } from "./hooks.js";
 import { log } from "./log.js";
 import { buildMcpServer } from "./mcp.js";
 import { isAllowedOrigin, isBrowserCrossSite } from "./origin.js";
@@ -39,7 +39,6 @@ import {
   getProjectContextRow,
   getTask,
   listChatMessages,
-  listSummaryCards,
   listTasks,
   saveChatMessage,
   updateTask,
@@ -169,42 +168,30 @@ function broadcastBoard(projectId = currentProjectId()) {
   // 中身の取得もそのプロジェクトのスコープで行う (非同期フックから呼ばれる場合があるため)。
   // /api/board が返すものと同じ組を流す — 「初回だけ揃っていて以後ズレる」を作らない
   withProject(projectId, () =>
-    io.to(room(projectId)).emit("board:changed", { tasks: listTasks(), summaryCards: listSummaryCards() })
+    io.to(room(projectId)).emit("board:changed", { tasks: listTasks(), folded: foldedContainer(projectId) ?? [] })
   );
 }
 
-// 要約再生成は非同期で15〜30秒かかるため、実行中件数をUIへ通知する (#56)。
-// 件数はプロジェクトごとに数える — 別プロジェクトの再生成でスピナーが回ると誤解を生む
-const archiveJobs = archiveState.running; // #108: MCPからも参照する
-function archiveJobDelta(projectId: number, delta: number) {
-  const next = Math.max(0, (archiveJobs.get(projectId) ?? 0) + delta);
-  archiveJobs.set(projectId, next);
-  io.to(room(projectId)).emit("archive:working", { count: next });
-}
-
-// 完了→即アーカイブ+要約合流 (E2E等ではAUTO_ARCHIVE=0で無効化)
-// #60: 完了は常にバッチで届く (単一done=長さ1)。N件一括検収でも要約再生成(LLM呼び出し)は1回
-// #98: フックはリクエストが終わった後に走るので、そのままだとプロジェクトのスコープから外れる。
-// 「MCPでプロジェクト3のタスクを完了 → プロジェクト1の要約カードに合流」という静かな事故を防ぐため、
-// 呼ばれた時点(=まだスコープ内)のプロジェクトIDを捕まえ、非同期処理の中で入り直す。
+// #200: 完了→Done列を畳み直す (E2E等では AUTO_ARCHIVE=0 で無効化)。
+// **同期で完結する**ので、以前あった実行中件数の通知 (archive:working / #56) と
+// 非同期スコープの入り直し (#98) は要らなくなった。LLMを待たないぶん、押した瞬間に board が確定する。
 if (process.env.AUTO_ARCHIVE !== "0") {
-  const runScoped = (label: string, job: () => Promise<unknown>) => {
+  hooks.tasksCompleted = (taskIds) => {
     const projectId = currentProjectId();
-    archiveJobDelta(projectId, 1);
-    withProject(projectId, job)
-      // #99: roomへ送るので、表示中かどうかを気にせず「そのプロジェクトの購読者」に届く
-      .then(() => broadcastBoard(projectId))
-      .catch((e) => log("archive", `${label} (project #${projectId}) failed: ${e?.message ?? e}`))
-      .finally(() => archiveJobDelta(projectId, -1));
+    foldDoneColumn(projectId, taskIds);
+    broadcastBoard(projectId);
   };
-  hooks.tasksCompleted = (taskIds) => runScoped(`tasksCompleted [${taskIds.join(",")}]`, () => onTasksCompleted(taskIds));
-  hooks.taskReopened = (taskId) => runScoped(`taskReopened #${taskId}`, () => onTaskReopened(taskId));
+  hooks.taskReopened = (taskId) => {
+    const projectId = currentProjectId();
+    onTaskReopened(projectId, taskId);
+    broadcastBoard(projectId);
+  };
 }
 
 app.get("/api/board", (_req, res) => {
   res.json({
     tasks: listTasks(),
-    summaryCards: listSummaryCards(),
+    folded: foldedContainer(currentProjectId()) ?? [],
   });
 });
 

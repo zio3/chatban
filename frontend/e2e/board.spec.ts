@@ -821,15 +821,15 @@ test("完了は done_tasks ビューで引ける。登録日と取り違えよ�
   expect(none.rows).toHaveLength(0);
 });
 
-test("要約カードの列は frozen (旧 settled)。SQL窓口から新しい名前で引ける", async () => {
-  // 改名のマイグレーションが効いていること。旧名で引くと落ちる = 移行漏れが検出できる
-  const r = await mcp("query_log", {
-    sql: "SELECT id, title, frozen FROM summary_cards LIMIT 1",
-  });
-  expect(r.error).toBeUndefined();
+test("撤去した summary_cards はSQL窓口からも消えている (#200)", async () => {
+  // テーブルを落としただけでなく、許可リストからも外れていること。
+  // 片方だけ直すと「名前は通るが引けない」か「引けるが説明に無い」のどちらかになる
+  const r = await mcp("query_log", { sql: "SELECT id FROM summary_cards LIMIT 1" });
+  expect(r.ok).toBe(false);
 
-  const old = await mcp("query_log", { sql: "SELECT settled FROM summary_cards LIMIT 1" });
-  expect(JSON.stringify(old)).toContain("no such column");
+  const tables = await mcpToolList();
+  const queryLog = tables.find((t: any) => t.name === "query_log");
+  expect(JSON.stringify(queryLog)).not.toContain("summary_cards");
 });
 
 test("SQLが失敗したら、直せる材料を一緒に返す (説明を厚くする代わりの事後注入)", async () => {
@@ -1113,10 +1113,8 @@ test("Originの付かないブラウザGET (<img>相当) も断る。有料の�
 test("LLMを直接呼ぶ口はGETに置かない (#180)", async () => {
   // GET のままだと、悪意あるページが <img src> で撃つだけで課金を増やせる。
   //
-  // **「LLMを直接呼ぶ口」に限った検証。**LLMを間接的に起こす口は他にもある
-  // (自動レビュー指摘): POST /api/tasks/approve → 検収でDone要約を作り直す /
-  // PATCH /api/tasks/:id で Done から差し戻すと再要約 / POST /mcp の compact_archive。
-  // どれも POST・PATCH なのでGETでは叩けないが、**このテストはそこまで数えていない**。
+  // **「LLMを直接呼ぶ口」に限った検証。**#200 でDone列の蒸留をやめたので、検収と差し戻しは
+  // LLMを起こさなくなった (畳み直しは同期のSQLだけ)。間接的に起こす口が減った形。
   // 下で /api/tasks/approve と /mcp が GET で通らないことだけ確かめておく
   for (const path of ["/api/suggestions", "/api/chat", "/api/tasks/1/chat"]) {
     const res = await fetch(`${API}${path}`);

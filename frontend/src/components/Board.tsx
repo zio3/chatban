@@ -4,7 +4,7 @@ import { SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-
 import { CSS } from "@dnd-kit/utilities";
 import { useState } from "react";
 import { STATUS_LABELS } from "../types";
-import type { SummaryCard, Task, TaskStatus } from "../types";
+import type { FoldedTask, Task, TaskStatus } from "../types";
 
 const COLUMNS: { key: TaskStatus; label: string; accent: string }[] = [
   { key: "todo", label: "Todo", accent: "border-slate-400" },
@@ -226,40 +226,31 @@ function renderRefs(text: string, onOpen: (id: number) => void) {
   });
 }
 
-// #58: チェックボックスは廃止 (done=検収済みなので把握確認が二重になる)。
-// アクティブカード=緑で開いた状態、整頓で過去ログ化(frozen)されたカード=グレーで畳んだ状態
-function SummaryCardView({
-  card,
-  onOpenTask,
-  defaultOpen,
-}: {
-  card: SummaryCard;
-  onOpenTask: (id: number) => void;
-  /** #105: 検収バッチごとにカードが増えるので、開くのは最新の1枚だけ */
-  defaultOpen: boolean;
-}) {
-  const [open, setOpen] = useState(defaultOpen);
+// #200: Done列の2段目。直近24時間に畳んだタスクをまとめた**1個だけ**の箱。
+// サーバーのメモリ上にしか無いので、再起動すると消える (中身は archived=1 でDBに残り、検索で引ける)
+function FoldedBox({ folded, onOpenTask }: { folded: FoldedTask[]; onOpenTask: (id: number) => void }) {
+  const [open, setOpen] = useState(false);
   return (
-    <div
-      data-testid={`summary-card-${card.id}`}
-      className={`rounded-lg border p-2.5 shadow-sm ${card.frozen ? "border-slate-200 bg-slate-50" : "border-emerald-300 bg-emerald-50"}`}
-    >
+    <div data-testid="folded-box" className="rounded-lg border border-emerald-300 bg-emerald-50 p-2.5 shadow-sm">
       <button onClick={() => setOpen(!open)} className="flex w-full items-center justify-between gap-2 text-left">
         <span className="text-sm font-bold text-slate-700">
-          📦 {card.title}
-          <span className="ml-1.5 text-xs font-normal text-slate-400">({card.taskIds.length}件)</span>
+          📦 畳んだ完了
+          <span className="ml-1.5 text-xs font-normal text-slate-400">({folded.length}件)</span>
         </span>
         <span className="text-xs text-slate-400">{open ? "▾" : "▸"}</span>
       </button>
       {open && (
         <ul className="mt-2 space-y-1.5">
-          {card.elements.map((e, i) => (
-            <li key={i} className="flex items-start gap-1.5 text-xs leading-snug text-slate-700">
-              <span className="text-slate-400">•</span>
-              <span>{renderRefs(e.text, onOpenTask)}</span>
+          {folded.map((t) => (
+            <li key={t.id} className="text-xs leading-snug">
+              <button
+                onClick={() => onOpenTask(t.id)}
+                className="text-left text-slate-700 hover:text-emerald-700 hover:underline"
+              >
+                <span className="text-slate-400">#{t.id}</span> {t.title}
+              </button>
             </li>
           ))}
-          {card.elements.length === 0 && <li className="text-xs text-slate-400">要約を生成中…</li>}
         </ul>
       )}
     </div>
@@ -269,8 +260,7 @@ function SummaryCardView({
 function Column({
   col,
   tasks,
-  summaryCards,
-  archiveWorking,
+  folded,
   onOpenTask,
   approvedIds,
   onToggleApproved,
@@ -280,8 +270,7 @@ function Column({
 }: {
   col: (typeof COLUMNS)[number];
   tasks: Task[];
-  summaryCards?: SummaryCard[];
-  archiveWorking?: boolean;
+  folded?: FoldedTask[];
   onOpenTask: (id: number) => void;
   /** Review列のみ: 検収OKマークの集合と一括確定 (#57) */
   approvedIds?: Set<number>;
@@ -316,35 +305,16 @@ function Column({
             </button>
           )}
           <span data-testid={`count-${col.key}`} className="rounded-full bg-slate-200 px-1.5 text-xs text-slate-500">
-            {col.key === "done" && summaryCards
-              ? `📦 ${summaryCards.reduce((n, c) => n + c.taskIds.length, 0) + tasks.length}`
+            {col.key === "done" && folded
+              ? `📦 ${folded.length + tasks.length}`
               : tasks.length}
           </span>
         </span>
       </div>
-      {/* 完了→要約合流は非同期(15〜30秒)なので、再生成中はスピナーで明示 (#56) */}
-      {archiveWorking && (
-        <div
-          data-testid="archive-working"
-          className="flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-2 text-xs text-emerald-700"
-        >
-          <span className="h-3 w-3 shrink-0 animate-spin rounded-full border-2 border-emerald-500 border-t-transparent" />
-          要約カードを再生成中…
-        </div>
-      )}
-      {/* Done列: 要約カード常駐 (アクティブ→過去ログの順) */}
-      {summaryCards &&
-        [...summaryCards]
-          .sort((a, b) => Number(a.frozen) - Number(b.frozen) || b.id - a.id)
-          .map((c, i) => (
-            <SummaryCardView key={c.id} card={c} onOpenTask={onOpenTask} defaultOpen={i === 0 && !c.frozen} />
-          ))}
       <SortableContext items={tasks.map((t) => t.id)} strategy={verticalListSortingStrategy}>
         {tasks.map((t) =>
-          // #105: Done列の生カードはドラッグさせない。検収後アーカイブ完了までの15〜30秒に
-          // 他の列へ動かせてしまい、あとから走るアーカイブ処理が archived=1 にするため、
-          // 「todoなのにボードから消える」幽霊タスクができる。
-          // Doneへは入れられない(#57)ので、出られないほうが一貫する。戻したいときはチャットで「#xxを戻して」
+          // Done列の生カードはドラッグさせない。Doneへは入れられない(#57)ので、出られないほうが一貫する。
+          // 戻したいときはチャットで「#xxを戻して」
           col.key === "done" ? (
             <TaskCard key={t.id} task={t} onOpen={onOpenTask} openIds={openIds} taskById={taskById} />
           ) : (
@@ -359,12 +329,14 @@ function Column({
             />
           )
         )}
-        {tasks.length === 0 && !(summaryCards && summaryCards.length > 0) && (
+        {tasks.length === 0 && !(folded && folded.length > 0) && (
           <p className="rounded-lg border border-dashed border-slate-200 py-4 text-center text-xs text-slate-400">
             タスクなし
           </p>
         )}
       </SortableContext>
+      {/* #200: バラバラのDone(1段目)が上、畳んだ箱(2段目)がその下 */}
+      {folded && folded.length > 0 && <FoldedBox folded={folded} onOpenTask={onOpenTask} />}
     </div>
   );
 }
@@ -372,8 +344,7 @@ function Column({
 export default function Board({
   tasks,
   allTasks,
-  summaryCards,
-  archiveWorking,
+  folded,
   onMove,
   onOpenTask,
   approvedIds,
@@ -383,8 +354,7 @@ export default function Board({
   tasks: Task[];
   /** 依存の判定に使う母集団。フィルタで隠れているものも含む全件 (#41/#90) */
   allTasks: Task[];
-  summaryCards: SummaryCard[];
-  archiveWorking?: boolean;
+  folded: FoldedTask[];
   onMove: (move: MovePayload) => void;
   onOpenTask: (id: number) => void;
   approvedIds: Set<number>;
@@ -442,8 +412,7 @@ export default function Board({
             key={col.key}
             col={col}
             tasks={byStatus(col.key)}
-            summaryCards={col.key === "done" ? summaryCards : undefined}
-            archiveWorking={col.key === "done" ? archiveWorking : undefined}
+            folded={col.key === "done" ? folded : undefined}
             onOpenTask={onOpenTask}
             approvedIds={col.key === "review" ? approvedIds : undefined}
             onToggleApproved={col.key === "review" ? onToggleApproved : undefined}

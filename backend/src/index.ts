@@ -20,6 +20,8 @@ import {
   listProjects,
   projectSummaries,
   renameProject,
+  customLanes,
+  setCustomLabel,
   ensureInitialProject,
   reportOrphanFiles,
   setActiveProjectId,
@@ -49,6 +51,8 @@ import {
   isArchived,
   isDueDate,
   isTaskStatus,
+  isUsableStatus,
+  evacuateLane,
   TASK_STATUSES,
 } from "./db.js";
 
@@ -164,12 +168,15 @@ function rejoinFollowers(projectId: number) {
   }
 }
 
+/** ボードが受け取る一式。**取得と配信で同じ関数を通す** —
+ * 「初回だけ揃っていて以後ズレる」を型で防ぐ (#19 で lanes を足したとき、片方だけ直る形にしない) */
+function boardPayload(projectId: number) {
+  return { tasks: listTasks(), folded: foldedContainer(projectId) ?? [], lanes: customLanes(projectId) };
+}
+
 function broadcastBoard(projectId = currentProjectId()) {
-  // 中身の取得もそのプロジェクトのスコープで行う (非同期フックから呼ばれる場合があるため)。
-  // /api/board が返すものと同じ組を流す — 「初回だけ揃っていて以後ズレる」を作らない
-  withProject(projectId, () =>
-    io.to(room(projectId)).emit("board:changed", { tasks: listTasks(), folded: foldedContainer(projectId) ?? [] })
-  );
+  // 中身の取得もそのプロジェクトのスコープで行う (非同期フックから呼ばれる場合があるため)
+  withProject(projectId, () => io.to(room(projectId)).emit("board:changed", boardPayload(projectId)));
 }
 
 // #200: 完了→Done列を畳み直す (E2E等では AUTO_ARCHIVE=0 で無効化)。
@@ -189,10 +196,7 @@ if (process.env.AUTO_ARCHIVE !== "0") {
 }
 
 app.get("/api/board", (_req, res) => {
-  res.json({
-    tasks: listTasks(),
-    folded: foldedContainer(currentProjectId()) ?? [],
-  });
+  res.json(boardPayload(currentProjectId()));
 });
 
 app.post("/api/tasks", (req, res) => {
@@ -230,8 +234,12 @@ app.post("/api/tasks/:id/checked", (req, res) => {
  * 通してしまうと「保存はされたのにボードのどの列にも出ないタスク」ができ、
  * 詳細を開くと画面が落ちる (自動レビュー指摘) */
 function badStatus(status: unknown): string | null {
-  if (status === undefined || isTaskStatus(status)) return null;
-  return `status は ${TASK_STATUSES.join(" / ")} のいずれかです (受け取った値: ${JSON.stringify(status)})`;
+  const lanes = customLanes();
+  if (status === undefined || isUsableStatus(status, lanes)) return null;
+  // #19: 使える列はプロジェクトによって違うので、**そのプロジェクトで実際に置けるもの**を並べて返す。
+  // TASK_STATUSES をそのまま出すと、有効化していない custom1 を「使える」と案内してしまう
+  const usable = TASK_STATUSES.filter((v) => isUsableStatus(v, lanes));
+  return `status は ${usable.join(" / ")} のいずれかです (受け取った値: ${JSON.stringify(status)})`;
 }
 
 /** #153: 期限も同じ形で確かめる。契約は YYYY-MM-DD と言っているのに検証が無く、
@@ -504,7 +512,7 @@ app.patch("/api/projects/:id", (req, res) => {
   // 存在確認をしないと、更新自体は0件で静かに通ったあと broadcastBoard(id) が投げて500になる。
   // 設定を古いタブで開いたまま別タブで削除する、という普通の競合で踏む (自動レビュー指摘)
   if (!getProject(id)) return res.status(404).json({ error: `project #${req.params.id} not found` });
-  const { name, archived } = req.body ?? {};
+  const { name, archived, custom1Label, custom2Label } = req.body ?? {};
   // 何も書き始める前にまとめて確かめる (途中まで適用して500、を作らない)。
   // 既定プロジェクトの無効化はDB層が投げるので、ここで先に同じ判定を通す —
   // 名前を変えた後に投げると「500なのに名前だけ変わる」になる
@@ -515,6 +523,21 @@ app.patch("/api/projects/:id", (req, res) => {
     });
   if (typeof name === "string" && name.trim()) renameProject(id, name.trim());
   if (typeof archived === "boolean") setProjectArchived(id, archived);
+  // #19: 任意レーンの表示名。**名前を消す = レーンを畳む**なので、先に中身を todo へ戻す。
+  // 順序が逆だと、ボードが列を描かなくなった後にタスクが取り残される (evacuateLane の注記)
+  for (const [key, value] of [
+    ["custom1", custom1Label],
+    ["custom2", custom2Label],
+  ] as const) {
+    if (typeof value !== "string") continue;
+    const folding = !value.trim();
+    if (folding) {
+      const moved = withProject(id, () => evacuateLane(key));
+      if (moved > 0) log("api", `#${id} の ${key} を畳んだので ${moved}件を todo へ戻しました`);
+    }
+    setCustomLabel(id, key, value);
+    resetPromptState(); // 索引の説明文が変わるのでプロンプトの基準を作り直す
+  }
   // #167 → #199: 提案チップのON/OFF はここで受けていた。システム全体で1つの設定になったので
   // PATCH /api/settings へ移した (プロジェクトのPATCHで全体設定を書き換えるのは形が合わない)
   io.emit("project:changed", { projects: projectSummaries() });

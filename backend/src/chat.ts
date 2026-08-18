@@ -22,12 +22,12 @@ import {
   updateTask,
   updateTasks,
 } from "./db.js";
-import { currentProjectId, suggestEnabled } from "./store.js";
+import { currentProjectId, customLanes, suggestEnabled } from "./store.js";
 import { chatCompletion } from "./llm.js";
 import { getModel } from "./config.js";
 import { foldedContainer } from "./archive.js";
 import { log } from "./log.js";
-import type { TaskStatus, UiAction } from "./types.js";
+import type { CustomLane, TaskStatus, UiAction } from "./types.js";
 
 export interface ToolTrace {
   tool: string;
@@ -56,7 +56,28 @@ export interface ChatResult {
  * coerceStatus は残す。チャットのツール呼び出しはLLMが組み立てるJSONで、
  * enum を無視した値が届きうる (MCPはzodで弾くが、こちらに検証は無い) */
 export const AGENT_STATUS_VALUES = ["todo", "inprogress", "review"] as const;
-const STATUS_VALUES = AGENT_STATUS_VALUES;
+
+/** #19: この接続のプロジェクトで選べる列。任意レーンを**有効なものだけ**足す。
+ * 「選べないものは選ばれない」— 無効なレーンを enum に出さないので、そこへ置く経路が無い。
+ * db.ts の isUsableStatus が最後の砦だが、そこまで届かせないほうがよい (done を enum から外したのと同じ形)。
+ *
+ * **チャットとMCPで同じ関数を使う。**同じ一覧を2か所に書くと必ず片方だけ直る (#92 #108 #114) */
+export function agentStatusValues(lanes: CustomLane[]): string[] {
+  return [...AGENT_STATUS_VALUES, ...lanes.map((l) => l.key)];
+}
+
+/** 任意レーンの意味を契約に差し込む。**表示名は必須**なので、custom1 が説明の無い箱になることはない。
+ * 人が前提情報に運用ルールを書くのは任意だが、`custom1 = 素材` の対応だけは待たずに自動で出す */
+export function statusDescription(lanes: CustomLane[]): string {
+  if (lanes.length === 0) return STATUS_DESCRIPTION;
+  const map = lanes.map((l) => `${l.key} = 「${l.label}」`).join(" / ");
+  return `${STATUS_DESCRIPTION}。このプロジェクトには任意レーンがある: ${map}。ボードでは Review と Done の間に並ぶ。何を置く列かはプロジェクトの前提情報を読むこと`;
+}
+
+/** 並べ替えられる列 (任意レーン込み)。Todo/Inprogress と同じ緩い箱なので、並べ替えも同じに扱う */
+export function reorderableStatuses(lanes: CustomLane[]): string[] {
+  return [...REORDERABLE_STATUSES, ...lanes.map((l) => l.key)];
+}
 /** 並べ替えられる列。done は検収後すぐ要約カードへ畳まれて一覧から消えるので対象にしない (#105)。
  * これもチャットとMCPで共有する — 同じ一覧を2か所に書くと必ず片方だけ直る */
 export const REORDERABLE_STATUSES = ["todo", "inprogress", "review"] as const;
@@ -200,7 +221,10 @@ export const BLOCKED_BY_DESCRIPTION =
 
 // 計測スクリプト(scripts/prompt-breakdown.ts)から実物を測れるように公開する。
 // 「何が入力トークンを食っているか」はソースを眺めても分からず、実物を数えるしかない
-export const tools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
+export function buildTools(lanes: CustomLane[]): OpenAI.Chat.Completions.ChatCompletionTool[] {
+  const STATUS_VALUES = agentStatusValues(lanes);
+  const STATUS_DESC = statusDescription(lanes);
+  return [
   {
     type: "function",
     function: {
@@ -242,7 +266,7 @@ export const tools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
               properties: {
                 id: { type: "integer", description: "タスクID。会話で「#112」と呼ばれるものと同じで、tasks テーブルの主キー(id)。プロジェクトごとに1から振られるので、別プロジェクトの#112とは別物" },
                 title: { type: "string" },
-                status: { type: "string", enum: STATUS_VALUES, description: STATUS_DESCRIPTION },
+                status: { type: "string", enum: STATUS_VALUES, description: STATUS_DESC },
                 summary: { type: "string", description: SUMMARY_DESCRIPTION },
                 due: { type: ["string", "null"], description: `${DUE_DESCRIPTION}。解除はnull` },
                 blocked_by: { type: ["array", "null"], items: { type: "integer" }, description: `${BLOCKED_BY_DESCRIPTION}。全置換で、解除はnull` },
@@ -311,7 +335,7 @@ export const tools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
       parameters: {
         type: "object",
         properties: {
-          status: { type: "string", enum: REORDERABLE_STATUSES, description: "対象の列" },
+          status: { type: "string", enum: reorderableStatuses(lanes), description: "対象の列" },
           ids: { type: "array", items: { type: "integer" }, description: "その列のタスクを並べたい順に" },
         },
         required: ["status", "ids"],
@@ -363,7 +387,8 @@ export const tools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
       },
     },
   },
-];
+  ];
+}
 
 // #179: 以前はここに toolsFor(personal) があり、メンバーが居ないプロジェクトでは
 // 実行時に assignee 系のツールと項目を削っていた (#109/#110)。担当者そのものを
@@ -730,7 +755,7 @@ async function generateSuggestionsUncached(
           'ボードの現状を読んで、いまユーザーにとって価値のある操作を最大3つ提案して。ツールは呼ばない。出力はJSON配列のみ: [{"label":"絵文字+15字以内の短文","message":"チャットにそのまま投げる依頼文"}]。期限接近・依存解除・検収たまりなど文脈が根拠のものを優先。',
       },
       ],
-      tools,
+      tools: buildTools(customLanes()),
     },
     { signal }
   );
@@ -812,6 +837,9 @@ async function runChatTurnInner(
   const uiActions: UiAction[] = [];
   const usage: ChatResult["usage"] = { rounds: 0, elapsedMs: 0 };
   let reply = "";
+  // ラウンドをまたいで**同じ配列を使い回す**。#106 でプレフィックスをバイト単位で安定させてあるので、
+  // 毎ラウンド組み直すとレーン名が同じでも整形が揺れうる。1ターンの中では固定してキャッシュを守る
+  const tools = buildTools(customLanes());
 
   for (let round = 0; round < 8; round++) {
     const res = await chatCompletion("chat", getModel("main"), { messages, tools });

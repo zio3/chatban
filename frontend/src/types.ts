@@ -1,4 +1,11 @@
-export type TaskStatus = "todo" | "inprogress" | "review" | "done";
+/** #19: custom1 / custom2 はプロジェクトが表示名を付けたときだけ現れる任意レーン。
+ * 位置は Review と Done の間。値は固定で、意味は表示名 (lanes) が与える */
+export type TaskStatus = "todo" | "inprogress" | "review" | "custom1" | "custom2" | "done";
+export interface CustomLane {
+  key: "custom1" | "custom2";
+  /** 画面に出るのはこちら。custom1 という値そのものは人に見せない */
+  label: string;
+}
 
 export interface Task {
   id: number;
@@ -74,3 +81,16 @@ export const STATUS_LABELS: Record<string, { label: string; cls: string }> = {
   review: { label: "Review", cls: "bg-amber-100 text-amber-700" },
   done: { label: "Done", cls: "bg-emerald-100 text-emerald-700" },
 };
+
+/** #19: 任意レーンの見た目。表示名だけがプロジェクトごとに変わり、色は固定。
+ * **2本を色で区別しない** — 意味を持つのは名前のほうなので、色に意味があるように見せない */
+const CUSTOM_LANE_CLS = "bg-violet-100 text-violet-700";
+
+/** 列の表示名を引く。任意レーンはプロジェクトの表示名を使う。
+ * lanes を渡し忘れても `custom1` という生の値が出るだけで、画面は落ちない
+ * (STATUS_LABELS を直接引くと undefined で落ちていた — TASK_STATUSES の注記と同じ事故) */
+export function statusLabel(status: string, lanes: CustomLane[] = []): { label: string; cls: string } {
+  const lane = lanes.find((l) => l.key === status);
+  if (lane) return { label: lane.label, cls: CUSTOM_LANE_CLS };
+  return STATUS_LABELS[status] ?? { label: status, cls: "bg-slate-200 text-slate-700" };
+}

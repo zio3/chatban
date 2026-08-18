@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { extractChoices, suggestSkipReason } from "./chat.js";
 import { readFileSync } from "node:fs";
-import { tools } from "./chat.js";
+import { buildTools } from "./chat.js";
 import { DONE_GATE_RULE, isDueDate, isTaskStatus, mayEnterDone } from "./db.js";
 import { AGENT_STATUS_VALUES } from "./chat.js";
 import { isAllowedOrigin, isBrowserCrossSite } from "./origin.js";
@@ -233,7 +233,7 @@ test("提案の生成を諦める判定: ON・会話中でない・中身があ�
 test("チャットに公開したツールには必ず実装がある", () => {
   const src = readFileSync(new URL("./chat.ts", import.meta.url), "utf8");
   const implemented = new Set([...src.matchAll(/^\s*case "([a-z_]+)":/gm)].map((m) => m[1]));
-  const published = tools.map((t: any) => t.function.name);
+  const published = buildTools([]).map((t: any) => t.function.name);
   const missing = published.filter((n: string) => !implemented.has(n));
   assert.deepEqual(missing, [], `実装の無いツール: ${missing.join(", ")}`);
 });

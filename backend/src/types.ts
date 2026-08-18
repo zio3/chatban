@@ -1,4 +1,14 @@
-export type TaskStatus = "todo" | "inprogress" | "review" | "done";
+/** #19: custom1 / custom2 は**プロジェクトが表示名を付けたときだけ存在する**任意レーン。
+ * 値そのものは固定 (静的な enum) で、意味は表示名と前提情報が与える。
+ * 位置は Review と Done の間。Todo/Inprogress と同じ緩い箱で、live_tasks にも入る。
+ * **Done へは行けない** — 退場は review を通る規則のまま (mayEnterDone は変えていない) */
+export type TaskStatus = "todo" | "inprogress" | "review" | "custom1" | "custom2" | "done";
+export type CustomLaneKey = "custom1" | "custom2";
+export interface CustomLane {
+  key: CustomLaneKey;
+  /** UIとプロンプトに出るのはこちら。custom1 という値そのものは人に見せない */
+  label: string;
+}
 
 export interface Task {
   id: number;

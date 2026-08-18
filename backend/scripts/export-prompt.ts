@@ -6,7 +6,10 @@
 //
 //   使い方: cd backend && npx tsx scripts/export-prompt.ts [projectId] [出力先]
 import fs from "node:fs";
-import { buildSystemPrompt, tools } from "../src/chat.js";
+import { buildSystemPrompt, buildTools } from "../src/chat.js";
+
+// #19: 任意レーンは既定0本。計測はレーン無しの素の状態で行う
+const tools = buildTools([]);
 import { withProject } from "../src/store.js";
 
 const projectId = Number(process.argv[2] ?? 9);

@@ -126,7 +126,7 @@ Socket.IOの配信もプロジェクト単位のroomへ送る。
 
 ## データモデル (プロジェクトDB)
 
-- `tasks`: title / status(todo・inprogress・review・done固定4列) /
+- `tasks`: title / status(todo・inprogress・review・done の固定4列 + 任意レーン custom1/custom2 #19) /
   **summary**(いまどうなっているか。カードに出る) /
   context(経緯メモ) / **context_version**(経緯メモの楽観ロック) / due / blocked_by(依存) / rejected(却下) /
   sort / archived / **trashed_at**(ゴミ箱)
@@ -156,6 +156,11 @@ todo → inprogress → review ←─ 完了報告も却下(rejected)もここ�
                      [削除] → 🗑ゴミ箱 (復元可。実体を消せるのはゴミ箱画面から)
 ```
 
+- **任意レーン (#19)**: プロジェクトが表示名を付けたときだけ現れる列を、Review と Done の間に最大2本。
+  値は `custom1`/`custom2` の固定 enum で、意味は表示名と前提情報が与える (リネームしても値は動かない)。
+  **既定は0本**で、ふつうのボードは4列のまま。Todo/Inprogress と同じ緩い箱で、Doneへは直接行けない。
+  表示名を消すと列は畳まれ、そこに居たタスクは todo へ戻る (`evacuateLane`)。
+  動機: 「版があるもの」(制作物の素材) は ChatBan が唯一の索引なので、Doneへ退場させると索引が消える。
 - **4列は同じ重みではない**: Todo/Inprogressは「人間がステータスを気にしたいときに振り分ける箱」程度。
   Reviewは退場ゲート、Doneは人間の検収のみ (チャットからdoneへ直行する経路はコードで塞いである)
 - **DoneへのD&Dは禁止、Doneからの持ち出しも禁止**。検収後アーカイブ完了まで15〜30秒あり、

@@ -1943,3 +1943,72 @@ test("存在しない番号は横取りせず、普通の発言としてLLMへ�
   await expect(page.getByTestId("task-detail-panel")).toBeHidden();
   await expect(page.getByText("999999")).toBeVisible();
 });
+
+// #19: 任意レーン (custom1 / custom2)。
+// 既定は0本なので、ふつうのボードは4列のまま — その「変わらないこと」も一緒に確かめる。
+async function setLanes(custom1: string, custom2 = "") {
+  await fetch(`${API}/api/projects/1`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ custom1Label: custom1, custom2Label: custom2 }),
+  });
+}
+
+test.describe("任意レーン (#19)", () => {
+  // レーンはプロジェクトの設定なので、他のテストへ漏れないよう必ず戻す
+  test.afterEach(async () => {
+    await setLanes("", "");
+  });
+
+  test("既定では4列のまま、名前を付けたときだけ列が現れる", async ({ page }) => {
+    await page.goto("/");
+    await expect(page.getByTestId("column-todo")).toBeVisible();
+    await expect(page.getByTestId("column-custom1")).toBeHidden();
+
+    await setLanes("素材");
+    // ボードは Socket.IO で流れてくるので、リロードせずに現れる
+    await expect(page.getByTestId("column-custom1")).toBeVisible();
+    await expect(page.getByTestId("column-custom1")).toContainText("素材");
+    // 2本目は名前を付けていないので出ない
+    await expect(page.getByTestId("column-custom2")).toBeHidden();
+
+    // 並びは Review と Done の間
+    const keys = await page.locator("[data-testid^=column-]").evaluateAll((els) =>
+      els.map((e) => e.getAttribute("data-testid"))
+    );
+    expect(keys).toEqual(["column-todo", "column-inprogress", "column-review", "column-custom1", "column-done"]);
+  });
+
+  test("有効化していないレーンには置けない (RESTが断る)", async () => {
+    const res = await fetch(`${API}/api/tasks`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title: "無効なレーンへ", status: "custom1" }),
+    });
+    // 「保存されているのにどの列にも出ない」を作らないための境界
+    expect(res.status).toBe(400);
+    expect(await res.text()).toContain("custom1");
+  });
+
+  test("レーンを畳むと、そこにあったタスクはTodoへ戻る (消えない)", async () => {
+    await setLanes("素材");
+    const id = await createTask("素材に置いたもの", "custom1");
+    expect(await getTaskStatus(id)).toBe("custom1");
+
+    await setLanes(""); // 名前を消す = 畳む
+    expect(await getTaskStatus(id)).toBe("todo");
+  });
+
+  test("レーンからDoneへは直接行けない (退場はreviewを通る)", async () => {
+    await setLanes("素材");
+    const id = await createTask("素材から直行を試す", "custom1");
+    const res = await fetch(`${API}/api/tasks/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status: "done" }),
+    });
+    // mayEnterDone は変えていないので、検収を通っていないものは弾かれる
+    expect(await getTaskStatus(id)).toBe("custom1");
+    expect(res.status).toBeLessThan(500);
+  });
+});

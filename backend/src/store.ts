@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, readdirSync, renameSync, unlinkSync } from "node
 import { dirname, join } from "node:path";
 import { log } from "./log.js";
 import { CONTEXT_TEMPLATE } from "./contextTemplate.js";
+import type { CustomLane, CustomLaneKey } from "./types.js";
 
 // #86: プロジェクトごとにSQLiteファイルを分ける。
 //
@@ -70,6 +71,12 @@ CREATE TABLE IF NOT EXISTS settings (
     }
   };
   addProj("ALTER TABLE projects ADD COLUMN archived INTEGER NOT NULL DEFAULT 0");
+
+  // #19: 任意レーンの表示名。**表示名が入っていることが「そのレーンが有効」の定義**で、
+  // 有効/無効を表す別のフラグは持たない。2つ持つと「有効なのに名前が無い」= 意味の無い箱が
+  // 作れてしまい、そこで初めて #92 (用途不明の欄) になる。NULL = そのレーンは存在しない
+  addProj("ALTER TABLE projects ADD COLUMN custom1_label TEXT");
+  addProj("ALTER TABLE projects ADD COLUMN custom2_label TEXT");
 
   // #180: 認証の設定を消す。**特に auth.sessionSecret は平文のセッション署名鍵**で、
   // 読める相手は誰にでもなりすませた。使う側が消えたあとも残しておく理由が無い
@@ -353,7 +360,32 @@ export interface ProjectRow {
   name: string;
   file: string;
   archived: number;
+  custom1_label: string | null;
+  custom2_label: string | null;
   created_at: string;
+}
+
+/** #19: 有効な任意レーン。**表示名が入っているものだけが有効**で、順序は custom1 → custom2 固定。
+ * 0本 (どちらもNULL) が既定で、そのときボードはこれまでどおりの4列になる。
+ *
+ * 「有効フラグ + 表示名」の2つを持たないのが要点 — 名前の無い有効なレーンが作れると、
+ * それは #92 の「説明がどこにも無い文字列欄」そのものになる。**名前がその箱の意味**なので、
+ * 名前が無いなら箱も無い、で揃える */
+export function customLanes(id: number = currentProjectId()): CustomLane[] {
+  const row = getProject(id);
+  if (!row) return [];
+  const lanes: CustomLane[] = [];
+  if (row.custom1_label?.trim()) lanes.push({ key: "custom1", label: row.custom1_label.trim() });
+  if (row.custom2_label?.trim()) lanes.push({ key: "custom2", label: row.custom2_label.trim() });
+  return lanes;
+}
+
+/** 表示名を設定する。空文字・空白だけはNULL扱い = そのレーンを畳む。
+ * **畳んでも、そこに居たタスクは消さない。**呼び出し側 (index.ts) が todo へ戻してから呼ぶ —
+ * 「消えたように見えて実在する」(TASK_STATUSES の注記) を作らないため */
+export function setCustomLabel(id: number, key: CustomLaneKey, label: string | null): void {
+  const v = label?.trim() ? label.trim() : null;
+  admin.prepare(`UPDATE projects SET ${key}_label = ? WHERE id = ?`).run(v, id);
 }
 
 export function listProjects(): ProjectRow[] {
@@ -512,6 +544,8 @@ export interface ProjectSummary {
   openTasks: number;
   /** #117: このプロジェクト用のMCP接続先 (.mcp.json に貼る) */
   mcpUrl: string;
+  /** #19: 有効な任意レーン (0〜2本)。**空配列がふつう** — 4列のままのプロジェクトはこれ */
+  lanes: CustomLane[];
   // #167 → #199: AI提案チップのON/OFF はここに在った。システム全体で1つの設定にしたので
   // プロジェクトの属性ではなくなり、/api/settings へ移した
 }
@@ -530,6 +564,7 @@ export function projectSummaries(): ProjectSummary[] {
       // #117: MCPの接続先。プロジェクトはURLで固定する設計(#96)なので、
       // .mcp.json に貼る値をプロジェクトごとに出す。ポートを知っているのはサーバー側
       mcpUrl: `http://localhost:${process.env.PORT ?? 8787}/mcp/${p.id}`,
+      lanes: customLanes(p.id),
       // ゴミ箱を数えない (ボードから消えているのに件数が減らない、を防ぐ)。
       // 条件はボードの一覧と揃える — 母集団の条件を書き分けると必ずズレる
       openTasks: (

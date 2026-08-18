@@ -5,7 +5,10 @@
 // lane(#107で廃止)を参照したまま古くなっていたので、実物を測る形に置き換えた。
 //
 //   使い方: cd backend && npx tsx scripts/prompt-breakdown.ts [projectId]
-import { buildSystemPrompt, tools } from "../src/chat.js";
+import { buildSystemPrompt, buildTools } from "../src/chat.js";
+
+// #19: 任意レーンは既定0本。計測はレーン無しの素の状態で行う
+const tools = buildTools([]);
 import { withProject } from "../src/store.js";
 
 const projectId = Number(process.argv[2] ?? 1);

@@ -124,6 +124,7 @@ CREATE TABLE IF NOT EXISTS summary_cards (
   elements TEXT NOT NULL,
   task_ids TEXT NOT NULL,
   frozen INTEGER NOT NULL DEFAULT 0,
+  needs_summary INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
 );
 `);
@@ -145,6 +146,12 @@ CREATE TABLE IF NOT EXISTS summary_cards (
   addColumn("ALTER TABLE tasks ADD COLUMN context TEXT");
   addColumn("ALTER TABLE tasks ADD COLUMN due TEXT");
   addColumn("ALTER TABLE tasks ADD COLUMN blocked_by TEXT");
+  // #195: **要約の作り直し待ちをDBに持つ。**カードを作って索引を更新した直後に
+  // プロセスが止まると、`archived=1` なのに要約が空のカードが残る。
+  // 掃除 (sweepUnfoldedDone) は `archived=0` しか拾わないので、**次の起動でも再試行されない** —
+  // #191 で直した「要約を生成中…」が別経路で復活する (Codexレビュー指摘)。
+  // 待ちを in-memory (staleCards と await) だけに置かず、再起動後に見つかる形で残す
+  addColumn("ALTER TABLE summary_cards ADD COLUMN needs_summary INTEGER NOT NULL DEFAULT 0");
   addColumn("ALTER TABLE tasks ADD COLUMN rejected INTEGER NOT NULL DEFAULT 0");
   // #102: 削除は論理削除 (ゴミ箱)。解釈ミスが取り返しのつかない結果に直結しないようにする
   addColumn("ALTER TABLE tasks ADD COLUMN trashed_at TEXT");

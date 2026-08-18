@@ -3,7 +3,7 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import cors from "cors";
 import express from "express";
 import { Server } from "socket.io";
-import { onTaskReopened, onTasksCompleted } from "./archive.js";
+import { onTaskReopened, onTasksCompleted, regenerateCard } from "./archive.js";
 import { generateSuggestions, runChatTurn } from "./chat.js";
 import { warnIfConfigNotIgnored } from "./config.js";
 import { archiveState, hooks } from "./hooks.js";
@@ -37,6 +37,7 @@ import {
   trashTask,
   getProjectContextRow,
   getTask,
+  listCardsNeedingSummary,
   listChatMessages,
   listUnfoldedDoneIds,
   listSummaryCards,
@@ -670,5 +671,25 @@ async function sweepUnfoldedDone(): Promise<void> {
       // 状態は悪化しない** — 1つの失敗で残り全部を諦めるほうが損
       log("archive", `拾い直しに失敗 (project #${p.id}): ${e?.message ?? e}`);
     }
+  }
+
+  // **要約を作れていないカードも拾い直す。**タスクを畳んだ (archived=1) 直後に
+  // プロセスが止まると、上のループでは見つからない — `archived=0` しか探していないので。
+  // その状態のカードは中身が空のまま残り、UIは「要約を生成中…」と出し続ける
+  // (#191 で直した嘘が別経路で復活する。Codexレビュー指摘)。
+  // claim がトランザクションの中で立てた印 (needs_summary) を頼りに探す
+  for (const p of listProjects()) {
+    const cards = withProject(p.id, () => listCardsNeedingSummary());
+    if (cards.length === 0) continue;
+    log("archive", `要約を作れていないカードを作り直します (project #${p.id}): card#${cards.join(", card#")}`);
+    for (const cardId of cards) {
+      try {
+        await withProject(p.id, () => regenerateCard(cardId));
+      } catch (e: any) {
+        // 失敗しても印は残る = 次の起動でまた拾う。状態は悪化しない
+        log("archive", `card#${cardId} の作り直しに失敗 (project #${p.id}): ${e?.message ?? e}`);
+      }
+    }
+    broadcastBoard(p.id);
   }
 }

@@ -26,12 +26,14 @@ ensureInitialProject(); // 空のデータディレクトリなのでプロジ�
 
 const {
   claimTasksForCard,
+  clearCardNeedsSummary,
   createCardWithClaimedTasks,
   createSummaryCard,
   createTask,
   detachTaskFromCard,
   getSummaryCard,
   getTask,
+  listCardsNeedingSummary,
   listSummaryCards,
   listUnfoldedDoneIds,
   reassignTasksToCard,
@@ -213,6 +215,49 @@ test("**探したあとにDoneから戻されたら押さえない** (#105の幽
   assert.deepEqual(claimTasksForCard([id], card.id).claimed, [], "done以外を押さえてしまった");
   // 押さえていたら「todoなのに archived=1 でボードから消える」幽霊になる (#105)
   assert.deepEqual(tasksOfCard(card.id), [], "差し戻したタスクがカードに入っている");
+});
+
+test("**畳んだ直後に落ちても、要約の作り直し待ちがDBに残る** (#195)", () => {
+  // commit 後・要約前にプロセスが止まると、`archived=1` なのに要約が空のカードが残る。
+  // 掃除は `archived=0` しか拾わないので**次の起動でも再試行されない** —
+  // #191 で直した「要約を生成中…」が別経路で復活する (Codexレビュー指摘)。
+  // 待ちを in-memory (staleCards と await) だけに置かず、DBに書いて再起動後に見つける
+  const id = makeDoneTask("畳んだ直後に落ちるタスク");
+  const result = createCardWithClaimedTasks([id]);
+  assert.ok(result);
+
+  // ここでプロセスが落ちた、という状況 (regenerateCard を呼ばない)
+  assert.ok(
+    listCardsNeedingSummary().includes(result!.card.id),
+    "作り直し待ちがDBに残っていない (次の起動で拾えない)"
+  );
+  assert.deepEqual(getSummaryCard(result!.card.id)?.elements ?? [], [], "前提が崩れている (要約が空でない)");
+
+  // 中身を書けたら印は消える (無限に作り直しへ戻さない)
+  updateCardContent(result!.card.id, "作り直した", [{ text: "要素", checked: false }]);
+  clearCardNeedsSummary(result!.card.id);
+  assert.ok(!listCardsNeedingSummary().includes(result!.card.id), "作り直したのに待ちが残っている");
+});
+
+test("旧カードの作り直し待ちもDBに残る (#195)", () => {
+  // staleCards は呼び出し側が await で回すだけだったので、落ちると消えていた
+  const moving = makeDoneTask("旧カードから移すDone");
+  const old = createSummaryCard();
+  claimTasksForCard([moving], old.id);
+  updateCardContent(old.id, "移動前", [{ text: `#${moving} を完了`, checked: false }]);
+  clearCardNeedsSummary(old.id); // いったん作り直し済みの状態にする
+
+  const staying = makeDoneTask("旧カードに残るDone");
+  claimTasksForCard([staying], old.id);
+  clearCardNeedsSummary(old.id);
+
+  detachTaskFromCard(moving);
+  reassignTasksToCard([moving, staying], old.id);
+
+  const fresh = createSummaryCard();
+  const { staleCards } = claimTasksForCard([moving], fresh.id);
+  assert.ok(staleCards.includes(old.id));
+  assert.ok(listCardsNeedingSummary().includes(old.id), "旧カードの作り直し待ちがDBに残っていない");
 });
 
 test.after(() => {

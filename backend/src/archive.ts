@@ -2,6 +2,7 @@ import {
   detachTaskFromCard,
   createSummaryCard,
   getSummaryCard,
+  clearCardNeedsSummary,
   createCardWithClaimedTasks,
   deleteSummaryCards,
   getTask,
@@ -140,6 +141,7 @@ export async function regenerateCard(cardId: number, dateLabel?: string): Promis
   const tasks = tasksOfCard(cardId);
   if (tasks.length === 0) {
     updateCardContent(cardId, null, card.elements.filter((e) => e.checked));
+    clearCardNeedsSummary(cardId); // 中身を書いたので作り直し待ちを解く (#195)
     return getSummaryCard(cardId);
   }
   const checkedElements = card.elements.filter((e) => e.checked);
@@ -191,6 +193,9 @@ export async function regenerateCard(cardId: number, dateLabel?: string): Promis
   // 安いタイトル生成が詰まると、高い要素分解(57秒かけて成功)の結果まで失われていた。
   // 高い処理の成果を、安い処理の成否に人質に取らせない
   updateCardContent(cardId, dateLabel ?? null, elements);
+  // **書けた時点で印を消す。**上流が落ちて代替要素で埋めた場合も「書けた」に含める —
+  // #191 でそれを終端の状態と決めたので、無限に作り直しへ戻さない (#195)
+  clearCardNeedsSummary(cardId);
   log("archive", `card#${cardId} regenerated: ${tasks.length} tasks -> ${elements.length} elements`);
 
   // タイトル: 見出しラベルはコスト優先ルーティング(定型)、件数は機械で付与(LLMに数えさせない)。

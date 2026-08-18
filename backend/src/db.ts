@@ -409,6 +409,9 @@ function claimInTransaction(taskIds: number[], cardId: number): ClaimResult {
   const readCard = db().prepare("SELECT task_ids, frozen FROM summary_cards WHERE id = ?");
   const writeCard = db().prepare("UPDATE summary_cards SET task_ids = ? WHERE id = ?");
   const dropCard = db().prepare("DELETE FROM summary_cards WHERE id = ?");
+  // #195: 作り直し待ちの印。**トランザクションの中で立てる** — commit 後・要約前に
+  // プロセスが止まっても、次の起動で見つかるようにするため (Codexレビュー指摘)
+  const markDirty = db().prepare("UPDATE summary_cards SET needs_summary = 1 WHERE id = ?");
 
   // **押さえる前の持ち主を控える。**#196 の競合で「archived=0 なのに古いカードIDが残る」行が
   // ありうるので、その行を押さえたときは**古いカードの索引から外す**必要がある。
@@ -453,6 +456,11 @@ function claimInTransaction(taskIds: number[], cardId: number): ClaimResult {
   const ids = new Set<number>(JSON.parse((readCard.get(cardId) as any).task_ids));
   for (const id of claimed) ids.add(id);
   writeCard.run(JSON.stringify([...ids]), cardId);
+
+  // 中身が変わったカードには作り直し待ちを立てる (新カードと、残った旧カード)。
+  // **要約はこの後の非同期処理で作る**ので、そこへ辿り着けなくても印はDBに残る
+  markDirty.run(cardId);
+  for (const stale of staleCards) markDirty.run(stale);
   return { claimed, staleCards };
 }
 
@@ -524,6 +532,22 @@ export function reassignTasksToCard(taskIds: number[], cardId: number) {
   const stmt = db().prepare("UPDATE tasks SET summary_card_id = ? WHERE id = ?");
   for (const id of taskIds) stmt.run(cardId, id);
   db().prepare("UPDATE summary_cards SET task_ids = ? WHERE id = ?").run(JSON.stringify(taskIds), cardId);
+}
+
+/** #195: 要約の作り直しを待っているカード。**起動時の掃除が拾う。**
+ * 「タスクは畳んだが要約は作れていない」状態は `archived=1` なので
+ * `listUnfoldedDoneIds` では見つからない — 別の口が要る */
+export function listCardsNeedingSummary(): number[] {
+  return (
+    db().prepare("SELECT id FROM summary_cards WHERE needs_summary = 1 ORDER BY id").all() as { id: number }[]
+  ).map((r) => r.id);
+}
+
+/** 作り直しが済んだ印。**中身を書けたときだけ消す** (書けていないのに消すと、
+ * 次の起動で拾われなくなる)。上流が落ちて代替要素で埋めた場合も「書けた」に含める —
+ * #191 でそれを終端の状態と決めたので、無限に作り直しへ戻さない */
+export function clearCardNeedsSummary(cardId: number): void {
+  db().prepare("UPDATE summary_cards SET needs_summary = 0 WHERE id = ?").run(cardId);
 }
 
 export function setCardFrozen(cardId: number): void {

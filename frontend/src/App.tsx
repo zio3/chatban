@@ -11,7 +11,7 @@ import { useChatTurn } from "./hooks/useChatTurn";
 import type { Attachment } from "./hooks/useAttachments";
 import { socket } from "./socket";
 import { parseTaskJump } from "./taskJump";
-import type { ChatEntry, FoldedTask, Task } from "./types";
+import type { ChatEntry, CustomLane, FoldedTask, Task } from "./types";
 
 interface Toast {
   tone?: "error" | "info";
@@ -24,6 +24,9 @@ interface Toast {
 export default function App() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [folded, setFolded] = useState<FoldedTask[]>([]);
+  // #19: 有効な任意レーン。**ボードと一緒に届く** — 別のAPIで取りに行くと、
+  // レーン名を変えた直後だけ列とカードの表示がズレる (同じ配信物に載せておけば起きない)
+  const [lanes, setLanes] = useState<CustomLane[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [toast, setToast] = useState<Toast | null>(null);
@@ -70,6 +73,7 @@ export default function App() {
       const b = await api.board();
       setTasks(b.tasks);
       setFolded(b.folded ?? []);
+      setLanes(b.lanes ?? []);
     } catch (e: any) {
       setLoadError(e?.message ?? String(e));
     } finally {
@@ -94,9 +98,11 @@ export default function App() {
     };
     // #72: メインチャットはリロードで新規 (会話は作業記憶。重要事項はプロジェクト前提/タスク経緯メモに
     // 蒸留されて残り、生ログはDBに保存済みで query_log から引ける)。タスクチャットは経緯ログなので復元維持
-    const onBoard = (p: { tasks: Task[]; folded?: FoldedTask[] }) => {
+    const onBoard = (p: { tasks: Task[]; folded?: FoldedTask[]; lanes?: CustomLane[] }) => {
       setTasks(p.tasks);
       if (p.folded) setFolded(p.folded);
+      // **空配列も反映する。**`if (p.lanes)` にすると最後の1本を畳んだときだけ列が残る
+      if (p.lanes) setLanes(p.lanes);
     };
     // Done要約カードの非同期再生成中インジケータ (#56)
     // プロジェクトが切り替わったら全部読み直す (他のタブ/端末での切り替えにも追従する)
@@ -418,6 +424,7 @@ export default function App() {
             tasks={visibleTasks}
             allTasks={visibleTasks}
             folded={folded}
+            lanes={lanes}
             onMove={moveTask}
             onOpenTask={openTask}
             approvedIds={approvedIds}
@@ -447,6 +454,7 @@ export default function App() {
             lastDetailTaskRef.current = undefined;
           }}
           onJumpToBoard={jumpToBoard}
+          lanes={lanes}
           taskById={new Map(tasks.map((t) => [t.id, t]))}
           onOpenTask={openTask}
           onRestored={() => {

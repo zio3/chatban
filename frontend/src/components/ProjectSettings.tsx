@@ -39,6 +39,9 @@ export default function ProjectSettings() {
 
   const [editing, setEditing] = useState<number | null>(null);
   const [draftName, setDraftName] = useState("");
+  // #19: 任意レーンの表示名。**空にすると畳む** (サーバーが中身を todo へ戻してから畳む)。
+  // 「有効にする」チェックボックスは置かない — 名前がその箱の意味なので、名前の有無だけで決める
+  const [draftLanes, setDraftLanes] = useState<[string, string]>(["", ""]);
 
   const load = useCallback(() => {
     api
@@ -154,12 +157,40 @@ export default function ProjectSettings() {
                   className="w-full rounded-lg border border-slate-300 px-3 py-1.5 text-sm"
                   placeholder="プロジェクト名"
                 />
+                {/* #19: 任意レーン。既定は0本で、ふつうは空のまま = 4列のボード。
+                    「版があるもの」(制作物の素材など) のように、Doneへ流さず常時見えていてほしい
+                    ものを置く列が要るときだけ名前を付ける */}
+                <div className="rounded-lg border border-slate-200 bg-slate-50 p-2.5">
+                  <div className="mb-1.5 text-xs font-bold text-slate-600">任意レーン (省略可)</div>
+                  <p className="mb-2 text-[11px] leading-relaxed text-slate-500">
+                    Review と Done の間に最大2本まで足せます。<b>名前を付けた列だけが現れます。</b>
+                    Todo・In Progress と同じ扱いで、ここからDoneへは直接行けません。
+                    <br />
+                    名前を消すと列は畳まれ、<b>そこにあったタスクは Todo へ戻ります</b> (消えません)。
+                  </p>
+                  {[0, 1].map((i) => (
+                    <input
+                      key={i}
+                      data-testid={`lane-label-${i + 1}`}
+                      value={draftLanes[i]}
+                      onChange={(e) =>
+                        setDraftLanes((d) => (i === 0 ? [e.target.value, d[1]] : [d[0], e.target.value]))
+                      }
+                      className="mb-1.5 w-full rounded-lg border border-slate-300 px-3 py-1.5 text-sm"
+                      placeholder={i === 0 ? "1本目の列名 (例: 素材)" : "2本目の列名 (空欄なら足しません)"}
+                    />
+                  ))}
+                </div>
                 <div className="flex gap-2">
                   <button
                     disabled={busy}
                     onClick={() =>
                       run(async () => {
-                        await api.updateProject(p.id, { name: draftName });
+                        await api.updateProject(p.id, {
+                          name: draftName,
+                          custom1Label: draftLanes[0],
+                          custom2Label: draftLanes[1],
+                        });
                         setEditing(null);
                       })
                     }
@@ -222,6 +253,10 @@ export default function ProjectSettings() {
                     onClick={() => {
                       setEditing(p.id);
                       setDraftName(p.name);
+                      setDraftLanes([
+                        p.lanes.find((l) => l.key === "custom1")?.label ?? "",
+                        p.lanes.find((l) => l.key === "custom2")?.label ?? "",
+                      ]);
                     }}
                     className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-100"
                   >

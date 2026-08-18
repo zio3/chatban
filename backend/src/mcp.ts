@@ -15,9 +15,9 @@ import {
   QUERY_LOG_DESCRIPTION,
   REJECTED_DESCRIPTION,
   REORDER_DESCRIPTION,
-  AGENT_STATUS_VALUES,
-  REORDERABLE_STATUSES,
-  STATUS_DESCRIPTION,
+  agentStatusValues,
+  reorderableStatuses,
+  statusDescription,
   SUMMARY_DESCRIPTION,
   UPDATE_TASKS_DESCRIPTION,
 } from "./chat.js";
@@ -38,12 +38,10 @@ import {
 } from "./db.js";
 import { boardDelta, formatBoardUpdate } from "./boardState.js";
 import { contextReference, contextTemplateHint } from "./contextTemplate.js";
-import { currentProjectId, getProject } from "./store.js";
+import { currentProjectId, customLanes, getProject } from "./store.js";
 import type { TaskStatus } from "./types.js";
 
 // 値の一覧はチャット側と共有する。入口ごとに書き分けると必ずズレる (#92 #108 #114 #125 #126)
-const STATUS = z.enum(AGENT_STATUS_VALUES);
-
 /** boolean を文字列で送ってくるMCPクライアントがある (実測: Claude Code から
  * reference=true を渡すと "true" が届き、z.boolean() が弾いた)。
  * 呼ぶ側の実装差でツールが使えなくなるので、受け側で吸収する。
@@ -103,6 +101,14 @@ function currentProject() {
 export function buildMcpServer(onEvent: (kind: "board" | "proposals") => void): McpServer {
   const server = new McpServer({ name: "chatban", version: "0.1.0" });
 
+  // #19: このサーバーは接続ごと (=プロジェクトごと) に組み立てられるので、
+  // **有効な任意レーンだけを enum に入れられる。**#110 でメンバーの有無でスキーマを変えていたのと同じ形。
+  // 値と説明はチャットと同じ関数から作る — 入口ごとに書くとズレる (#92 #108 #114)。
+  // **モジュール直下では作れない** (プロジェクトスコープの外で走り、既定プロジェクトのレーンで固まる)
+  const LANES = customLanes();
+  const STATUS = z.enum(agentStatusValues(LANES) as [string, ...string[]]);
+  const STATUS_DESC = statusDescription(LANES);
+
   // #179: 以前はここで「メンバーが居ないプロジェクトなら assignee をスキーマから外す」
   // という分岐 (#109/#110) をしていた。担当者そのものが無くなったので分岐ごと消えている
 
@@ -114,7 +120,7 @@ export function buildMcpServer(onEvent: (kind: "board" | "proposals") => void): 
         tasks: z.array(
           z.object({
             title: z.string(),
-            status: STATUS.optional().describe(`省略時はtodo。${STATUS_DESCRIPTION}`),
+            status: STATUS.optional().describe(`省略時はtodo。${STATUS_DESC}`),
             context: z.string().optional().describe("登録に至った経緯・論点・決定事項 (経緯メモの初期値)"),
             summary: z.string().optional().describe(SUMMARY_DESCRIPTION),
             due: z.string().optional().describe(DUE_DESCRIPTION),
@@ -149,7 +155,7 @@ export function buildMcpServer(onEvent: (kind: "board" | "proposals") => void): 
           z.object({
             id: z.number().int().describe("タスクID。会話で「#112」と呼ばれるものと同じで、tasks テーブルの主キー(id)。プロジェクトごとに1から振られるので、別プロジェクトの#112とは別物"),
             title: z.string().optional(),
-            status: STATUS.optional().describe(STATUS_DESCRIPTION),
+            status: STATUS.optional().describe(STATUS_DESC),
             summary: z.string().optional().describe(SUMMARY_DESCRIPTION),
             context: z
               .string()
@@ -255,12 +261,12 @@ export function buildMcpServer(onEvent: (kind: "board" | "proposals") => void): 
     {
       description: REORDER_DESCRIPTION,
       inputSchema: {
-        status: z.enum(REORDERABLE_STATUSES).describe("対象の列"),
+        status: z.enum(reorderableStatuses(LANES) as [string, ...string[]]).describe("対象の列"),
         ids: z.array(z.number().int()).describe("その列のタスクを並べたい順に"),
       },
     },
     async ({ status, ids }) => {
-      const r = reorderTasks(ids, status);
+      const r = reorderTasks(ids, status as TaskStatus);
       onEvent("board");
       return text(r);
     }

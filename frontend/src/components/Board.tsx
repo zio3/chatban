@@ -3,15 +3,34 @@ import type { DragEndEvent, DragOverEvent, DragStartEvent } from "@dnd-kit/core"
 import { SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { useState } from "react";
-import { STATUS_LABELS } from "../types";
-import type { FoldedTask, Task, TaskStatus } from "../types";
+import { statusLabel } from "../types";
+import type { CustomLane, FoldedTask, Task, TaskStatus } from "../types";
 
-const COLUMNS: { key: TaskStatus; label: string; accent: string }[] = [
+type Column = { key: TaskStatus; label: string; accent: string };
+
+/** 列数ごとの grid 指定。**クラス名を `grid-cols-${n}` で組み立てない** —
+ * Tailwind はソースを文字列として走査するので、実行時に作った名前はCSSが生成されず無効になる */
+const GRID_BY_COLUMNS: Record<number, string> = {
+  4: "min-w-[880px] grid-cols-4",
+  5: "min-w-[1100px] grid-cols-5",
+  6: "min-w-[1320px] grid-cols-6",
+};
+
+/** 固定4列。**任意レーンが0本ならこれがそのまま列になる** (既定はこちら) */
+const BASE_COLUMNS: Column[] = [
   { key: "todo", label: "Todo", accent: "border-slate-400" },
   { key: "inprogress", label: "In Progress", accent: "border-blue-500" },
   { key: "review", label: "Review", accent: "border-amber-500" },
   { key: "done", label: "Done", accent: "border-emerald-500" },
 ];
+
+/** #19: 任意レーンを Review と Done の**間**に差し込む。
+ * Done を末尾に固定するのは、退場ゲート (review → 検収 → done) の順序が読み取れる並びだから */
+function columnsFor(lanes: CustomLane[]): Column[] {
+  const head = BASE_COLUMNS.slice(0, 3);
+  const done = BASE_COLUMNS[3];
+  return [...head, ...lanes.map((l) => ({ key: l.key, label: l.label, accent: "border-violet-500" })), done];
+}
 
 /** 期限バッジ: 超過=赤 / 今日・明日=琥珀 / それ以降=グレー (#44) */
 function dueBadge(due: string): { text: string; cls: string } {
@@ -45,17 +64,21 @@ export function DepChip({
   unresolved,
   onOpen,
   tone = "blocking",
+  lanes = [],
 }: {
   id: number;
   dep?: Task;
   unresolved: boolean;
   onOpen?: (id: number) => void;
+  /** #19: 依存先が任意レーンに居るとき、吹き出しに表示名を出すため。
+   * 省略すると `custom1` という生の値が出る (落ちはしないが人に見せる値ではない) */
+  lanes?: CustomLane[];
   /** blocking=このタスクが待っている先 / waiting=このタスクを待っている側 (#111) */
   tone?: "blocking" | "waiting";
 }) {
   const label = dep
     ? `#${id} ${dep.title}
-${STATUS_LABELS[dep.status]?.label ?? dep.status}${dep.summary ? `
+${statusLabel(dep.status, lanes).label}${dep.summary ? `
 ${dep.summary}` : ""}
 (クリックで詳細)`
     : `#${id} 完了してアーカイブ済み (クリックで詳細)`;
@@ -88,6 +111,7 @@ function TaskCard({
   onToggleApproved,
   openIds,
   taskById,
+  lanes = [],
 }: {
   task: Task;
   overlay?: boolean;
@@ -99,6 +123,8 @@ function TaskCard({
   openIds?: Set<number>;
   /** 依存先の中身を引くための索引 (#111)。アーカイブ済みは載らない */
   taskById?: Map<number, Task>;
+  /** #19: 依存バッジの吹き出しに任意レーンの表示名を出すため */
+  lanes?: CustomLane[];
 }) {
   const depsUnresolved = task.blockedBy?.some((id) => openIds?.has(id)) ?? false;
   return (
@@ -138,7 +164,7 @@ function TaskCard({
             >
               ⛓{" "}
               {task.blockedBy.map((id) => (
-                <DepChip key={id} id={id} dep={taskById?.get(id)} unresolved={!!openIds?.has(id)} onOpen={onOpen} />
+                <DepChip key={id} id={id} dep={taskById?.get(id)} unresolved={!!openIds?.has(id)} onOpen={onOpen} lanes={lanes} />
               ))}
             </span>
           )}
@@ -180,6 +206,7 @@ function SortableCard({
   onToggleApproved,
   openIds,
   taskById,
+  lanes,
 }: {
   task: Task;
   onOpen: (id: number) => void;
@@ -187,6 +214,7 @@ function SortableCard({
   onToggleApproved?: (id: number) => void;
   openIds?: Set<number>;
   taskById?: Map<number, Task>;
+  lanes?: CustomLane[];
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: task.id });
   return (
@@ -204,6 +232,7 @@ function SortableCard({
         onToggleApproved={onToggleApproved}
         openIds={openIds}
         taskById={taskById}
+        lanes={lanes}
       />
     </div>
   );
@@ -267,8 +296,9 @@ function Column({
   onCommitApproved,
   openIds,
   taskById,
+  lanes,
 }: {
-  col: (typeof COLUMNS)[number];
+  col: Column;
   tasks: Task[];
   folded?: FoldedTask[];
   onOpenTask: (id: number) => void;
@@ -280,6 +310,8 @@ function Column({
   openIds?: Set<number>;
   /** 依存先の中身を引くための索引 (#111)。アーカイブ済みは載らない */
   taskById?: Map<number, Task>;
+  /** #19: 依存バッジの吹き出し用にカードへ流す */
+  lanes?: CustomLane[];
 }) {
   // Doneは「置き場」でなく「検収の結果」: D&Dでは到達できない (#57)
   const { setNodeRef, isOver } = useDroppable({ id: col.key, disabled: col.key === "done" });
@@ -316,7 +348,7 @@ function Column({
           // Done列の生カードはドラッグさせない。Doneへは入れられない(#57)ので、出られないほうが一貫する。
           // 戻したいときはチャットで「#xxを戻して」
           col.key === "done" ? (
-            <TaskCard key={t.id} task={t} onOpen={onOpenTask} openIds={openIds} taskById={taskById} />
+            <TaskCard key={t.id} task={t} onOpen={onOpenTask} openIds={openIds} taskById={taskById} lanes={lanes} />
           ) : (
             <SortableCard
               key={t.id}
@@ -326,6 +358,7 @@ function Column({
               onToggleApproved={onToggleApproved}
               openIds={openIds}
               taskById={taskById}
+              lanes={lanes}
             />
           )
         )}
@@ -345,6 +378,7 @@ export default function Board({
   tasks,
   allTasks,
   folded,
+  lanes,
   onMove,
   onOpenTask,
   approvedIds,
@@ -355,6 +389,8 @@ export default function Board({
   /** 依存の判定に使う母集団。フィルタで隠れているものも含む全件 (#41/#90) */
   allTasks: Task[];
   folded: FoldedTask[];
+  /** #19: 有効な任意レーン (0〜2本)。空ならこれまでどおりの4列 */
+  lanes: CustomLane[];
   onMove: (move: MovePayload) => void;
   onOpenTask: (id: number) => void;
   approvedIds: Set<number>;
@@ -375,8 +411,10 @@ export default function Board({
   const openIds = new Set(allTasks.filter((t) => t.status !== "done").map((t) => t.id));
   const taskById = new Map(allTasks.map((t) => [t.id, t]));
 
+  const columns = columnsFor(lanes);
+
   function locate(overId: number | TaskStatus): { status: TaskStatus; index: number } | null {
-    if (COLUMNS.some((c) => c.key === overId)) {
+    if (columns.some((c) => c.key === overId)) {
       return { status: overId as TaskStatus, index: byStatus(overId as TaskStatus).length };
     }
     const overTask = tasks.find((t) => t.id === overId);
@@ -405,9 +443,12 @@ export default function Board({
 
   return (
     <DndContext sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
-      {/* #64: スマホは横スクロールで4列を維持 (かんばんの比喩を崩さない) */}
-      <div className="grid min-w-[880px] grid-cols-4 gap-3">
-        {COLUMNS.map((col) => (
+      {/* #64: 狭い画面では横スクロールで列数を維持する (かんばんの比喩を崩さない)。
+          #19: 任意レーンを足すと必要幅が上がる (4列=880px / 5列=1100px / 6列=1320px)。
+          **有効化していないボードは 880px のまま** — 既定0本なので影響を受けない。
+          Tailwind は文字列を静的に走査するので、クラス名は組み立てず全パターンを書く */}
+      <div className={`grid gap-3 ${GRID_BY_COLUMNS[columns.length] ?? GRID_BY_COLUMNS[4]}`}>
+        {columns.map((col) => (
           <Column
             key={col.key}
             col={col}
@@ -419,10 +460,11 @@ export default function Board({
             onCommitApproved={col.key === "review" ? onCommitApproved : undefined}
             openIds={openIds}
             taskById={taskById}
+            lanes={lanes}
           />
         ))}
       </div>
-      <DragOverlay>{active && <TaskCard task={active} overlay />}</DragOverlay>
+      <DragOverlay>{active && <TaskCard task={active} overlay lanes={lanes} />}</DragOverlay>
     </DndContext>
   );
 }

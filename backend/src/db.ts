@@ -1,8 +1,8 @@
 import { hooks } from "./hooks.js";
 import { log } from "./log.js";
-import { admin, currentProjectId, db, projectReadonly } from "./store.js";
+import { admin, currentProjectId, customLanes, db, projectReadonly } from "./store.js";
 import { decodeUnicodeEscapes } from "./text.js";
-import type { Task, TaskStatus } from "./types.js";
+import type { CustomLane, Task, TaskStatus } from "./types.js";
 
 // #179: 担当者・割り振りは機能ごと落とした (個人利用に特化)。
 // tasks.assignee / assign_reason と members / proposals / assignment_history は
@@ -51,8 +51,8 @@ function rowToTask(r: any): Task {
 export function createTask(title: string, status: TaskStatus = "todo"): Task {
   // 新規作成でいきなり Done は作れない。検収は「実物を確かめた」記録なので、
   // 生まれた瞬間に確かめ終わっているものは無い (mayEnterDone と同じ理由)
-  if (!isTaskStatus(status)) {
-    log("api", `新規作成で未知の status=${JSON.stringify(status)} を指定されたので todo にしました: ${title}`);
+  if (!isUsableStatus(status, customLanes())) {
+    log("api", `新規作成で置けない status=${JSON.stringify(status)} を指定されたので todo にしました: ${title}`);
     status = "todo";
   }
   if (status === "done") {
@@ -92,9 +92,32 @@ export type TaskPatch = Partial<
  * "banana" のような値がそのまま保存されると、ボードは4列でしか抽出しないのでタスクが
  * どの列にも出なくなり、詳細を開くと STATUS_LABELS[status] が undefined で画面が落ちる
  * (自動レビュー指摘)。「消えた」ように見えて実在する、が一番たちが悪い */
-export const TASK_STATUSES = ["todo", "inprogress", "review", "done"] as const;
+export const TASK_STATUSES = ["todo", "inprogress", "review", "custom1", "custom2", "done"] as const;
 export function isTaskStatus(v: unknown): v is TaskStatus {
   return typeof v === "string" && (TASK_STATUSES as readonly string[]).includes(v);
+}
+
+/** #19: **そのプロジェクトで実際に置ける列か。**TASK_STATUSES は「値として在る」だけで、
+ * custom1 / custom2 は表示名を付けたプロジェクトにしか存在しない。
+ *
+ * 有効でないレーンを通すと、ボードはそのレーンの列を描かないので**タスクがどこにも出なくなる** —
+ * isTaskStatus の注記にある「消えたように見えて実在する」がそのまま起きる。
+ * 契約 (ツールの enum) 側でも有効なレーンしか出さないが、**選べないことと保存できないことは別**なので
+ * 書き込みの手前にも同じ判定を置く。isTaskStatus と同じで、DBもHTTPも要らない純粋関数 */
+export function isUsableStatus(v: unknown, lanes: CustomLane[]): v is TaskStatus {
+  if (!isTaskStatus(v)) return false;
+  if (v === "custom1" || v === "custom2") return lanes.some((l) => l.key === v);
+  return true;
+}
+
+/** #19: レーンを畳むときに、そこに居たタスクを todo へ戻す。戻した件数を返す。
+ *
+ * **畳むより先に必ず呼ぶ。**表示名を消すとボードはその列を描かなくなるので、中身を置いたままだと
+ * 「保存されているのにどの列にも出ない」タスクができる — isTaskStatus の注記にある
+ * 「消えたように見えて実在する」そのもの。削除ではなく **todo へ戻す** のは、
+ * どこへ行ったか分かる場所が todo だけだから (#102 と同じで、取り返しのつく側に倒す) */
+export function evacuateLane(key: "custom1" | "custom2"): number {
+  return db().prepare("UPDATE tasks SET status = 'todo' WHERE status = ?").run(key).changes;
 }
 
 export const DONE_GATE_RULE =
@@ -144,8 +167,8 @@ export function updateTasks(patches: { id: number; patch: TaskPatch }[]): (Task 
     if (!cur) return undefined;
     // 未知の列は無視する (その行の他の項目は保存する)。REST入口でも弾いているが、
     // ここが最後の砦 — 入口が増えたときに片方だけ直る形にしない
-    if (patch.status !== undefined && !isTaskStatus(patch.status)) {
-      log("api", `#${id} に未知の status=${JSON.stringify(patch.status)} が来たので無視しました`);
+    if (patch.status !== undefined && !isUsableStatus(patch.status, customLanes())) {
+      log("api", `#${id} に置けない status=${JSON.stringify(patch.status)} が来たので無視しました`);
       const { status: _ignored, ...rest } = patch;
       patch = rest; // キーごと落とす (status: undefined を残すと spread で上書きされて消える)
     }

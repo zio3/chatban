@@ -1,5 +1,5 @@
 import { getProjectContext, listTasks } from "./db.js";
-import { currentProjectId } from "./store.js";
+import { currentProjectId, customLanes } from "./store.js";
 import { log } from "./log.js";
 
 // #50: イベントログ型プロンプト + TTL意識の再ベースライン (docs/cost-engineering-log.md)
@@ -14,6 +14,9 @@ const MAX_EVENTS = 40; // イベントが溜まりすぎたら再ベースライ
 interface Snapshot {
   tasks: Map<number, string>; // id -> 索引JSON
   projectContext: string;
+  // #19: 任意レーンの表示名。**基準スナップショットの一部**にしてある —
+  // 名前を変えたら索引の説明文も変わるので、変えた瞬間に再ベースラインが要る
+  lanes: string;
   date: string; // 日付が変わったら再ベースライン (「今日」がプレフィックスに入るため)
 }
 
@@ -66,14 +69,26 @@ function capture(): Snapshot {
       }),
     ])
   );
-  return { tasks, projectContext: getProjectContext() ?? "", date: todayLabel() };
+  return {
+    tasks,
+    projectContext: getProjectContext() ?? "",
+    date: todayLabel(),
+    lanes: customLanes()
+      .map((l) => `${l.key}=${l.label}`)
+      .join(","),
+  };
 }
 
 function buildBaselineText(s: Snapshot): string {
   return [
     `## 今日: ${s.date}`,
     s.projectContext ? `## プロジェクトの前提情報 (全員共有)\n${s.projectContext}\n` : "",
-    "## ボードの索引 — 基準スナップショット (status: todo=未着手, inprogress=作業中, review=レビュー中, done=完了)",
+    `## ボードの索引 — 基準スナップショット (status: todo=未着手, inprogress=作業中, review=レビュー中${s.lanes
+      ? `, ${s.lanes
+          .split(",")
+          .map((x) => x.replace("=", "=「") + "」")
+          .join(", ")}`
+      : ""}, done=完了)`,
     "タイトルは要約品質。詳細(割り振り理由・経緯メモ)が必要なら query_log で取る (SELECT context FROM tasks WHERE id=...)。完了タスクは自動アーカイブされここには載らない。",
     "後続に「変更イベント」がある場合、この索引にそれを適用した状態が現在のボードである。",
     `[${[...s.tasks.values()].join(",")}]`,
@@ -89,7 +104,12 @@ export function getBoardPromptSection(): string {
   const st = state();
   const now = Date.now();
   const needRebase =
-    !st.lastSeen || now - st.lastRequestAt > TTL_MS || st.events.length > MAX_EVENTS || st.lastSeen.date !== todayLabel();
+    !st.lastSeen ||
+    now - st.lastRequestAt > TTL_MS ||
+    st.events.length > MAX_EVENTS ||
+    st.lastSeen.date !== todayLabel() ||
+    // #19: レーン構成が変わったら差分イベントでは表現できない (説明文そのものが変わる)
+    st.lastSeen.lanes !== customLanes().map((l) => `${l.key}=${l.label}`).join(",");
   st.lastRequestAt = now;
 
   if (needRebase) {

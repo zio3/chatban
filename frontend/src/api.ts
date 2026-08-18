@@ -1,5 +1,5 @@
 import { currentProjectHeader } from "./project";
-import type { ChatResponse, FoldedTask, Task, TaskStatus } from "./types";
+import type { ChatResponse, CustomLane, FoldedTask, Task, TaskStatus } from "./types";
 
 async function json<T>(res: Response): Promise<T> {
   // サーバーは断る理由を {error} で返すので、それをそのまま人に見せる。
@@ -37,6 +37,8 @@ export interface Project {
   openTasks: number;
   /** #117: このプロジェクト用のMCP接続先 */
   mcpUrl: string;
+  /** #19: 有効な任意レーン (0〜2本)。**空配列がふつう** */
+  lanes: CustomLane[];
 }
 
 /** #199: アプリ全体の設定。プロジェクトごとではなく1つ。
@@ -64,7 +66,12 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(patch),
     }).then((r) => json<Settings>(r)),
-  updateProject: (id: number, patch: { name?: string; archived?: boolean }) =>
+  updateProject: (
+    id: number,
+    // #19: custom1Label / custom2Label は**空文字を送るとそのレーンを畳む**
+    // (サーバー側でそこに居たタスクを todo へ戻してから畳む)。undefined は「触らない」
+    patch: { name?: string; archived?: boolean; custom1Label?: string; custom2Label?: string }
+  ) =>
     apiFetch(`/api/projects/${id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
@@ -78,7 +85,7 @@ export const api = {
   purgeTask: (id: number) => apiFetch(`/api/trash/${id}`, { method: "DELETE" }).then((r) => json<{ ok: boolean }>(r)),
   board: () =>
     apiFetch("/api/board").then((r) =>
-      json<{ tasks: Task[]; folded: FoldedTask[] }>(r)
+      json<{ tasks: Task[]; folded: FoldedTask[]; lanes: CustomLane[] }>(r)
     ),
   updateTask: (id: number, patch: Partial<Pick<Task, "title" | "summary" | "sort">> & { status?: TaskStatus }) =>
     apiFetch(`/api/tasks/${id}`, {

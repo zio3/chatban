@@ -7,8 +7,8 @@ import { useChatTurn } from "../hooks/useChatTurn";
 import AttachmentTray from "./AttachmentTray";
 import ThinkingIndicator from "./ThinkingIndicator";
 import { DepChip } from "./Board";
-import { STATUS_LABELS } from "../types";
-import type { ChatEntry, Task } from "../types";
+import { statusLabel } from "../types";
+import type { ChatEntry, CustomLane, Task } from "../types";
 
 export default function TaskDetailPanel({
   task,
@@ -18,6 +18,7 @@ export default function TaskDetailPanel({
   onRestored,
   taskById,
   onOpenTask,
+  lanes = [],
 }: {
   task: Task;
   /** true: タスクは完了→アーカイブ済み (表示は最後のスナップショット) */
@@ -29,8 +30,10 @@ export default function TaskDetailPanel({
   /** #111: 依存先の中身をチップから引く索引と、そこへ飛ぶための導線 */
   taskById?: Map<number, Task>;
   onOpenTask?: (id: number) => void;
+  /** #19: 任意レーンの表示名。列バッジと依存チップに使う */
+  lanes?: CustomLane[];
 }) {
-  const status = STATUS_LABELS[task.status];
+  const status = statusLabel(task.status, lanes);
   // #111: このタスクを待っている側 (被依存)。データは blocked_by にあるので逆引きで足りる。
   // 索引に載るのは未完了タスクだけだが、完了したものはもう待っていないので実用上それでよい
   const dependents = [...(taskById?.values() ?? [])].filter((t) => t.blockedBy?.includes(task.id));
@@ -169,6 +172,7 @@ export default function TaskDetailPanel({
                   dep={taskById?.get(id)}
                   unresolved={(taskById?.get(id)?.status ?? "done") !== "done"}
                   onOpen={onOpenTask}
+                  lanes={lanes}
                 />
               ))}
             </span>
@@ -179,7 +183,7 @@ export default function TaskDetailPanel({
             <span className="text-[10px] text-slate-400" title="このタスクの完了を待っているタスク">
               🔓 これ待ち{" "}
               {dependents.map((d) => (
-                <DepChip key={d.id} id={d.id} dep={d} unresolved tone="waiting" onOpen={onOpenTask} />
+                <DepChip key={d.id} id={d.id} dep={d} unresolved tone="waiting" onOpen={onOpenTask} lanes={lanes} />
               ))}
             </span>
           )}

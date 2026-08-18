@@ -1,21 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, type Project, type Settings } from "../api";
 import { socket } from "../socket";
+import { isOlder } from "../settingsOrder";
 import { gotoProject, projectIdFromUrl } from "../project";
-
-/** #199: 届いた設定が、いま持っているものより古いか。
- *
- * (起動世代, 版) の辞書順で比べる。**世代だけ・版だけでは足りない** —
- * 版はプロセス内カウンタなので再起動で0に戻り、版だけだと再起動後の更新が永久に適用されない。
- * 起動ごとのランダムIDだと同一性しか分からず順序が無いので、旧プロセスで始まった遅延応答が
- * 新プロセスの状態を「別の起動だから」と巻き戻す。世代を単調増加させると全順序になり、
- * どの経路がどの順で着いても「古いほうを捨てる」だけで決まる。
- *
- * 同じ (世代, 版) は同じ内容なので、どちらを採っても結果は変わらない (古いとは呼ばない) */
-export function isOlder(incoming: Settings, current: Settings): boolean {
-  if (incoming.bootGeneration !== current.bootGeneration) return incoming.bootGeneration < current.bootGeneration;
-  return incoming.revision < current.revision;
-}
 
 // #86: プロジェクト管理。プロジェクト = SQLiteファイル1つ。
 // 切り替えるとボード・チャット・前提情報がまとめて入れ替わる。

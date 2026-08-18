@@ -32,6 +32,10 @@ function open(path: string): Database.Database {
   mkdirSync(dirname(path), { recursive: true });
   const db = new Database(path);
   db.pragma("journal_mode = WAL");
+  // #199: 既定は0 (待たずに即 SQLITE_BUSY)。開発中は start-dev.ps1 の起動と tsx watch の
+  // 再起動が重なりうるし、E2Eサーバーと開発サーバーも同時に動く。書き込みが一瞬かち合っただけで
+  // 起動に失敗するのは割に合わないので、少しだけ待つ (自動レビュー指摘)
+  db.pragma("busy_timeout = 5000");
   return db;
 }
 
@@ -565,19 +569,33 @@ const SUGGEST_KEY = "suggest.enabled";
  * 遅延応答が新プロセスの状態を巻き戻せてしまう (自動レビュー3周目の指摘)。
  * 世代を単調増加させると (世代, 版) の組が全順序になり、どの経路の到着順でも「古いほうを捨てる」で決まる。
  *
- * 起動ごとに1行書くだけ。auth.% / model.% / suggest.enabled.% の掃除には当たらないキー名にしてある */
+ * 起動ごとに1行書くだけ。auth.% / model.% / suggest.enabled.% の掃除には当たらないキー名にしてある。
+ *
+ * **読んで・足して・書くを1文で行う。**SELECT→計算→UPSERT に分けると、同時に立ち上がった
+ * 2つのプロセスが同じ旧値を読んで同じ世代を名乗る (自動レビュー指摘)。単一の UPSERT なら
+ * SQLite の書き込みロックの中で完結するので、必ず別々の番号になる。
+ *
+ * 値が壊れていた場合 (数字以外) は、1へ戻さず**現在のUNIX秒**を採る。1に戻すと過去の世代より
+ * 小さくなり、旧プロセスの応答を「新しい」と誤って採用してしまう。UNIX秒は起動回数
+ * (せいぜい数万) より必ず大きいので、単調性がそこで途切れない */
 export function nextBootGeneration(): number {
-  const r = admin.prepare("SELECT value FROM settings WHERE key = 'boot.generation'").get() as
-    | { value: string }
-    | undefined;
-  // 壊れた値・欠損は0扱い。増やす方向にしか動かないので、読めなければ1から振り直せばよい
-  const prev = Number(r?.value);
-  const next = (Number.isFinite(prev) ? prev : 0) + 1;
-  admin
+  const fallback = Math.floor(Date.now() / 1000);
+  const row = admin
     .prepare(
-      "INSERT INTO settings (key, value, updated_at) VALUES ('boot.generation', ?, datetime('now', 'localtime')) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at"
+      `INSERT INTO settings (key, value, updated_at)
+         VALUES ('boot.generation', '1', datetime('now', 'localtime'))
+       ON CONFLICT(key) DO UPDATE SET
+         value = CAST(
+           CASE WHEN settings.value GLOB '[0-9]*' THEN CAST(settings.value AS INTEGER) + 1
+                ELSE @fallback END
+           AS TEXT),
+         updated_at = datetime('now', 'localtime')
+       RETURNING value`
     )
-    .run(String(next));
+    .get({ fallback }) as { value: string } | undefined;
+  const next = Number(row?.value);
+  // RETURNING が空・非数値で返ることは無い想定だが、ここで0を返すと全順序が崩れるので落ちる方を選ぶ
+  if (!Number.isFinite(next) || next <= 0) throw new Error(`boot.generation を採番できませんでした: ${row?.value}`);
   return next;
 }
 

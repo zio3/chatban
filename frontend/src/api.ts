@@ -45,18 +45,7 @@ export interface Project {
 export interface Settings {
   /** AI提案チップ(#75)を出すか。OFFの間はLLMを呼ばない */
   suggestEnabled: boolean;
-  /** 版。書き換えるたびに増える。HTTP応答と socket イベントの到着順が入れ替わっても
-   * 古い値で新しい値を上書きしないよう、受け手は「これが大きいときだけ適用する」 */
-  revision: number;
-  /** サーバーの起動世代。再起動のたびに1つ増え、DBに残るので再起動をまたいで単調増加する。
-   * revision は再起動で0に戻るため、これと組にして初めて (世代, 版) が全順序になる。
-   * ランダムIDでは同一性しか分からず、旧プロセスの遅延応答が新しい状態を巻き戻せてしまう */
-  bootGeneration: number;
 }
-
-/** 書ける設定だけ。revision / bootGeneration はサーバーが決める読み取り専用の値で、
- * 送るとサーバー側で「知らないフィールド」として400になる (契約を型でも合わせる) */
-export type SettingsPatch = { suggestEnabled: boolean };
 
 export const api = {
   projects: () => apiFetch("/api/projects").then((r) => json<{ projects: Project[] }>(r)),
@@ -69,7 +58,7 @@ export const api = {
   activateProject: (id: number) =>
     apiFetch(`/api/projects/${id}/activate`, { method: "POST" }).then((r) => json<{ projects: Project[] }>(r)),
   settings: () => apiFetch("/api/settings").then((r) => json<Settings>(r)),
-  updateSettings: (patch: SettingsPatch) =>
+  updateSettings: (patch: Settings) =>
     apiFetch("/api/settings", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },

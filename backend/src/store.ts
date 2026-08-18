@@ -54,10 +54,6 @@ CREATE TABLE IF NOT EXISTS projects (
   file TEXT NOT NULL,
   created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
 );
-CREATE TABLE IF NOT EXISTS boot_generations (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  started_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
-);
 CREATE TABLE IF NOT EXISTS settings (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL,
@@ -94,11 +90,6 @@ CREATE TABLE IF NOT EXISTS settings (
     .prepare("DELETE FROM settings WHERE key LIKE 'auth.%' OR key LIKE 'model.%' OR key LIKE 'suggest.enabled.%'")
     .run().changes;
   if (purged > 0) log("schema", `認証・モデル・プロジェクト別提案設定 ${purged}件を削除しました (#180 / #181 / #199)`);
-
-  // #199: 起動世代の持ち方を settings の1行から boot_generations (AUTOINCREMENT) へ移した。
-  // ここは**消すだけでは足りない**唯一の移行 — 番号を引き継がないと、開いたままのタブが
-  // 持っている世代のほうが大きくなり、以後の更新が全部「古い」と判定される
-  migrateBootGeneration(db);
 
   // #181: 計測系のテーブルを落とす。llm_calls (呼び出しごとのトークン・単価・概算額) と
   // model_prices (182件の料金表)。**読まないだけにして残さない** — #179/#180 と同じ判断で、
@@ -593,81 +584,6 @@ export function setSuggestEnabled(enabled: boolean): void {
         "INSERT INTO settings (key, value, updated_at) VALUES (?, '0', datetime('now', 'localtime')) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at"
       )
       .run(SUGGEST_KEY);
-}
-
-/** #199: 起動の世代番号。プロセスが上がるたびに1つ増え、DBに残るので**再起動をまたいで単調増加**する。
- *
- * 設定の版 (revision) はプロセス内カウンタなので再起動で0に戻る。受け手が
- * 「持っている版より新しいときだけ適用する」判定をすると、再起動後の更新が永久に適用されない。
- * かといって起動ごとのランダムIDだと同一性しか分からず順序が分からない — 旧プロセスの
- * 遅延応答が新プロセスの状態を巻き戻せてしまう。世代を単調増加させると (世代, 版) の組が
- * 全順序になり、どの経路の到着順でも「古いほうを捨てる」で決まる。
- *
- * **採番は AUTOINCREMENT に任せる。**settings に数値を文字列で持って自前で +1 していたが、
- * それだと「SELECT→計算→UPSERT が原子的か」「数字列をどう厳密に判定するか」
- * 「壊れていたら何に逃がすか」「逃がす値が過去の世代を下回らないか」「時計が後退したら」を
- * 全部この関数で背負うことになり、自動レビューで4周連続して穴が出た (GLOB が先頭1文字しか
- * 見ない / REAL束縛で "1787019867.0" になって逃げ続ける / 破損値から時刻へ戻ると過去を下回る)。
- *
- * SQLite の AUTOINCREMENT は sqlite_sequence に最大値を持ち、**行を消しても再利用しない**。
- * つまり単調性はDBが保証する。INSERT 1文なので原子性も書き込みロックの中で閉じる。
- * TEXT を数値として解釈する経路が消えるので、破損値も時計依存も無くなる。
- *
- * 履歴は要らないので、採番したら古い行は落とす。**ただし1行は必ず残る** —
- * 次の採番は max(sqlite_sequence.seq, テーブル内の最大rowid) + 1 なので、
- * 残した1行が sqlite_sequence の破損 (外部から 'abc' や NULL を書かれた等) に対する保険になる。
- * 全部消すと保険も消えるので、`WHERE id < ?` で自分より小さいものだけ落とす */
-export function nextBootGeneration(): number {
-  const id = Number(admin.prepare("INSERT INTO boot_generations DEFAULT VALUES").run().lastInsertRowid);
-  // **safe integer の範囲で確かめる。**ここを超えると JSON を経由した時点で隣接する世代が
-  // 同じ値に丸まり、isOlder の全順序が壊れる。0や壊れた値を黙って返すより、起動を止めて気づかせる
-  if (!Number.isSafeInteger(id) || id <= 0)
-    throw new Error(
-      `boot.generation を採番できませんでした (値: ${id})。` +
-        `管理DB (data/chatban-admin.db) の boot_generations と sqlite_sequence を確認してください`
-    );
-  admin.prepare("DELETE FROM boot_generations WHERE id < ?").run(id);
-  return id;
-}
-
-/** #199: 途中まで settings の 'boot.generation' 行で世代を持っていたぶんを引き継ぐ。
- *
- * 引き継がずに1から始めると、**開いたままのタブが持っている世代のほうが大きくなり**、
- * 以後どの更新も「古い」と判定されて反映されなくなる (このPRの中で番号の桁が
- * エポックミリ秒まで上がっているので、放っておくと必ずそうなる)。
- *
- * **sqlite_sequence を直接いじらない。**旧値の行を rowid 指定で1件入れるだけにする。
- * AUTOINCREMENT のテーブルへ明示 rowid で INSERT すると SQLite が seq をその値まで上げてくれる
- * ので、こちらで整合を取る必要がない。直接 UPDATE していたときは
- * `SET seq = MAX(seq, ?)` と書いていたが、SQLite のスカラー MAX は型順序で比べるので
- * seq が壊れて `'abc'` や NULL になっていると修復されず、次の採番が rowid=1 に戻る
- * (実測。自動レビュー8周目の指摘)。明示 INSERT ならその壊れ方も直る (これも実測)。
- *
- * 旧値が読めなければ何もしない (1から始まる) */
-function migrateBootGeneration(db: Database.Database) {
-  // **まとめて1つの書き込みトランザクションにする (BEGIN IMMEDIATE)。**
-  // 「読む→判断する→書く」を素で並べると、2つのプロセスが同時に初回移行へ入ったときに
-  // 両方が max=NULL を見て同じ id を INSERT し、片方が PRIMARY KEY 制約で**起動に失敗する**
-  // (自動レビュー9周目の指摘)。immediate なら先にロックを取った側だけが読み書きし、
-  // もう片方は busy_timeout ぶん待ってから、書き込み済みの状態を読む。
-  // 念のため INSERT OR IGNORE にもしてある (待ち時間を超えた等で競り合っても落とさない)
-  db.transaction(() => {
-    const legacy = db.prepare("SELECT value FROM settings WHERE key = 'boot.generation'").get() as
-      | { value: string }
-      | undefined;
-    if (!legacy) return;
-    const n = Number(legacy.value);
-    if (Number.isSafeInteger(n) && n > 0) {
-      // 既に採番が進んでいるなら触らない (移行は1回で済むが、手で戻されたときに巻き戻さない)
-      const max = (db.prepare("SELECT MAX(id) m FROM boot_generations").get() as { m: number | null }).m;
-      if (max === null || max < n) {
-        db.prepare("INSERT OR IGNORE INTO boot_generations (id) VALUES (?)").run(n);
-        db.prepare("DELETE FROM boot_generations WHERE id < ?").run(n);
-        log("schema", `起動世代を settings から引き継ぎました (#199): ${n}`);
-      }
-    }
-    db.prepare("DELETE FROM settings WHERE key = 'boot.generation'").run();
-  }).immediate();
 }
 
 /** #115/#116: 新規プロジェクトの前提情報の下書き。

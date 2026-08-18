@@ -24,7 +24,6 @@ import {
   reportOrphanFiles,
   setActiveProjectId,
   setProjectArchived,
-  nextBootGeneration,
   setSuggestEnabled,
   suggestEnabled,
   trashProject,
@@ -562,32 +561,8 @@ app.delete("/api/projects/:id", (req, res) => {
 // #199: アプリ全体の設定。いまは提案チップのON/OFF 1つだけ。
 // **接続設定 (宛先・キー・モデル) はここに戻さない** — #182 で config.json 1枚に集約した。
 // ここに置くのは「持ち主の好み」だけで、実効値がDBと設定ファイルに二重化するものは置かない
-// 版。書き換えるたびに増やし、GET・PATCH応答・配信イベントの全てに載せる。
-// 受け手は「自分が持っているより新しいときだけ適用する」ことで、HTTP応答と socket イベントの
-// 到着順が入れ替わっても古い値が新しい値を上書きしない (自動レビュー指摘)。
-//
-// **版だけでは足りない。**プロセスを再起動すると版は0に戻るので、受け手が持っている版のほうが
-// 大きくなり、以後どの更新も適用されなくなる。かといって「GETだけ無条件」にすると、
-// GETの応答待ちの間に届いた新しい配信を、後から返ってきた古いGETが巻き戻す (2周目の指摘)。
-//
-// 起動ごとのランダムIDを組にする案も採らない。**同一性しか分からず順序が分からない**ので、
-// 旧プロセスで始まった遅延応答が、再起動後のプロセスの状態を「別の起動だから」と巻き戻す
-// (3周目の指摘)。**世代を単調増加させて (世代, 版) を全順序にする** — こうすると
-// どの経路がどの順で着いても「古いほうを捨てる」だけで決まる。
-// tsx watch の再起動が毎日何十回も起きる (#189 の実測) 以上、再起動をまたぐ順序は要る
-const SETTINGS_BOOT_GENERATION = nextBootGeneration();
-let settingsRevision = 0;
-
-function currentSettings(): { suggestEnabled: boolean; revision: number; bootGeneration: number } {
-  return {
-    suggestEnabled: suggestEnabled(),
-    revision: settingsRevision,
-    bootGeneration: SETTINGS_BOOT_GENERATION,
-  };
-}
-
 app.get("/api/settings", (_req, res) => {
-  res.json(currentSettings());
+  res.json({ suggestEnabled: suggestEnabled() });
 });
 
 app.patch("/api/settings", (req, res) => {
@@ -604,13 +579,15 @@ app.patch("/api/settings", (req, res) => {
 
   // 提案チップのON/OFF。次の /api/suggestions から効く (再起動不要)
   setSuggestEnabled(body.suggestEnabled);
-  settingsRevision += 1;
-  log("settings", `suggest -> ${body.suggestEnabled ? "on" : "off"} (rev ${settingsRevision})`);
+  log("settings", `suggest -> ${body.suggestEnabled ? "on" : "off"}`);
 
-  const settings = currentSettings();
-  // タブは複数開いている前提 (#97) なので、片方で切ったらもう片方のトグルも合わせる
-  io.emit("settings:changed", settings);
-  res.json({ ok: true, ...settings });
+  // タブは複数開いている前提 (#97) なので、片方で切ったらもう片方のトグルも合わせる。
+  // **中身は載せない。**受け手はこれを合図に GET し直す — project:changed と同じ形。
+  // 値を配ると「HTTP応答と配信のどちらが先に着くか」を受け手が解く羽目になり、
+  // そのために版と起動世代を持つところまで行った (自動レビューで10周かけた)。
+  // サーバーが権威で、クライアントは常に取り直す。これなら順序の問題自体が起きない
+  io.emit("settings:changed");
+  res.json({ ok: true, suggestEnabled: suggestEnabled() });
 });
 
 // プロジェクト前提情報の閲覧 (#73)。編集はチャット経由のみ (update_project_context)

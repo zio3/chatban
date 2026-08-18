@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, type Project, type Settings } from "../api";
 import { socket } from "../socket";
-import { isOlder } from "../settingsOrder";
 import { gotoProject, projectIdFromUrl } from "../project";
 
 // #86: プロジェクト管理。プロジェクト = SQLiteファイル1つ。
@@ -58,30 +57,30 @@ export default function ProjectSettings() {
   }, [load]);
 
   // #199: アプリ全体の設定。プロジェクト一覧とは別に読む (プロジェクトの属性ではなくなったため)。
-  // 別タブで切り替えたときも合わせる (タブごとに別プロジェクトを開ける #97 ので、複数開いている前提)
+  // 別タブで切り替えたときも合わせる (タブごとに別プロジェクトを開ける #97 ので、複数開いている前提)。
+  //
+  // **配信は合図として受け、値は必ず取り直す** — projects と同じ形。
+  // イベントに値を載せて直接 state に入れると、HTTP応答と配信のどちらが先に着くか分からず、
+  // 古い値が新しい値を上書きしうる。それを解こうとして版と起動世代を持つところまで行ったが、
+  // 「サーバーが権威、クライアントは常に取り直す」なら順序の問題自体が起きない
   const [settings, setSettings] = useState<Settings | null>(null);
-  // **入ってくる経路 (初期GET / 再接続GET / PATCH応答 / socket配信) は全部ここを通す。**
-  // どれも到着順が決まっていないので、1つでも素通しにすると、そこだけ巻き戻しの穴になる
-  // (「GETだけ無条件」にして、GETの応答待ちに届いた新しい配信を古いGETが巻き戻す穴を作った)
-  const applySettings = useCallback((s: Settings) => {
-    setSettings((prev) => (prev && isOlder(s, prev) ? prev : s));
+  const loadSettings = useCallback(() => {
+    api
+      .settings()
+      .then(setSettings)
+      .catch((e) => setError(String(e)));
   }, []);
   useEffect(() => {
-    const load = () =>
-      api
-        .settings()
-        .then(applySettings)
-        .catch((e) => setError(String(e)));
-    load();
-    // 切れている間の変更はイベントが来ない。再接続したら取り直す
+    loadSettings();
+    // 切れている間の変更は合図が来ない。再接続したら取り直す
     // (board / project は App.tsx が同じことをしている。ここだけ取りこぼすと永久にズレたまま)
-    socket.on("connect", load);
-    socket.on("settings:changed", applySettings);
+    socket.on("connect", loadSettings);
+    socket.on("settings:changed", loadSettings);
     return () => {
-      socket.off("connect", load);
-      socket.off("settings:changed", applySettings);
+      socket.off("connect", loadSettings);
+      socket.off("settings:changed", loadSettings);
     };
-  }, [applySettings]);
+  }, [loadSettings]);
 
   async function run(fn: () => Promise<unknown>) {
     setBusy(true);
@@ -112,10 +111,10 @@ export default function ProjectSettings() {
             disabled={busy || !settings}
             onClick={() =>
               settings &&
-              // socket の settings:changed でも届くが、応答でも入れる
-              // (socket が切れているときにボタンが反応しないように見えるのを防ぐ)。
-              // どちらが先に着くか決まっていないので、版で新しいほうを採る
-              run(async () => applySettings(await api.updateSettings({ suggestEnabled: !settings.suggestEnabled })))
+              run(async () => {
+                await api.updateSettings({ suggestEnabled: !settings.suggestEnabled });
+                loadSettings();
+              })
             }
             className={`rounded-lg border px-3 py-1.5 text-xs disabled:opacity-30 ${
               settings?.suggestEnabled

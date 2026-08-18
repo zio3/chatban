@@ -1532,49 +1532,26 @@ test("AI提案チップのON/OFFはシステム全体で1つ。OFFなら提案�
   // 断ったあとも値は動いていない (途中まで適用して400、を作らない)
   expect(await enabled()).toBe(false);
 
-  // 版は書き換えるたびに増える。HTTP応答とsocketイベントの到着順が入れ替わっても
-  // 古い値が新しい値を上書きしないための手がかり。
-  // 起動世代(bootGeneration)と組で使う — 再起動すると版は0に戻るので、版だけだと
-  // 「持っている版のほうが大きい」まま永久に反映されなくなる。
-  // 世代は単調増加なので (世代, 版) が全順序になる (ランダムIDだと順序が無く、
-  // 旧プロセスの遅延応答が新プロセスの状態を巻き戻せてしまう)
-  const snap = async () => (await (await fetch(`${API}/api/settings`)).json()) as any;
-  const before1 = await snap();
-  expect(Number.isInteger(before1.bootGeneration)).toBe(true);
-  expect(before1.bootGeneration).toBeGreaterThan(0);
-
-  // **socket配信も同じ組を載せる。**ここを確かめないと「4経路を同じ判定に通す」が
-  // 成り立っているか分からない (HTTPの値を順に比べるだけでは socket 経路が素通しでも気づけない)
+  // 配信は**合図だけ**で中身を載せない。受け手はこれを見て GET し直す (projects と同じ形)。
+  // 値を配ると受け手が「HTTP応答と配信のどちらが先か」を解く羽目になるので、そうしない
   const sock = io(API, { query: { project: 1 }, transports: ["websocket"] });
-  // **接続が確立してからPATCHする。**繋ぎに行った直後に叩くと、配信のほうが先に出て取りこぼす
-  // (「届かなかった」が実装の欠陥ではなくテストの競り負けになる)
+  // 接続が確立してからPATCHする。繋ぎに行った直後に叩くと配信のほうが先に出て取りこぼす
   await new Promise<void>((resolve, reject) => {
     sock.on("connect", () => resolve());
     setTimeout(() => reject(new Error("socketが繋がらなかった")), 5000);
   });
-  const broadcast = new Promise<any>((resolve, reject) => {
-    sock.on("settings:changed", resolve);
+  const broadcast = new Promise<void>((resolve, reject) => {
+    sock.on("settings:changed", () => resolve());
     setTimeout(() => reject(new Error("settings:changed が届かなかった")), 5000);
   });
-  const patched = (await (
-    await fetch(`${API}/api/settings`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ suggestEnabled: false }),
-    })
-  ).json()) as any;
-  const pushed = await broadcast;
+  await fetch(`${API}/api/settings`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ suggestEnabled: false }),
+  });
+  await broadcast;
   sock.close();
-
-  const after1 = await snap();
-  expect(after1.revision).toBeGreaterThan(before1.revision);
-  // 起動世代は同じプロセスの間は変わらない (変わると受け手が毎回無条件採用に倒れる)。
-  // 配信・PATCH応答・GET の3経路で同じ組であること
-  expect(patched.bootGeneration).toBe(before1.bootGeneration);
-  expect(after1.bootGeneration).toBe(before1.bootGeneration);
-  expect(pushed.bootGeneration).toBe(before1.bootGeneration);
-  expect(pushed.revision).toBe(after1.revision);
-  expect(pushed.suggestEnabled).toBe(false);
+  expect(await enabled()).toBe(false);
 
   // OFFなら空で返る。**「LLMを呼んでいないこと」は誰も確かめていない** —
   // #181 まで使っていた llm_calls の件数差はテーブルごと撤去され、共有ログの行数で数える形は

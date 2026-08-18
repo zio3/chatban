@@ -1,0 +1,1 @@
+E2Eの使い捨てデータ置き場。実行のたびに frontend/e2e/clean-db.mjs が中身ごと消す

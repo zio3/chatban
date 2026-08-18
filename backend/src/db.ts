@@ -243,6 +243,25 @@ export function updateTask(id: number, patch: TaskPatch): Task | undefined {
  * 自然言語UIでは解釈ミスが必ず起きる。「消せます?」が delete_tasks を呼んで実データが消えた事故を受け、
  * 「間違えないようにする」のではなく「間違えても取り返しがつく」形に変えた。
  * プロンプトの確認ルールは漏れるが、消えていないという事実は漏れない (#69 done封鎖と同じ考え方) */
+/** #195: **畳み損なったDone。**Doneへ確定すると `done_at` が入り、そのあと非同期の要約処理が
+ * `archived=1` を付けてボードから外す。この2つは別の書き込みなので、間でプロセスが止まると
+ * `status='done'` なのに `archived=0` のタスクが残る (要約は15〜30秒かかるので窓は小さくない)。
+ *
+ * 残ると、ボードにDoneが居座り、要約カードにも入らない = **蒸留されないまま完了扱いになる**。
+ *
+ * 拾う仕掛けは作らない。**次にDoneを畳むとき、一緒に畳む** (onTasksCompleted を見る) —
+ * 専用の回収処理を起動時などに置くと、そのために引き金・分岐・状態を持つことになる。
+ * 落ちること自体が稀なので、**次の検収まで残っていて構わない**という判断 (zio)。
+ *
+ * 条件は3つとも要る。`trashed_at` を見ないと**ゴミ箱に入れたDoneまで畳み直す** */
+export function listUnfoldedDoneIds(): number[] {
+  return (
+    db()
+      .prepare("SELECT id FROM tasks WHERE status = 'done' AND archived = 0 AND trashed_at IS NULL ORDER BY id")
+      .all() as { id: number }[]
+  ).map((r) => r.id);
+}
+
 export function trashTask(id: number): boolean {
   return (
     db()
@@ -347,11 +366,33 @@ export function createSummaryCard(): SummaryCard {
   return getSummaryCard(Number(info.lastInsertRowid))!;
 }
 
-export function assignTaskToCard(taskId: number, cardId: number) {
-  db().prepare("UPDATE tasks SET archived = 1, summary_card_id = ? WHERE id = ?").run(cardId, taskId);
-  const ids = new Set<number>(JSON.parse((db().prepare("SELECT task_ids FROM summary_cards WHERE id = ?").get(cardId) as any).task_ids));
-  ids.add(taskId);
-  db().prepare("UPDATE summary_cards SET task_ids = ? WHERE id = ?").run(JSON.stringify([...ids]), cardId);
+/** #195: **畳む対象を条件つきUPDATEで押さえる。**返すのは実際に押さえられたIDだけ。
+ *
+ * 以前は `assignTaskToCard(taskId, cardId)` が**無条件のUPDATE**だった。だが呼び出し側は
+ * 「読んだ時点で done だった」を根拠に書いており、`rollUpOldCards()` の await を挟むので
+ * **読んでから書くまでに状態が変わりうる**:
+ *
+ * - ゴミ箱へ入れられた → `status` は done のままなので素通りし、**ゴミ箱と要約カードの両方に入る**
+ * - Doneから戻された   → 「todoなのに archived=1 でボードから消える」幽霊になる (#105)
+ * - 別の畳み処理が先に押さえた → **後から来たカードが奪い、先発カードには古いIDが残る**
+ *
+ * どれも「読んだ時点の事実」で書いていたのが原因なので、**書くときに条件を付ける**。
+ * タスク行とカードの索引は**1つのトランザクション**で書く (途中で止まると、
+ * 畳んだのに索引に無い = どちらの掃除でも見つからない状態が残るため) */
+export function claimTasksForCard(taskIds: number[], cardId: number): number[] {
+  const claimStmt = db().prepare(
+    "UPDATE tasks SET archived = 1, summary_card_id = ? WHERE id = ? AND status = 'done' AND archived = 0 AND trashed_at IS NULL"
+  );
+  const readCard = db().prepare("SELECT task_ids FROM summary_cards WHERE id = ?");
+  const writeCard = db().prepare("UPDATE summary_cards SET task_ids = ? WHERE id = ?");
+  return db().transaction((): number[] => {
+    const claimed = taskIds.filter((id) => claimStmt.run(cardId, id).changes > 0);
+    if (claimed.length === 0) return claimed;
+    const ids = new Set<number>(JSON.parse((readCard.get(cardId) as any).task_ids));
+    for (const id of claimed) ids.add(id);
+    writeCard.run(JSON.stringify([...ids]), cardId);
+    return claimed;
+  })();
 }
 
 export function detachTaskFromCard(taskId: number) {

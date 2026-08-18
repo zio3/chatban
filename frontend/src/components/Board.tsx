@@ -259,7 +259,19 @@ function SummaryCardView({
               <span>{renderRefs(e.text, onOpenTask)}</span>
             </li>
           ))}
-          {card.elements.length === 0 && <li className="text-xs text-slate-400">要約を生成中…</li>}
+          {/* #200: 蒸留をやめたので、中身はタスクのタイトルをそのまま並べる。
+              要素文を持つのは蒸留していた頃のカードだけ (残してある) */}
+          {card.elements.length === 0 &&
+            card.tasks.map((t) => (
+              <li key={t.id} className="text-xs leading-snug">
+                <button
+                  onClick={() => onOpenTask(t.id)}
+                  className="text-left text-slate-700 hover:text-emerald-700 hover:underline"
+                >
+                  <span className="text-slate-400">#{t.id}</span> {t.title}
+                </button>
+              </li>
+            ))}
         </ul>
       )}
     </div>
@@ -320,19 +332,10 @@ function Column({
           </span>
         </span>
       </div>
-      {/* Done列: 要約カード常駐 (アクティブ→過去ログの順) */}
-      {summaryCards &&
-        [...summaryCards]
-          .sort((a, b) => Number(a.frozen) - Number(b.frozen) || b.id - a.id)
-          .map((c, i) => (
-            <SummaryCardView key={c.id} card={c} onOpenTask={onOpenTask} defaultOpen={i === 0 && !c.frozen} />
-          ))}
       <SortableContext items={tasks.map((t) => t.id)} strategy={verticalListSortingStrategy}>
         {tasks.map((t) =>
-          // #105: Done列の生カードはドラッグさせない。検収後アーカイブ完了までの15〜30秒に
-          // 他の列へ動かせてしまい、あとから走るアーカイブ処理が archived=1 にするため、
-          // 「todoなのにボードから消える」幽霊タスクができる。
-          // Doneへは入れられない(#57)ので、出られないほうが一貫する。戻したいときはチャットで「#xxを戻して」
+          // Done列の生カードはドラッグさせない。Doneへは入れられない(#57)ので、出られないほうが一貫する。
+          // 戻したいときはチャットで「#xxを戻して」
           col.key === "done" ? (
             <TaskCard key={t.id} task={t} onOpen={onOpenTask} openIds={openIds} taskById={taskById} />
           ) : (
@@ -353,6 +356,13 @@ function Column({
           </p>
         )}
       </SortableContext>
+      {/* #200: バラバラのDone(1段目)が上、畳んだ箱(2段目)がその下。新しいものほど上 */}
+      {summaryCards &&
+        [...summaryCards]
+          .sort((a, b) => Number(a.frozen) - Number(b.frozen) || b.id - a.id)
+          .map((c, i) => (
+            <SummaryCardView key={c.id} card={c} onOpenTask={onOpenTask} defaultOpen={i === 0 && !c.frozen} />
+          ))}
     </div>
   );
 }

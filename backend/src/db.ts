@@ -361,11 +361,12 @@ export function getSummaryCard(id: number): SummaryCard | undefined {
  * 見出しはコードで作る。以前はLLMに内容ラベルを書かせていたが、**要約は読まれていなかった**
  * (実運用2週間の観察)。やったことの記録は git のコミットとPR本文に差分つきで残っていて、
  * カードはその劣化コピーだった。Done列は「ゴミ箱に行くまでのロスタイム」であって陳列棚ではない。 */
-function cardTitle(count: number): string {
+function cardTitle(): string {
   const now = new Date();
   const d = now.toLocaleDateString("ja-JP", { month: "numeric", day: "numeric" });
   const t = now.toLocaleTimeString("ja-JP", { hour: "2-digit", minute: "2-digit" });
-  return `${d} ${t} の検収 (${count}件)`;
+  // 件数は画面がバッジで出すので入れない (同じものが2回出る)
+  return `${d} ${t} の検収`;
 }
 
 /** #200: バラバラのDoneをコンテナへ畳む。**押さえられたIDだけ**を返す。
@@ -391,7 +392,7 @@ export function foldIntoContainer(taskIds: number[]): SummaryCard | undefined {
       dropCard.run(cardId);
       return undefined;
     }
-    writeCard.run(cardTitle(claimed.length), JSON.stringify(claimed), cardId);
+    writeCard.run(cardTitle(), JSON.stringify(claimed), cardId);
     return getSummaryCard(cardId);
   })();
 }

@@ -32,6 +32,8 @@ export interface SummaryCard {
   title: string;
   elements: SummaryElement[];
   taskIds: number[];
+  /** #200: 中身のタイトル。畳んだタスクは archived なので tasks 配列からは引けない */
+  tasks: { id: number; title: string }[];
   frozen: boolean;
   createdAt: string;
 }

@@ -65,7 +65,7 @@ test("1段目は「done かつ 未アーカイブ かつ ゴミ箱でない」�
   assert.ok(!found.includes(folded), "畳み済みのDoneを拾っている");
 });
 
-test("押さえられたものだけがコンテナに入り、見出しは件数つきで自動生成される", () => {
+test("押さえられたものだけがコンテナに入り、見出しはコードで自動生成される", () => {
   const a = makeDoneTask("押さえられるA");
   const b = makeDoneTask("押さえられるB");
 
@@ -73,7 +73,7 @@ test("押さえられたものだけがコンテナに入り、見出しは件�
   assert.ok(card, "コンテナができていない");
   assert.deepEqual(card!.taskIds.slice().sort(), [a, b].sort());
   assert.deepEqual(tasksOfCard(card!.id).map((t) => t.id).sort(), [a, b].sort());
-  assert.match(card!.title, /の検収 \(2件\)$/, `見出しが自動生成されていない: ${card!.title}`);
+  assert.match(card!.title, /^\d+\/\d+ \d+:\d+ の検収$/, `見出しが自動生成されていない: ${card!.title}`);
   // 蒸留はしない。要素文は空のまま
   assert.deepEqual(card!.elements, []);
 });

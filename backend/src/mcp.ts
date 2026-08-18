@@ -30,7 +30,6 @@ import {
   trashTask,
   getProjectContextRow,
   getTask,
-  listSummaryCards,
   listTasks,
   listTrashedTasks,
   searchTasks,
@@ -367,11 +366,6 @@ export function buildMcpServer(onEvent: (kind: "board" | "proposals") => void): 
         // checked は brief に無いのでここで足す。**人が検収したかどうかは全件応答からも
         // 読めないといけない** — 差分だけ直しても、取り直したときに分からなければ同じ事故が起きる
         tasks: listTasks().map((t) => ({ ...brief(t)!, checked: !!t.checkedAt })),
-        summaryCards: listSummaryCards().map((c) => ({
-          id: c.id,
-          title: c.title,
-          elements: c.elements.map((e) => e.text),
-        })),
       });
     }
   );

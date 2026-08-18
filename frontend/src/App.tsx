@@ -10,7 +10,7 @@ import TaskDetailPanel from "./components/TaskDetailPanel";
 import { useChatTurn } from "./hooks/useChatTurn";
 import type { Attachment } from "./hooks/useAttachments";
 import { socket } from "./socket";
-import type { ChatEntry, SummaryCard, Task } from "./types";
+import type { ChatEntry, FoldedTask, Task } from "./types";
 
 interface Toast {
   tone?: "error" | "info";
@@ -22,7 +22,7 @@ interface Toast {
 
 export default function App() {
   const [tasks, setTasks] = useState<Task[]>([]);
-  const [summaryCards, setSummaryCards] = useState<SummaryCard[]>([]);
+  const [folded, setFolded] = useState<FoldedTask[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [toast, setToast] = useState<Toast | null>(null);
@@ -76,7 +76,7 @@ export default function App() {
     try {
       const b = await api.board();
       setTasks(b.tasks);
-      setSummaryCards(b.summaryCards ?? []);
+      setFolded(b.folded ?? []);
     } catch (e: any) {
       setLoadError(e?.message ?? String(e));
     } finally {
@@ -101,9 +101,9 @@ export default function App() {
     };
     // #72: メインチャットはリロードで新規 (会話は作業記憶。重要事項はプロジェクト前提/タスク経緯メモに
     // 蒸留されて残り、生ログはDBに保存済みで query_log から引ける)。タスクチャットは経緯ログなので復元維持
-    const onBoard = (p: { tasks: Task[]; summaryCards?: SummaryCard[] }) => {
+    const onBoard = (p: { tasks: Task[]; folded?: FoldedTask[] }) => {
       setTasks(p.tasks);
-      if (p.summaryCards) setSummaryCards(p.summaryCards);
+      if (p.folded) setFolded(p.folded);
     };
     // Done要約カードの非同期再生成中インジケータ (#56)
     // プロジェクトが切り替わったら全部読み直す (他のタブ/端末での切り替えにも追従する)
@@ -266,7 +266,7 @@ export default function App() {
   // 新規プロジェクト(まだ何も無い)では、レポートも割り振りも中身が無い。
   // 最初にやるべきは方針を伝えること — 前提情報はAIの振る舞いを決める介入チャネル (#81) なので、
   // ここを埋めるところから始まるのが自然。チップは1つに絞る
-  const isEmptyBoard = tasks.length === 0 && summaryCards.length === 0;
+  const isEmptyBoard = tasks.length === 0 && folded.length === 0;
   if (view !== "board") {
     suggestions.push(...(VIEW_SUGGESTIONS[view] ?? []));
   } else if (isEmptyBoard) {
@@ -281,9 +281,6 @@ export default function App() {
     }
     if (tasks.filter((t) => t.status === "todo").length === 0) {
       suggestions.push({ label: "💡 次のタスク候補を挙げて", message: "次にやるべきタスクの候補を挙げて" });
-    }
-    if (summaryCards.length >= 2) {
-      suggestions.push({ label: `🧹 要約カード${summaryCards.length}枚を整頓`, message: "過去ログを整頓して" });
     }
     suggestions.push(...aiSuggestions);
   }
@@ -380,7 +377,7 @@ export default function App() {
           <Board
             tasks={visibleTasks}
             allTasks={visibleTasks}
-            summaryCards={summaryCards}
+            folded={folded}
             onMove={moveTask}
             onOpenTask={openTask}
             approvedIds={approvedIds}

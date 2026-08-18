@@ -821,15 +821,15 @@ test("完了は done_tasks ビューで引ける。登録日と取り違えよ�
   expect(none.rows).toHaveLength(0);
 });
 
-test("要約カードの列は frozen (旧 settled)。SQL窓口から新しい名前で引ける", async () => {
-  // 改名のマイグレーションが効いていること。旧名で引くと落ちる = 移行漏れが検出できる
-  const r = await mcp("query_log", {
-    sql: "SELECT id, title, frozen FROM summary_cards LIMIT 1",
-  });
-  expect(r.error).toBeUndefined();
+test("撤去した summary_cards はSQL窓口からも消えている (#200)", async () => {
+  // テーブルを落としただけでなく、許可リストからも外れていること。
+  // 片方だけ直すと「名前は通るが引けない」か「引けるが説明に無い」のどちらかになる
+  const r = await mcp("query_log", { sql: "SELECT id FROM summary_cards LIMIT 1" });
+  expect(r.ok).toBe(false);
 
-  const old = await mcp("query_log", { sql: "SELECT settled FROM summary_cards LIMIT 1" });
-  expect(JSON.stringify(old)).toContain("no such column");
+  const tables = await mcpToolList();
+  const queryLog = tables.find((t: any) => t.name === "query_log");
+  expect(JSON.stringify(queryLog)).not.toContain("summary_cards");
 });
 
 test("SQLが失敗したら、直せる材料を一緒に返す (説明を厚くする代わりの事後注入)", async () => {

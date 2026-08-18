@@ -3,7 +3,7 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import cors from "cors";
 import express from "express";
 import { Server } from "socket.io";
-import { foldDoneColumn, onTaskReopened } from "./archive.js";
+import { foldDoneColumn, foldedContainer, onTaskReopened } from "./archive.js";
 import { generateSuggestions, runChatTurn } from "./chat.js";
 import { warnIfConfigNotIgnored } from "./config.js";
 import { hooks } from "./hooks.js";
@@ -39,7 +39,6 @@ import {
   getProjectContextRow,
   getTask,
   listChatMessages,
-  listSummaryCards,
   listTasks,
   saveChatMessage,
   updateTask,
@@ -169,7 +168,7 @@ function broadcastBoard(projectId = currentProjectId()) {
   // 中身の取得もそのプロジェクトのスコープで行う (非同期フックから呼ばれる場合があるため)。
   // /api/board が返すものと同じ組を流す — 「初回だけ揃っていて以後ズレる」を作らない
   withProject(projectId, () =>
-    io.to(room(projectId)).emit("board:changed", { tasks: listTasks(), summaryCards: listSummaryCards() })
+    io.to(room(projectId)).emit("board:changed", { tasks: listTasks(), folded: foldedContainer(projectId) ?? [] })
   );
 }
 
@@ -178,19 +177,21 @@ function broadcastBoard(projectId = currentProjectId()) {
 // 非同期スコープの入り直し (#98) は要らなくなった。LLMを待たないぶん、押した瞬間に board が確定する。
 if (process.env.AUTO_ARCHIVE !== "0") {
   hooks.tasksCompleted = (taskIds) => {
-    foldDoneColumn(taskIds);
-    broadcastBoard(currentProjectId());
+    const projectId = currentProjectId();
+    foldDoneColumn(projectId, taskIds);
+    broadcastBoard(projectId);
   };
   hooks.taskReopened = (taskId) => {
-    onTaskReopened(taskId);
-    broadcastBoard(currentProjectId());
+    const projectId = currentProjectId();
+    onTaskReopened(projectId, taskId);
+    broadcastBoard(projectId);
   };
 }
 
 app.get("/api/board", (_req, res) => {
   res.json({
     tasks: listTasks(),
-    summaryCards: listSummaryCards(),
+    folded: foldedContainer(currentProjectId()) ?? [],
   });
 });
 

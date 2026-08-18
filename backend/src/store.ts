@@ -17,7 +17,7 @@ import { CONTEXT_TEMPLATE } from "./contextTemplate.js";
 //
 // 置き場所:
 //   data/chatban-admin.db          projects / settings
-//   data/projects/<id>-<slug>.db   tasks / summary_cards / chat_messages / project_context
+//   data/projects/<id>-<slug>.db   tasks / chat_messages / project_context
 //
 // #179: members / proposals / assignment_history と tasks.assignee / assign_reason は
 // 作るのをやめ、既存DBからも削除する (下の ensureProjectSchema 末尾)
@@ -135,14 +135,6 @@ CREATE TABLE IF NOT EXISTS chat_messages (
   task_id INTEGER,
   created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
 );
-CREATE TABLE IF NOT EXISTS summary_cards (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  title TEXT NOT NULL,
-  elements TEXT NOT NULL,
-  task_ids TEXT NOT NULL,
-  frozen INTEGER NOT NULL DEFAULT 0,
-  created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
-);
 `);
   const addColumn = (sql: string) => {
     try {
@@ -158,7 +150,6 @@ CREATE TABLE IF NOT EXISTS summary_cards (
   // #91 で並べ替えをLLMに任せられるようになったので、列の下へ落とすことで表現する
   addColumn("ALTER TABLE tasks DROP COLUMN lane");
   addColumn("ALTER TABLE tasks ADD COLUMN archived INTEGER NOT NULL DEFAULT 0");
-  addColumn("ALTER TABLE tasks ADD COLUMN summary_card_id INTEGER");
   addColumn("ALTER TABLE tasks ADD COLUMN context TEXT");
   addColumn("ALTER TABLE tasks ADD COLUMN due TEXT");
   addColumn("ALTER TABLE tasks ADD COLUMN blocked_by TEXT");
@@ -179,36 +170,34 @@ CREATE TABLE IF NOT EXISTS summary_cards (
   // 書けるのは人間のUI経路(REST)だけで、エージェント(agentWrite)からは触れない
   addColumn("ALTER TABLE tasks ADD COLUMN checked_at TEXT");
   // #108: Doneへ確定した日時。「いつ終わったか」を持つ列がどこにも無く、
-  // created_at(登録日) や summary_cards.created_at(#105の日次まとめで引き継がれる) では
+  // created_at(登録日) では
   // 完了の集計ができなかった。SQL窓口にしたことで露呈した穴 —
   // 固定集計のツールでは聞ける質問が決まっているので見えなかった。
   addColumn("ALTER TABLE tasks ADD COLUMN done_at TEXT");
   // 列を作る前に終わったものは updated_at で埋める。完了後に触らなければ
   // 最終更新 ≒ 完了日時になるため (実データで確認: アーカイブ済み89件が14通りの時刻に散り、
-  // 検収バッチの単位と一致していた。#105の日次まとめは summary_card_id しか書き換えないので
-  // updated_at は潰れていない)。近似値だが、null のまま「不明」にするより答えられることが増える。
+  // 検収バッチの単位と一致していた)。近似値だが、null のまま「不明」にするより答えられることが増える。
   // 何度流しても既に入っている行は触らないので、DBを開くたびに走って構わない
   db.exec("UPDATE tasks SET done_at = updated_at WHERE done_at IS NULL AND (status = 'done' OR archived = 1)");
+  // #200: 要約カードを撤去する。Done列は「ゴミ箱に行くまでのロスタイム」であって陳列棚ではないので、
+  // 畳んだものを常駐させる器が要らなくなった。畳んだ束は**メモリ上に1個だけ**持つ (archive.ts)。
+  // タスク本体は archived=1 のまま残るので、消えるのは器と、蒸留していた頃の要約文だけ
+  try {
+    db.exec("DROP TABLE IF EXISTS summary_cards");
+    const cols = (db.prepare("PRAGMA table_info(tasks)").all() as any[]).map((c) => c.name);
+    if (cols.includes("summary_card_id")) {
+      // ビューが列を参照していると DROP COLUMN が拒否される (`error in view done_tasks`)。
+      // 下でどちらも作り直すので、ここで落としてよい
+      db.exec("DROP VIEW IF EXISTS done_tasks; DROP VIEW IF EXISTS live_tasks;");
+      db.exec("ALTER TABLE tasks DROP COLUMN summary_card_id");
+      log("schema", "summary_cards と tasks.summary_card_id を撤去しました (#200)");
+    }
+  } catch (e: any) {
+    log("schema", `要約カードの撤去に失敗: ${e?.message ?? e}`);
+  }
   // #115/#116: 前提情報も全文上書きなので、タスクの経緯メモ(#112)と同じく版で守る。
   // こちらの方が失うものが大きい — プロジェクト全員の前提で、チャットのシステムプロンプトに常時載る
   addColumn("ALTER TABLE project_context ADD COLUMN version INTEGER NOT NULL DEFAULT 1");
-  // settled → frozen。名前が実態から2回ズレていた:
-  //   #58以前: Doneカードに人間がチェックを付け、全部付いたら「確認済み=settled」
-  //   #58:     チェックボックス廃止 (検収がReview側に移った) → 引き金は手動整頓だけに
-  //   #105:    カードがバッチごとに分かれ、settledは「日次まとめの対象外」の意味も持った
-  // 「人が確認した」だったものが「もう育たない」になったのに、名前だけ残っていた。
-  // 作った本人(zio)も外部エージェントも意味を取り違えたので、実態に名前を合わせる。
-  // #92(reasonの用途が分からず汚された)と同型だが、今回は書いた本人にも分からなくなっていた
-  try {
-    const cols = (db.prepare("PRAGMA table_info(summary_cards)").all() as any[]).map((c) => c.name);
-    if (cols.includes("settled") && !cols.includes("frozen")) {
-      db.exec("ALTER TABLE summary_cards RENAME COLUMN settled TO frozen");
-      log("schema", "summary_cards.settled を frozen に改名しました");
-    }
-  } catch (e: any) {
-    log("schema", `summary_cards.settled の改名に失敗: ${e?.message ?? e}`);
-  }
-  addColumn("ALTER TABLE summary_cards ADD COLUMN frozen INTEGER NOT NULL DEFAULT 0");
   addColumn("ALTER TABLE chat_messages ADD COLUMN task_id INTEGER");
   // #126 → #180: ここで speaker / speaker_email (誰の発言か) を足していた。
   // 個人利用に特化して発言者という概念ごと廃止したので、追加もしないし既存も落とす
@@ -238,7 +227,7 @@ CREATE TABLE IF NOT EXISTS summary_cards (
 DROP VIEW IF EXISTS done_tasks;
 CREATE VIEW done_tasks AS
   SELECT id, title, summary, rejected, checked_at, done_at,
-         date(done_at) AS done_day, summary_card_id, created_at
+         date(done_at) AS done_day, archived, created_at
     FROM tasks
    WHERE done_at IS NOT NULL
    ORDER BY done_at DESC;`);

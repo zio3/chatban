@@ -12,7 +12,6 @@ import {
   createTask,
   trashTask,
   getTask,
-  listSummaryCards,
   listTasks,
   PUBLIC_TABLES,
   queryLogHelp,
@@ -70,11 +69,11 @@ export const QUERY_LOG_DESCRIPTION = [
   // #181: この行は PUBLIC_TABLES から生成する。説明に手で書くと、テーブルを増減したときに
   // 説明・コード・テストの3箇所を人間が揃える前提になり、実際にズレた (project_context の漏れ)
   `引けるもの: ${PUBLIC_TABLES.join(" / ")}`,
-  "chat_messages(id, role, content, trace, usage, task_id, created_at。role='user' が持ち主の発言、'assistant' がこのアシスタント。usage は所要時間とラウンド数だけ — トークン計測は #181 で撤去した) / summary_cards(id, title, elements, task_ids, frozen, created_at) / project_context(id, text, version, updated_at。全文は get_project_context のほうが読みやすい)",
-  "tasks(id, title, status, summary, context, context_version, due, blocked_by, rejected, checked_at, done_at, trashed_at, sort, archived, summary_card_id, created_at, updated_at)",
+  "chat_messages(id, role, content, trace, usage, task_id, created_at。role='user' が持ち主の発言、'assistant' がこのアシスタント。usage は所要時間とラウンド数だけ — トークン計測は #181 で撤去した) / project_context(id, text, version, updated_at。全文は get_project_context のほうが読みやすい)",
+  "tasks(id, title, status, summary, context, context_version, due, blocked_by, rejected, checked_at, done_at, trashed_at, sort, archived, created_at, updated_at)",
   "checked_at = 人が実物で確かめた日時 (nullなら未検収)。status とは別物で、done は列が動いたこと・checked_at は検収が進んだこと。片方からもう片方を推測しない。この窓口は読み取り専用で、checked_at を書く手段はどこにも無い (印を付けられるのは人間だけ)",
   "会話で「#112」と呼ぶタスクは tasks.id = 112 のこと(主キー)。番号はプロジェクトごとに1から振られる。特定の1件を見るときは WHERE id=<番号> で引く",
-  "日付の列を取り違えない。created_at=登録日 / updated_at=最終更新(その後の編集でも動く) / done_at=Doneへ確定した日 / checked_at=人が確かめた日。完了の集計には done_at を使う(created_at だと登録日を数えてしまう)。summary_cards.created_at も完了日ではない — 日次まとめで統合されると最初のカードの日付を引き継ぐ",
+  "日付の列を取り違えない。created_at=登録日 / updated_at=最終更新(その後の編集でも動く) / done_at=Doneへ確定した日 / checked_at=人が確かめた日。完了の集計には done_at を使う(created_at だと登録日を数えてしまう)",
   "done_at のうち 2026-08-10 以前のものは、列を作る前に終わったぶんを updated_at から埋めた近似値(完了後に触っていなければ最終更新=完了日時)。日単位の集計には使えるが、分単位の議論には使わない",
   "done_tasks ビューを使う。完了したもの(done_at が入っているもの)だけを、完了が新しい順に抜いたもの。日付は done_day 列に入っているので date() を書かなくてよい。live_tasks の対で、生きている=live_tasks / 終わった=done_tasks",
   // #175: **どの status がどちらに入るかを書く。**「生きている / 終わった」だけだと
@@ -97,8 +96,6 @@ export const QUERY_LOG_DESCRIPTION = [
   "例(1件の詳細。経緯メモの全文と版): SELECT title, status, summary, context, context_version, blocked_by FROM tasks WHERE id=112",
   "例(直近の動き。「なにやってたっけ」): SELECT id, status, title, summary, updated_at FROM live_tasks ORDER BY updated_at DESC LIMIT 15",
   "例(ゴミ箱の中身): SELECT id, title, trashed_at FROM tasks WHERE trashed_at IS NOT NULL ORDER BY trashed_at DESC",
-  "summary_cards = Doneに畳んだ完了の要約。frozen=0 は現役のカードで、日をまたぐと同じ日のものが1枚に統合されていく。frozen=1 は人間が「整頓」を押して固定した過去ログで、もう統合されず内容も変わらない(旧称 settled)",
-  "例(Doneの要約カード): SELECT id, title, task_ids, frozen FROM summary_cards ORDER BY id DESC",
   "例(検収待ちで、まだ人が確かめていないもの): SELECT id, title, summary FROM live_tasks WHERE status='review' AND checked_at IS NULL",
   "例(1件の経緯メモ全文): SELECT context, context_version FROM tasks WHERE id=112",
   "例(いつ何を言われたか): SELECT created_at, substr(content,1,120) c FROM chat_messages WHERE role='user' ORDER BY id DESC LIMIT 30",
@@ -678,7 +675,7 @@ export async function generateSuggestions(): Promise<{ label: string; message: s
   const skip = suggestSkipReason({
     enabled: suggestEnabled(), // #199: システム全体で1つの設定 (プロジェクト別ではない)
     chatBusy: isChatBusy(currentProjectId()),
-    emptyBoard: listTasks().length === 0 && listSummaryCards().length === 0,
+    emptyBoard: listTasks().length === 0,
   });
   if (skip) return [];
   const systemPrompt = buildSystemPrompt();

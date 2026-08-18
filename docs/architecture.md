@@ -52,7 +52,7 @@
 ```
 backend/data/
   chatban-admin.db          projects / settings
-  projects/<id>-<名前>.db   tasks / summary_cards / chat_messages / project_context
+  projects/<id>-<名前>.db   tasks / chat_messages / project_context
   trash/                    削除したプロジェクトの退避先 (実体は消さない)
 ```
 
@@ -127,8 +127,7 @@ Socket.IOの配信もプロジェクト単位のroomへ送る。
 - `tasks`: title / status(todo・inprogress・review・done固定4列) /
   **summary**(いまどうなっているか。カードに出る) /
   context(経緯メモ) / **context_version**(経緯メモの楽観ロック) / due / blocked_by(依存) / rejected(却下) /
-  sort / archived / summary_card_id / **trashed_at**(ゴミ箱)
-- `summary_cards`: Doneの箱 (#200。`elements` を持つのは蒸留していた頃の古いカードだけ)
+  sort / archived / **trashed_at**(ゴミ箱)
 - `chat_messages`: 会話永続化 (task_id NULLがメイン、値ありがタスクチャット)
 - `project_context`: そのプロジェクトの前提 (プロンプトに常駐)
 
@@ -167,13 +166,16 @@ todo → inprogress → review ←─ 完了報告も却下(rejected)もここ�
 | 段 | 状態 | 見え方 | いつ動くか |
 |---|---|---|---|
 | バラバラ | `status='done'`, `archived=0` | 個別カードのまま列に並ぶ | 検収した直後 |
-| 箱 | `archived=1`, `summary_card_id=<card>` | 折りたたみ可能な1枚 | 次に検収を押したとき |
-| 降りる | `archived=1`, `summary_card_id=NULL` | 板に出ない (検索では引ける) | 箱が24時間経ったとき |
+| 箱 | `archived=1` + サーバーのメモリ | 折りたたみ可能な1枚 | 次に検収を押したとき |
+| 降りる | `archived=1` だけ | 板に出ない (検索では引ける) | 畳んでから24時間経ったとき |
 
 - **評価するのはDoneボタンを押した瞬間だけ。**タイマーもバックグラウンド処理も起動時sweepも無い。
   押さなければ何も動かない — 列が汚れて困るのは見ている人だけで、押すときは必ず見ている
 - **同期のSQLだけで完結する。**待ちが無いので中間状態が存在せず、
   「畳んだのに索引に無い」「要約待ちのまま固まる」といった回収対象が生まれない
+- **箱はDBに持たない** (`archive.ts` のメモリ上に、プロジェクトごとに1個)。
+  中身は「直近24時間に畳んだタスク」でしかなく、器としての寿命がセッションより短い。
+  再起動すれば消えるが、消えて困るものは入っていない — タスク本体は `archived=1` でDBに残る
 - 24時間は**作成時刻からの相対**。カレンダー日で切ると、0時をまたいだ直後に押したときに
   数分前の検収バッチが「昨日の分」として消える
 - 3段目で消えるのは器のほうで、タスクは `archived=1` のまま残る。引くのは一覧ではなく
@@ -182,7 +184,7 @@ todo → inprogress → review ←─ 完了報告も却下(rejected)もここ�
 **以前はここでLLMに経緯を読ませて要素文へ分解していた** (#46/#56/#105)。やめた理由は、
 実運用2週間で**要約が一度も読まれなかった**こと、そして同じ内容がgitのコミットとPR本文に
 差分つきで残っていたこと。非同期だったせいで派生した不具合も3件あった (#191/#195/#196)。
-`elements` を持つ当時のカードは残してあり、24時間の規則の対象外にしてある。
+`summary_cards` テーブルと `tasks.summary_card_id` は起動時のマイグレーションで撤去する。
 
 ## 日時の扱い (#108)
 

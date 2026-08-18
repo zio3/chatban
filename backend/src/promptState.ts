@@ -1,4 +1,4 @@
-import { getProjectContext, listSummaryCards, listTasks } from "./db.js";
+import { getProjectContext, listTasks } from "./db.js";
 import { currentProjectId } from "./store.js";
 import { log } from "./log.js";
 
@@ -13,7 +13,6 @@ const MAX_EVENTS = 40; // イベントが溜まりすぎたら再ベースライ
 
 interface Snapshot {
   tasks: Map<number, string>; // id -> 索引JSON
-  cards: Map<number, string>; // id -> 要約カードJSON
   projectContext: string;
   date: string; // 日付が変わったら再ベースライン (「今日」がプレフィックスに入るため)
 }
@@ -67,13 +66,7 @@ function capture(): Snapshot {
       }),
     ])
   );
-  const cards = new Map(
-    listSummaryCards().map((c) => [
-      c.id,
-      JSON.stringify({ id: c.id, title: c.title, elements: c.elements.map((e) => e.text) }),
-    ])
-  );
-  return { tasks, cards, projectContext: getProjectContext() ?? "", date: todayLabel() };
+  return { tasks, projectContext: getProjectContext() ?? "", date: todayLabel() };
 }
 
 function buildBaselineText(s: Snapshot): string {
@@ -85,9 +78,6 @@ function buildBaselineText(s: Snapshot): string {
     "後続に「変更イベント」がある場合、この索引にそれを適用した状態が現在のボードである。",
     `[${[...s.tasks.values()].join(",")}]`,
     "",
-    s.cards.size > 0
-      ? `## アーカイブ要約 (過去の完了の蒸留。過去の作業について聞かれたらここを参照)\n[${[...s.cards.values()].join(",")}]`
-      : "",
   ]
     .filter(Boolean)
     .join("\n");
@@ -106,7 +96,7 @@ export function getBoardPromptSection(): string {
     st.lastSeen = capture();
     st.baselineText = buildBaselineText(st.lastSeen);
     st.events = [];
-    log("prompt", `rebaseline (project #${currentProjectId()}): tasks=${st.lastSeen.tasks.size} cards=${st.lastSeen.cards.size}`);
+    log("prompt", `rebaseline (project #${currentProjectId()}): tasks=${st.lastSeen.tasks.size}`);
     return st.baselineText;
   }
 
@@ -121,12 +111,6 @@ export function getBoardPromptSection(): string {
   }
   for (const id of seen.tasks.keys()) {
     if (!cur.tasks.has(id)) fresh.push(`- #${id} (完了アーカイブまたは削除)`);
-  }
-  for (const [id, json] of cur.cards) {
-    if (seen.cards.get(id) !== json) fresh.push(`要約カード更新: ${json}`);
-  }
-  for (const id of seen.cards.keys()) {
-    if (!cur.cards.has(id)) fresh.push(`要約カード#${id}は統合され消滅`);
   }
   if (cur.projectContext !== seen.projectContext) {
     fresh.push(`前提情報の全文更新: ${cur.projectContext}`);

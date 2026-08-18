@@ -283,27 +283,7 @@ test("並べ替えが status の変化を埋もれさせない", () => {
   );
 });
 
-test("要約カードの追加・更新・消滅を拾う", () => {
-  const none = board();
-  const one = board([], [[5, card("8月の完了", ["認証を消した", "計測を消した"])]]);
-  const edited = board([], [[5, card("8月の完了", ["認証を消した", "計測を消した", "MCPを直した"])]]);
 
-  assert.match(diffBoards(none, one)[0], /\+ 要約カード#5/);
-  assert.match(diffBoards(one, edited)[0], /~ 要約カード#5/);
-  assert.match(diffBoards(one, none)[0], /- 要約カード#5 が統合され消滅した/);
-  // 索引はJSONでも、人が読む文面は連結した見た目に戻す
-  assert.match(diffBoards(none, one)[0], /8月の完了 :: 認証を消した \/ 計測を消した/);
-});
-
-test("要約カードの要素に区切り文字が入っていても別物と判定する", () => {
-  // 連結方式だと ['B / C'] と ['B', 'C'] が同じ索引になり、カードの分割・編集を見逃した
-  const joined = board([], [[5, card("T", ["B / C"])]]);
-  const split = board([], [[5, card("T", ["B", "C"])]]);
-
-  const changes = diffBoards(joined, split);
-  assert.equal(changes.length, 1, "要素の切れ目が変わったことを検出する");
-  assert.match(changes[0], /~ 要約カード#5/);
-});
 
 test("前提情報の更新は版だけで知らせる (本文は持っていない)", () => {
   // #187: スナップショットが持つのは版だけ。本文を持つと 3,000字級のものが

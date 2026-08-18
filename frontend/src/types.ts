@@ -22,20 +22,12 @@ export interface Task {
   updatedAt: string;
 }
 
-export interface SummaryElement {
-  text: string;
-  checked: boolean;
-}
-
-export interface SummaryCard {
+/** #200: Done列の2段目。直近24時間に畳んだタスクを1つにまとめた箱。
+ * サーバーのメモリ上にしか無いので、再起動すると消える (中身は archived=1 でDBに残る) */
+export interface FoldedTask {
   id: number;
   title: string;
-  elements: SummaryElement[];
-  taskIds: number[];
-  /** #200: 中身のタイトル。畳んだタスクは archived なので tasks 配列からは引けない */
-  tasks: { id: number; title: string }[];
-  frozen: boolean;
-  createdAt: string;
+  foldedAt: number;
 }
 
 export interface ToolTrace {

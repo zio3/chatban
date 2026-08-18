@@ -1,5 +1,5 @@
 import { currentProjectHeader } from "./project";
-import type { ChatResponse, SummaryCard, Task, TaskStatus } from "./types";
+import type { ChatResponse, FoldedTask, Task, TaskStatus } from "./types";
 
 async function json<T>(res: Response): Promise<T> {
   // サーバーは断る理由を {error} で返すので、それをそのまま人に見せる。
@@ -78,7 +78,7 @@ export const api = {
   purgeTask: (id: number) => apiFetch(`/api/trash/${id}`, { method: "DELETE" }).then((r) => json<{ ok: boolean }>(r)),
   board: () =>
     apiFetch("/api/board").then((r) =>
-      json<{ tasks: Task[]; summaryCards: SummaryCard[] }>(r)
+      json<{ tasks: Task[]; folded: FoldedTask[] }>(r)
     ),
   updateTask: (id: number, patch: Partial<Pick<Task, "title" | "summary" | "sort">> & { status?: TaskStatus }) =>
     apiFetch(`/api/tasks/${id}`, {

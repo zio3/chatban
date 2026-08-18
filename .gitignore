@@ -3,6 +3,13 @@ dist/
 *.db
 *.db-shm
 *.db-wal
+
+# データディレクトリごと除外する。*.db だけだと、.db 以外のファイル (E2Eの目印など) が
+# すり抜けてコミットされる (#194 で実際に .e2e-data が載った)。
+# 公開リポジトリなので「あとで消す」は効かない
+backend/data/
+backend/e2e-data/
+backend/backup/
 .env
 logs/
 test-results/

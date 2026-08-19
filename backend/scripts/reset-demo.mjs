@@ -50,6 +50,13 @@ export function isSeedable(name) {
  * 絞ったときは **`projects/` の下しか見ない** — 管理DB (chatban-admin.db) を巻き込むと、
  * プロジェクトの一覧ごと差し替わって**他のプロジェクトが消える**。手元の実録の板と
  * お試しの板が同じデータディレクトリに同居しているときに、これが効く */
+/** seed 配下にある「消してよいもの」= DB本体と `-wal`。
+ * README など、リポジトリで管理しているファイルはここに入らない */
+function seedableFiles(dir) {
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir, { recursive: true }).map(String).filter(isSeedable);
+}
+
 export function matchesProject(rel, needle) {
   if (!needle) return true;
   const p = rel.split(path.sep).join("/");
@@ -165,7 +172,11 @@ async function main() {
       }
       // **絞ったときは seed を消さない。**他の板の seed を巻き添えにしないため、
       // 当たったファイルだけを上書きする
-      if (!args.project) rmSync(SEED, { recursive: true, force: true });
+      //
+      // 消すのは **DBだけ**。ディレクトリごと消すと `seed/README.md` (リポジトリに入っている)
+      // まで巻き添えになり、デプロイのたびに作業ツリーが汚れる。
+      // 実測 (2026-08-20, デモ環境): `D backend/seed/README.md` が出ていた
+      if (!args.project) for (const rel of seedableFiles(SEED)) rmSync(path.join(SEED, rel), { force: true });
       for (const rel of dbs) {
         const to = path.join(SEED, rel);
         mkdirSync(path.dirname(to), { recursive: true });

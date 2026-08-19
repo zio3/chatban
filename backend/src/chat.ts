@@ -22,7 +22,7 @@ import {
   updateTask,
   updateTasks,
 } from "./db.js";
-import { currentProjectId, customLanes, suggestEnabled } from "./store.js";
+import { currentProjectId, customLanes } from "./store.js";
 import { chatCompletion } from "./llm.js";
 import { getModel } from "./config.js";
 import { foldedContainer } from "./archive.js";
@@ -635,11 +635,33 @@ function buildAttachmentParts(attachments: ChatAttachment[]): OpenAI.Chat.Comple
 // 提案はボード状態だけの関数なので、同じ状態なら作り直さない。
 // StrictModeの二重実行・複数タブ・F5連打・🆕新しい会話のいずれでもLLMを再度叩かずに済む
 // (クライアント側を直しても他の経路が残るため、費用の歯止めはサーバー側に置く)
-let suggestCache: { key: string; value: { label: string; message: string }[]; at: number } | null = null;
-const SUGGEST_TTL_MS = 5 * 60 * 1000;
-// #119: 同時実行の合流もプロンプト単位で持つ。1本しか持たないと、
-// プロジェクトAの生成中にBが要求したときAの結果がBへ返る (タブごとに別プロジェクト #97)
-const suggestInflight = new Map<string, Promise<{ label: string; message: string }[]>>();
+// #209: **プロジェクトごとに持つ。**以前は単一スロットで、タブが別プロジェクトを開いていると
+// 読み込むたびに互いを蹴り出して毎回ミスしていた (実測 2026-08-17: #1/#4/#6/#2/#11 の5つが同時に動き、
+// 5分TTLがあるのに suggest が781回)。#119 で suggestInflight を同じ理由でプロジェクト単位にしたのに、
+// **キャッシュだけ1個のまま残っていた** — 同じ穴を片方だけ塞いだ形
+const suggestCache = new Map<number, { value: { label: string; message: string }[]; at: number }>();
+// E2Eだけ 0 にする (playwright.config.ts)。#209でキャッシュがボードの中身を見なくなったため、
+// テスト側が「ボードを変えてキャッシュを外す」手で呼び出しを起こせなくなった (#162の中断テスト)
+const SUGGEST_TTL_MS = Number(process.env.SUGGEST_TTL_MS ?? 5 * 60 * 1000);
+
+/** #209: 起動直後は提案を出さない。**開発中の再起動のたびに全タブが呼び直すのを避ける**ため
+ * (tsx watch は1日35回走っていた)。キャッシュはプロセス内なので再起動で空になり、
+ * 直後の読み込みは必ずミスする — そこだけ塞ぐ。
+ *
+ * **タイマーは持たない。**「時間が来たら呼ぶ」ではなく「リクエストが来た時点で判定する」
+ * (読み取りは状態を変えない #200 と同じ形)。
+ *
+ * 環境で分岐させない。NODE_ENV で切ると「開発では出ないが本番では出る」差ができ、
+ * 動かして確かめられなくなる。本番は再起動が滅多に無いので存在しないのと同じ */
+// E2Eだけ 0 にする (playwright.config.ts)。AUTO_ARCHIVE=0 と同じ形の試験用の口で、
+// **NODE_ENV による自動分岐ではない** — 既定は開発でも本番でも同じ60秒
+const BOOT_GRACE_MS = Number(process.env.SUGGEST_BOOT_GRACE_MS ?? 60_000);
+const BOOTED_AT = Date.now();
+// #119: 同時実行の合流。1本しか持たないと、プロジェクトAの生成中にBが要求したとき
+// Aの結果がBへ返る (タブごとに別プロジェクト #97)。
+// #209: キーを systemPrompt から**プロジェクトIDへ変えた。**キャッシュがボードの中身を見なく
+// なったので、こちらだけ内容単位のままだと「同じプロジェクトで内容が僅かに違うタブ」が並走する
+const suggestInflight = new Map<number, Promise<{ label: string; message: string }[]>>();
 
 /** #162: いまチャットを処理中のプロジェクト。提案チップはこの間だけ譲る。
  *
@@ -664,8 +686,8 @@ export function isChatBusy(projectId: number): boolean {
  * 結果を捨てるだけでは足りない — 上流の応答は待ち続けるので、
  * 止めたかったTTFTの奪い合いがそのまま残る。**接続ごとやめる**必要がある。
  *
- * 同じプロジェクトで複数走りうる (suggestInflight のキーは systemPrompt なので、
- * 内容が違えば並走する) ので Set で持つ */
+ * #209で suggestInflight をプロジェクト単位にしたので並走は起きにくくなったが、
+ * 中断は「いま走っているものを全部止める」でよいので Set のまま持つ (取りこぼしを作らない) */
 const suggestAborts = new Map<number, Set<AbortController>>();
 
 function abortSuggestsFor(projectId: number): void {
@@ -679,19 +701,21 @@ function abortSuggestsFor(projectId: number): void {
 /** 提案チップの生成を**呼ばずに諦める**条件。null なら呼ぶ。
  *
  * #181: ここを純粋関数に切り出したのは、**この判定**をユニットで固定するため
- * (「OFFのとき実際に呼び出しが0回」までは固定していない — 判定と呼び出しの結線は未検証)。
+ * (「諦めると決めたとき実際に呼び出しが0回」までは固定していない — 判定と呼び出しの結線は未検証)。
  * それまでは E2E が `llm_calls` の件数差で確かめていたが、計測系の撤去でテーブルが無くなり、
  * 代わりに共有ログの行数を数える形にしたら**開発サーバーの書き込みで誤判定しうる**状態になった
  * (自動レビュー指摘)。判断を関数にすればDBもログも要らない (#91 #57 と同じ形)。
  *
- * 順番に意味がある: OFF が最優先 (切っている間はコストも止めたい #167)、次に会話中は譲る (#162)、
- * 最後に空ボード (読むべき文脈が無い #86) */
+ * 順番に意味がある: 起動猶予が最優先 (再起動直後は全タブが読み直すので、そこだけ止めたい #209)、
+ * 次に会話中は譲る (#162)、最後に空ボード (読むべき文脈が無い #86)。
+ * **以前はここの先頭がON/OFF設定だった** (#167 で入れ、#199 で全体1つにした) が、#209 で設定ごと撤去した */
 export function suggestSkipReason(state: {
-  enabled: boolean;
+  /** 起動からの経過ミリ秒 */
+  sinceBootMs: number;
   chatBusy: boolean;
   emptyBoard: boolean;
-}): "off" | "chat-busy" | "empty-board" | null {
-  if (!state.enabled) return "off";
+}): "booting" | "chat-busy" | "empty-board" | null {
+  if (state.sinceBootMs < BOOT_GRACE_MS) return "booting";
   if (state.chatBusy) return "chat-busy";
   if (state.emptyBoard) return "empty-board";
   return null;
@@ -699,29 +723,33 @@ export function suggestSkipReason(state: {
 
 export async function generateSuggestions(): Promise<{ label: string; message: string }[]> {
   const skip = suggestSkipReason({
-    enabled: suggestEnabled(), // #199: システム全体で1つの設定 (プロジェクト別ではない)
+    sinceBootMs: Date.now() - BOOTED_AT,
     chatBusy: isChatBusy(currentProjectId()),
     // #200: 畳んだ箱も見る。**入口ごとにズレると事故る** — 画面側 (App.tsx の isEmptyBoard) は
     // 箱を見ているので、ここだけタスクしか見ないと「板には箱が出ているのに提案だけ空」になる
     emptyBoard: listTasks().length === 0 && (foldedContainer(currentProjectId()) ?? []).length === 0,
   });
   if (skip) return [];
-  const systemPrompt = buildSystemPrompt();
-  if (suggestCache && suggestCache.key === systemPrompt && Date.now() - suggestCache.at < SUGGEST_TTL_MS) {
-    return suggestCache.value;
-  }
-  // 同時到着 (StrictModeの二重実行はほぼ同時に来る) は1本にまとめる
-  const running = suggestInflight.get(systemPrompt);
+  const projectId = currentProjectId();
+  const cached = suggestCache.get(projectId);
+  // #209: **ボードの中身では判定しない。**以前はキーが systemPrompt の全文で、索引が1バイト違えば
+  // 作り直していた (タイトルを直す・列を動かす・タスクが1件増える、のたびにミス)。
+  // 提案はあれば助かる程度のもので、数分古くても困らない。**「提案は5分間そのまま」**で言い切る
+  if (cached && Date.now() - cached.at < SUGGEST_TTL_MS) return cached.value;
+  // 同時到着 (StrictModeの二重実行はほぼ同時に来る) は1本にまとめる。
+  // **プロンプトを組む前に見る** — 合流するなら組む必要がない
+  const running = suggestInflight.get(projectId);
   if (running) return running;
+  const systemPrompt = buildSystemPrompt();
   // チャットが始まったら中断できるようにしておく
-  const project = currentProjectId();
+  const project = projectId;
   const ac = new AbortController();
   const acs = suggestAborts.get(project) ?? new Set<AbortController>();
   acs.add(ac);
   suggestAborts.set(project, acs);
   const job = generateSuggestionsUncached(systemPrompt, ac.signal)
     .then((value) => {
-      suggestCache = { key: systemPrompt, value, at: Date.now() };
+      suggestCache.set(projectId, { value, at: Date.now() });
       return value;
     })
     // 中断は失敗ではない (チャットに譲っただけ)。呼び出し側の catch まで投げず空で返す —
@@ -731,11 +759,11 @@ export async function generateSuggestions(): Promise<{ label: string; message: s
       throw e;
     })
     .finally(() => {
-      suggestInflight.delete(systemPrompt);
+      suggestInflight.delete(projectId);
       acs.delete(ac);
       if (acs.size === 0) suggestAborts.delete(project);
     });
-  suggestInflight.set(systemPrompt, job);
+  suggestInflight.set(projectId, job);
   return job;
 }
 

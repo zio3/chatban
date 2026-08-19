@@ -93,10 +93,16 @@ CREATE TABLE IF NOT EXISTS settings (
   // 新旧でキーの形が違うので、DELETE の LIKE は新しいキー (末尾にドットが無い) には当たらない
   //
   // 消えたときだけ記録する。**鍵の値そのものはログに出さない** (消した記録が漏洩経路になっては本末転倒)
+  // #209: 提案チップのON/OFF (suggest.enabled) も消す。設定そのものを撤去したので誰も読まない。
+  // **読まないだけにして残さない** — 値が残ると「画面から変えられない値が実効値として効き続ける」
+  // (#181 と同じ事故)。LIKE と完全一致の両方を並べているのは、#199 で キー名を
+  // suggest.enabled.<projectId> から suggest.enabled へ変えたため (古い形は LIKE でしか当たらない)
   const purged = db
-    .prepare("DELETE FROM settings WHERE key LIKE 'auth.%' OR key LIKE 'model.%' OR key LIKE 'suggest.enabled.%'")
+    .prepare(
+      "DELETE FROM settings WHERE key LIKE 'auth.%' OR key LIKE 'model.%' OR key LIKE 'suggest.enabled.%' OR key = 'suggest.enabled'"
+    )
     .run().changes;
-  if (purged > 0) log("schema", `認証・モデル・プロジェクト別提案設定 ${purged}件を削除しました (#180 / #181 / #199)`);
+  if (purged > 0) log("schema", `認証・モデル・提案チップの設定 ${purged}件を削除しました (#180 / #181 / #199 / #209)`);
 
   // #181: 計測系のテーブルを落とす。llm_calls (呼び出しごとのトークン・単価・概算額) と
   // model_prices (182件の料金表)。**読まないだけにして残さない** — #179/#180 と同じ判断で、
@@ -547,7 +553,7 @@ export interface ProjectSummary {
   /** #19: 有効な任意レーン (0〜2本)。**空配列がふつう** — 4列のままのプロジェクトはこれ */
   lanes: CustomLane[];
   // #167 → #199: AI提案チップのON/OFF はここに在った。システム全体で1つの設定にしたので
-  // プロジェクトの属性ではなくなり、/api/settings へ移した
+  // プロジェクトの属性ではなくなり /api/settings へ移したが、#209 で設定ごと撤去した
 }
 
 export function projectSummaries(): ProjectSummary[] {
@@ -574,40 +580,6 @@ export function projectSummaries(): ProjectSummary[] {
       ).c,
     };
   });
-}
-
-/** #167: AI提案チップ(#75)を出すかどうか。プロジェクトごとに持つ。
- *
- * 動画を撮り直すたびに違うチップが出るので同じ画面をもう一度撮れない、という実務上の困りごとから。
- *
- * #199: 設定キーから projectId を外し、システム全体で1つにした。
- * 元は `suggest.enabled.<projectId>` で、OFFの記録はそのIDにだけ付いていた。
- * 「行が無ければON」が既定なので、**新しいプロジェクトを作るたびに既定ONで始まり、1件ずつ切り直す**
- * ことになっていた。「この機能を使うかどうか」はプロジェクトの性質ではなく持ち主の好みなので、
- * プロジェクト単位で持つ理由がない (個人利用特化 #180/#181 で「別々にしたい人がいるかも」の前提も消えた)。
- *
- * 既定はON。テーブルは足さず settings の1行だけ */
-// settings の読み書きは db.ts にも同じものがあるが、db.ts はこのファイルを import しているので
-// ここから呼ぶと循環参照になる。admin を直接使う
-const SUGGEST_KEY = "suggest.enabled";
-
-export function suggestEnabled(): boolean {
-  const r = admin.prepare("SELECT value FROM settings WHERE key = ?").get(SUGGEST_KEY) as
-    | { value: string }
-    | undefined;
-  return r?.value !== "0";
-}
-
-export function setSuggestEnabled(enabled: boolean): void {
-  // OFFのときだけ書き、ONに戻したら消す。既定(ON)の行をDBに残さないので、
-  // settings を見たときに「意図して切っている」ときだけ行が在る
-  if (enabled) admin.prepare("DELETE FROM settings WHERE key = ?").run(SUGGEST_KEY);
-  else
-    admin
-      .prepare(
-        "INSERT INTO settings (key, value, updated_at) VALUES (?, '0', datetime('now', 'localtime')) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at"
-      )
-      .run(SUGGEST_KEY);
 }
 
 /** #115/#116: 新規プロジェクトの前提情報の下書き。

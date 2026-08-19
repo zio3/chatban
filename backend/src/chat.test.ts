@@ -198,19 +198,24 @@ test("知らない値は列として認めない", () => {
 // そこまで固定するには LLM 呼び出しを差し替えられる形にする必要があり、それは別の改修になる。
 // いま呼び出し0回を保証しているものは無い — 判定の正しさと、E2Eの「OFFなら空で返る」までが範囲
 
-test("提案の生成を諦める判定: OFFが最優先で off を返す", () => {
-  assert.equal(suggestSkipReason({ enabled: false, chatBusy: false, emptyBoard: false }), "off");
-  // 他の条件が「生成してよい」と言っていてもOFFが勝つ
-  assert.equal(suggestSkipReason({ enabled: false, chatBusy: true, emptyBoard: true }), "off");
+// #209: ON/OFF設定は撤去した (#199で作った設定タブごと)。代わりに起動猶予が先頭に立つ
+const AFTER_BOOT = 60_000; // 猶予を過ぎた状態
+
+test("提案の生成を諦める判定: 起動直後が最優先で booting を返す", () => {
+  assert.equal(suggestSkipReason({ sinceBootMs: 0, chatBusy: false, emptyBoard: false }), "booting");
+  // 他の条件が「生成してよい」と言っていても起動直後が勝つ
+  assert.equal(suggestSkipReason({ sinceBootMs: 59_999, chatBusy: true, emptyBoard: true }), "booting");
 });
 
 test("提案の生成を諦める判定: 会話中は chat-busy、空ボードは empty-board", () => {
-  assert.equal(suggestSkipReason({ enabled: true, chatBusy: true, emptyBoard: false }), "chat-busy");
-  assert.equal(suggestSkipReason({ enabled: true, chatBusy: false, emptyBoard: true }), "empty-board");
+  assert.equal(suggestSkipReason({ sinceBootMs: AFTER_BOOT, chatBusy: true, emptyBoard: false }), "chat-busy");
+  assert.equal(suggestSkipReason({ sinceBootMs: AFTER_BOOT, chatBusy: false, emptyBoard: true }), "empty-board");
 });
 
-test("提案の生成を諦める判定: ON・会話中でない・中身があるときだけ null (生成へ進む)", () => {
-  assert.equal(suggestSkipReason({ enabled: true, chatBusy: false, emptyBoard: false }), null);
+test("提案の生成を諦める判定: 猶予を過ぎ・会話中でない・中身があるときだけ null (生成へ進む)", () => {
+  assert.equal(suggestSkipReason({ sinceBootMs: AFTER_BOOT, chatBusy: false, emptyBoard: false }), null);
+  // 境界: ちょうど猶予に達したら通す
+  assert.equal(suggestSkipReason({ sinceBootMs: 60_000, chatBusy: false, emptyBoard: false }), null);
 });
 
 // #180 で「Exportに認証の設定と64桁hexが載っていないこと」を見る番人を2本置いていたが、

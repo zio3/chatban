@@ -1,0 +1,10 @@
+[Unit]
+Description=ChatBan demo nightly at 05:00 JST
+
+[Timer]
+OnCalendar=*-*-* 05:00:00
+# 落ちていた間に跨いだら、起きたときに1回流す
+Persistent=true
+
+[Install]
+WantedBy=timers.target

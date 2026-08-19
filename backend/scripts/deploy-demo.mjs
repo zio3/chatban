@@ -57,7 +57,7 @@ async function main() {
 
   if (touchService) step("systemctl", ["restart", SERVICE], ROOT, null);
 
-  const sha = capture("git", ["rev-parse", "HEAD"], ROOT);
+  const sha = capture("git", ["rev-parse", "HEAD"], ROOT, owner);
   if (touchService) await health();
   console.log(`\n反映しました: ${sha}`);
   console.log(`確認: /version.txt と GET /api/board (attachments が false なら DEMO_MODE が効いている)`);
@@ -87,8 +87,11 @@ function step(cmd, cmdArgs, cwd, owner) {
   if (r.status !== 0) throw new Error(`${cmd} が失敗した (exit ${r.status})`);
 }
 
-function capture(cmd, cmdArgs, cwd) {
-  const r = spawnSync(cmd, cmdArgs, { cwd, encoding: "utf8" });
+/** 持ち主に合わせて実行する。**root のまま git を叩くと dubious ownership で拒否される**
+ * (実測: 反映は成功しているのに `反映しました: (不明)` と出た) */
+function capture(cmd, cmdArgs, cwd, owner) {
+  const argv = owner ? ["-u", `#${owner.uid}`, "-H", cmd, ...cmdArgs] : cmdArgs;
+  const r = spawnSync(owner ? "sudo" : cmd, argv, { cwd, encoding: "utf8" });
   return r.status === 0 ? r.stdout.trim() : "(不明)";
 }
 

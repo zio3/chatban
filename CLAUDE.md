@@ -35,7 +35,7 @@ cd backend; npx tsc --noEmit           # 型チェック (frontendも同様)
 
 - **接続設定は `backend/config.json` 1枚** (#182)。宛先(`baseURL`)・キー・API形式(`apiStyle`)・用途別モデル3つがセット。見本は `backend/examples/config.*.json`。変更したら再起動。疎通確認は `cd backend; npx tsx scripts/check-config.ts`
 - **キーの値をチャットやログに出さない**。`config.json` は gitignore 済み (起動時に確認して警告が出る)。キーを別ファイルに逃がすなら `apiKeyFile`
-- いまの構成は **OpenAI直** (対話=`gpt-5.4-mini-2026-03-17` / 要約分解=`gpt-5.6-luna` / 定型=`gpt-5.6-luna`、キーは `~\.openai\apikey.txt`)。OrcaRouterは「プロバイダの1つ」に格下げ。#88の⚙設定タブからの実行時切り替えは #181 で撤去 (選択肢の供給元が単価つきカタログだったため)
+- いまの構成は **OpenAI直** (対話=`gpt-5.6-luna`。#210 で `gpt-5.4-mini-2026-03-17` から切り替え。要約分解・定型のスロットは #202 で撤去済みで、いまスロットは `main` 1つだけ。キーは `~\.openai\apikey.txt`)。OrcaRouterは「プロバイダの1つ」に格下げ。#88の⚙設定タブからの実行時切り替えは #181 で撤去 (選択肢の供給元が単価つきカタログだったため)
 - **`apiStyle` はプロバイダ名ではなくAPIの形式** (`chat`=OpenAI互換 / `messages`=Anthropic)。モデルIDの接頭辞では判定しない (#182でその判定を廃止)
 - 対話モデルは**日付つきスナップショットIDで固定する**。プロンプトキャッシュはモデルごとに別物なので、エイリアスやルーティング委任だとキャッシュが乗らない (「プレフィックスを安定させる」だけでは足りず「モデルを固定する」が対になる)。2026-08-17実測: OpenAI直でも自動キャッシュは効く (2round目 `cached=12416/12547`)
 - **モデルIDの書き方は宛先次第。**直接API(OpenAI/Anthropic)は接頭辞なし (`gpt-5.4-mini-2026-03-17`)、OrcaRouter経由は `provider/model` 形式必須 (`openai/gpt-5.4-mini-2026-03-17`。接頭辞なしは model_not_found)。見本をコピーすれば取り違えない

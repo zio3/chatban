@@ -640,7 +640,9 @@ function buildAttachmentParts(attachments: ChatAttachment[]): OpenAI.Chat.Comple
 // 5分TTLがあるのに suggest が781回)。#119 で suggestInflight を同じ理由でプロジェクト単位にしたのに、
 // **キャッシュだけ1個のまま残っていた** — 同じ穴を片方だけ塞いだ形
 const suggestCache = new Map<number, { value: { label: string; message: string }[]; at: number }>();
-const SUGGEST_TTL_MS = 5 * 60 * 1000;
+// E2Eだけ 0 にする (playwright.config.ts)。#209でキャッシュがボードの中身を見なくなったため、
+// テスト側が「ボードを変えてキャッシュを外す」手で呼び出しを起こせなくなった (#162の中断テスト)
+const SUGGEST_TTL_MS = Number(process.env.SUGGEST_TTL_MS ?? 5 * 60 * 1000);
 
 /** #209: 起動直後は提案を出さない。**開発中の再起動のたびに全タブが呼び直すのを避ける**ため
  * (tsx watch は1日35回走っていた)。キャッシュはプロセス内なので再起動で空になり、

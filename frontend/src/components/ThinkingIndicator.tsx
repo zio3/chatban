@@ -17,7 +17,7 @@ export default function ThinkingIndicator({
       </span>
       <span className="text-xs text-slate-500">
         {label}
-        {elapsedSec >= 3 && <span className="ml-1 tabular-nums text-slate-400">{elapsedSec}s</span>}
+        {elapsedSec >= 3 && <span className="ml-1 tabular-nums text-slate-500">{elapsedSec}s</span>}
       </span>
       <button
         onClick={onStop}

@@ -248,7 +248,7 @@ export default function Chat({
                         キャッシュヒット) を展開できた。計測系ごと撤去したので、残すのは
                         「速いか遅いか」だけ。内訳が要るときは backend/logs/ を読む */}
                     {e.usage && (
-                      <p className="mt-1 text-[10px] text-slate-400">
+                      <p className="mt-1 text-[10px] text-slate-500">
                         {(e.usage.elapsedMs / 1000).toFixed(1)}s · {e.usage.rounds}round
                       </p>
                     )}

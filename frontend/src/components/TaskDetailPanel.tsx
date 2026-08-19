@@ -120,12 +120,12 @@ export default function TaskDetailPanel({
 
       <header className="flex items-start justify-between gap-2 border-b border-slate-100 py-3 pl-4 pr-3">
         <div className="min-w-0">
-          <p className="text-xs text-slate-400">#{task.id}</p>
+          <p className="text-xs text-slate-500">#{task.id}</p>
           <h2 className="text-base font-bold leading-snug">{task.title}</h2>
         </div>
         <button
           onClick={onClose}
-          className="shrink-0 rounded-md px-2 py-1 text-slate-400 hover:bg-slate-100"
+          className="shrink-0 rounded-md px-2 py-1 text-slate-500 hover:bg-slate-100"
           title="閉じる"
         >
           ✕
@@ -163,7 +163,7 @@ export default function TaskDetailPanel({
             <span className="rounded bg-amber-50 px-1.5 py-0.5 text-[10px] text-amber-700">⏰ 期限 {task.due}</span>
           )}
           {task.blockedBy && task.blockedBy.length > 0 && (
-            <span className="text-[10px] text-slate-400" title="このタスクが待っている先">
+            <span className="text-[10px] text-slate-500" title="このタスクが待っている先">
               ⛓ 待ち{" "}
               {task.blockedBy.map((id) => (
                 <DepChip
@@ -180,7 +180,7 @@ export default function TaskDetailPanel({
           {/* #111: 逆方向。依存は片方向にしか辿れないと行き止まりになる。
               「これを終わらせると何が動き出すか」は優先順位の判断材料そのもの */}
           {dependents.length > 0 && (
-            <span className="text-[10px] text-slate-400" title="このタスクの完了を待っているタスク">
+            <span className="text-[10px] text-slate-500" title="このタスクの完了を待っているタスク">
               🔓 これ待ち{" "}
               {dependents.map((d) => (
                 <DepChip key={d.id} id={d.id} dep={d} unresolved tone="waiting" onOpen={onOpenTask} lanes={lanes} />
@@ -197,31 +197,31 @@ export default function TaskDetailPanel({
 
         {task.summary && (
           <section>
-            <h3 className="mb-1 text-xs font-bold uppercase tracking-wide text-slate-400">現況</h3>
+            <h3 className="mb-1 text-xs font-bold uppercase tracking-wide text-slate-500">現況</h3>
             <p className="text-sm text-slate-700">📝 {task.summary}</p>
           </section>
         )}
 
         <section>
-          <h3 className="mb-1 text-xs font-bold uppercase tracking-wide text-slate-400">経緯メモ</h3>
+          <h3 className="mb-1 text-xs font-bold uppercase tracking-wide text-slate-500">経緯メモ</h3>
           {task.context ? (
             <div className="chat-md rounded-lg bg-slate-50 p-3 text-sm text-slate-700">
               <Markdown remarkPlugins={[remarkGfm]}>{task.context}</Markdown>
             </div>
           ) : (
-            <p className="text-sm text-slate-400">まだありません。下のチャットで話すと決定事項が記録されます</p>
+            <p className="text-sm text-slate-500">まだありません。下のチャットで話すと決定事項が記録されます</p>
           )}
         </section>
 
-        <p className="text-xs text-slate-400">作成 {task.createdAt} / 更新 {task.updatedAt}</p>
+        <p className="text-xs text-slate-500">作成 {task.createdAt} / 更新 {task.updatedAt}</p>
       </div>
 
       {/* タスク専用チャット (#24) */}
       <section className="flex h-1/2 shrink-0 flex-col border-t border-slate-200 bg-slate-50/50">
-        <p className="px-4 pt-2 text-xs font-bold text-slate-400">💬 このタスクのチャット</p>
+        <p className="px-4 pt-2 text-xs font-bold text-slate-500">💬 このタスクのチャット</p>
         <div ref={logRef} className="min-h-0 flex-1 space-y-2 overflow-y-auto px-3 py-2">
           {chat.log.length === 0 && (
-            <p className="text-xs text-slate-400">
+            <p className="text-xs text-slate-500">
               例:「これどう進めるのがいい？」「◯◯方式でいくことにした」→ 決定は経緯メモに残ります
             </p>
           )}

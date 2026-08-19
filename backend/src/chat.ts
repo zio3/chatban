@@ -639,7 +639,7 @@ function buildAttachmentParts(attachments: ChatAttachment[]): OpenAI.Chat.Comple
 // 読み込むたびに互いを蹴り出して毎回ミスしていた (実測 2026-08-17: #1/#4/#6/#2/#11 の5つが同時に動き、
 // 5分TTLがあるのに suggest が781回)。#119 で suggestInflight を同じ理由でプロジェクト単位にしたのに、
 // **キャッシュだけ1個のまま残っていた** — 同じ穴を片方だけ塞いだ形
-const suggestCache = new Map<number, { key: string; value: { label: string; message: string }[]; at: number }>();
+const suggestCache = new Map<number, { value: { label: string; message: string }[]; at: number }>();
 const SUGGEST_TTL_MS = 5 * 60 * 1000;
 
 /** #209: 起動直後は提案を出さない。**開発中の再起動のたびに全タブが呼び直すのを避ける**ため
@@ -655,9 +655,11 @@ const SUGGEST_TTL_MS = 5 * 60 * 1000;
 // **NODE_ENV による自動分岐ではない** — 既定は開発でも本番でも同じ60秒
 const BOOT_GRACE_MS = Number(process.env.SUGGEST_BOOT_GRACE_MS ?? 60_000);
 const BOOTED_AT = Date.now();
-// #119: 同時実行の合流もプロンプト単位で持つ。1本しか持たないと、
-// プロジェクトAの生成中にBが要求したときAの結果がBへ返る (タブごとに別プロジェクト #97)
-const suggestInflight = new Map<string, Promise<{ label: string; message: string }[]>>();
+// #119: 同時実行の合流。1本しか持たないと、プロジェクトAの生成中にBが要求したとき
+// Aの結果がBへ返る (タブごとに別プロジェクト #97)。
+// #209: キーを systemPrompt から**プロジェクトIDへ変えた。**キャッシュがボードの中身を見なく
+// なったので、こちらだけ内容単位のままだと「同じプロジェクトで内容が僅かに違うタブ」が並走する
+const suggestInflight = new Map<number, Promise<{ label: string; message: string }[]>>();
 
 /** #162: いまチャットを処理中のプロジェクト。提案チップはこの間だけ譲る。
  *
@@ -682,8 +684,8 @@ export function isChatBusy(projectId: number): boolean {
  * 結果を捨てるだけでは足りない — 上流の応答は待ち続けるので、
  * 止めたかったTTFTの奪い合いがそのまま残る。**接続ごとやめる**必要がある。
  *
- * 同じプロジェクトで複数走りうる (suggestInflight のキーは systemPrompt なので、
- * 内容が違えば並走する) ので Set で持つ */
+ * #209で suggestInflight をプロジェクト単位にしたので並走は起きにくくなったが、
+ * 中断は「いま走っているものを全部止める」でよいので Set のまま持つ (取りこぼしを作らない) */
 const suggestAborts = new Map<number, Set<AbortController>>();
 
 function abortSuggestsFor(projectId: number): void {
@@ -725,15 +727,17 @@ export async function generateSuggestions(): Promise<{ label: string; message: s
     emptyBoard: listTasks().length === 0 && (foldedContainer(currentProjectId()) ?? []).length === 0,
   });
   if (skip) return [];
-  const systemPrompt = buildSystemPrompt();
   const projectId = currentProjectId();
   const cached = suggestCache.get(projectId);
-  if (cached && cached.key === systemPrompt && Date.now() - cached.at < SUGGEST_TTL_MS) {
-    return cached.value;
-  }
-  // 同時到着 (StrictModeの二重実行はほぼ同時に来る) は1本にまとめる
-  const running = suggestInflight.get(systemPrompt);
+  // #209: **ボードの中身では判定しない。**以前はキーが systemPrompt の全文で、索引が1バイト違えば
+  // 作り直していた (タイトルを直す・列を動かす・タスクが1件増える、のたびにミス)。
+  // 提案はあれば助かる程度のもので、数分古くても困らない。**「提案は5分間そのまま」**で言い切る
+  if (cached && Date.now() - cached.at < SUGGEST_TTL_MS) return cached.value;
+  // 同時到着 (StrictModeの二重実行はほぼ同時に来る) は1本にまとめる。
+  // **プロンプトを組む前に見る** — 合流するなら組む必要がない
+  const running = suggestInflight.get(projectId);
   if (running) return running;
+  const systemPrompt = buildSystemPrompt();
   // チャットが始まったら中断できるようにしておく
   const project = projectId;
   const ac = new AbortController();
@@ -742,7 +746,7 @@ export async function generateSuggestions(): Promise<{ label: string; message: s
   suggestAborts.set(project, acs);
   const job = generateSuggestionsUncached(systemPrompt, ac.signal)
     .then((value) => {
-      suggestCache.set(projectId, { key: systemPrompt, value, at: Date.now() });
+      suggestCache.set(projectId, { value, at: Date.now() });
       return value;
     })
     // 中断は失敗ではない (チャットに譲っただけ)。呼び出し側の catch まで投げず空で返す —
@@ -752,11 +756,11 @@ export async function generateSuggestions(): Promise<{ label: string; message: s
       throw e;
     })
     .finally(() => {
-      suggestInflight.delete(systemPrompt);
+      suggestInflight.delete(projectId);
       acs.delete(ac);
       if (acs.size === 0) suggestAborts.delete(project);
     });
-  suggestInflight.set(systemPrompt, job);
+  suggestInflight.set(projectId, job);
   return job;
 }
 

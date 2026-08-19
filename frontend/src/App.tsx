@@ -404,7 +404,7 @@ export default function App() {
         {view === "settings" && <SettingsView />}
         {view === "trash" && <TrashView />}
         {view === "board" && loading && (
-          <div data-testid="board-loading" className="flex h-40 items-center justify-center text-sm text-slate-400">
+          <div data-testid="board-loading" className="flex h-40 items-center justify-center text-sm text-slate-500">
             読み込み中…
           </div>
         )}
@@ -495,7 +495,7 @@ export default function App() {
               {toast.action.label}
             </button>
           )}
-          <button onClick={() => setToast(null)} className="text-xs text-slate-400 hover:text-slate-600">
+          <button onClick={() => setToast(null)} className="text-xs text-slate-500 hover:text-slate-600">
             ✕
           </button>
         </div>

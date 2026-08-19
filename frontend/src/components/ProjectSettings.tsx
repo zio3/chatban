@@ -208,14 +208,14 @@ export default function ProjectSettings() {
               </div>
             ) : (
               <div className="flex flex-wrap items-center gap-2">
-                <span className={`text-sm font-bold ${p.archived ? "text-slate-400" : ""}`}>{p.name}</span>
+                <span className={`text-sm font-bold ${p.archived ? "text-slate-500" : ""}`}>{p.name}</span>
                 {p.archived && (
                   <span className="rounded-full bg-slate-200 px-2 py-0.5 text-[10px] text-slate-500">無効</span>
                 )}
                 {p.id === projectIdFromUrl() && (
                   <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-bold text-emerald-700">表示中</span>
                 )}
-                <span className="text-xs text-slate-400">
+                <span className="text-xs text-slate-500">
                   未完了{p.openTasks}件
                 </span>
                 {/* #117: MCPの接続先はプロジェクトごとに違う (URLで固定する設計 #96)。
@@ -278,7 +278,7 @@ export default function ProjectSettings() {
                   )}
                   {p.active && p.id !== projectIdFromUrl() && (
                     <span
-                      className="self-center text-[11px] text-slate-400"
+                      className="self-center text-[11px] text-slate-500"
                       /* 「別のプロジェクトを既定にすれば消せる」とは書かない。既定を切り替える口 (activateProject) は
                          APIにはあるがUIから呼べる場所が無く、案内どおりに操作しようとすると行き止まりになる
                          (自動コードレビュー指摘)。存在しない手段を案内するのは、何も書かないより悪い */
@@ -316,7 +316,7 @@ export default function ProjectSettings() {
             作成
           </button>
         </div>
-        <p className="mt-2 text-[11px] text-slate-400">
+        <p className="mt-2 text-[11px] text-slate-500">
           作成しただけでは切り替わりません。「開く」を押すか、ヘッダーのプロジェクト選択から移動してください
           (URL <span className="font-mono">/p/&lt;id&gt;</span> が表示中のプロジェクトを持つので、タブごとに別プロジェクトを開けます)。
         </p>

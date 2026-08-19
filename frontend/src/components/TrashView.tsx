@@ -29,7 +29,7 @@ export default function TrashView() {
   }, [load]);
 
   if (error) return <p className="p-6 text-sm text-red-600">読み込み失敗: {error}</p>;
-  if (!tasks) return <p className="p-6 text-sm text-slate-400">読み込み中…</p>;
+  if (!tasks) return <p className="p-6 text-sm text-slate-500">読み込み中…</p>;
 
   return (
     <div className="mx-auto max-w-3xl space-y-4 p-6">
@@ -42,14 +42,14 @@ export default function TrashView() {
       </div>
 
       {tasks.length === 0 ? (
-        <p className="rounded-xl border border-dashed border-slate-300 px-4 py-8 text-center text-sm text-slate-400">
+        <p className="rounded-xl border border-dashed border-slate-300 px-4 py-8 text-center text-sm text-slate-500">
           ゴミ箱は空です
         </p>
       ) : (
         <ul className="divide-y divide-slate-100 overflow-hidden rounded-xl border border-slate-200 bg-white">
           {tasks.map((t) => (
             <li key={t.id} className="flex flex-wrap items-center gap-2 p-3">
-              <span className="font-mono text-xs text-slate-400">#{t.id}</span>
+              <span className="font-mono text-xs text-slate-500">#{t.id}</span>
               <span className="text-sm">{t.title}</span>
               <span className="ml-auto flex gap-1.5">
                 <button
@@ -82,7 +82,7 @@ export default function TrashView() {
                   </button>
                 )}
               </span>
-              {t.context && <p className="w-full text-[11px] text-slate-400">{t.context.slice(0, 120)}…</p>}
+              {t.context && <p className="w-full text-[11px] text-slate-500">{t.context.slice(0, 120)}…</p>}
             </li>
           ))}
         </ul>

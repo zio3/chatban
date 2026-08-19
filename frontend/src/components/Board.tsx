@@ -95,7 +95,7 @@ ${dep.summary}` : ""}
           ? "bg-sky-100 text-sky-700"
           : unresolved
             ? "bg-violet-100 font-bold text-violet-700"
-            : "bg-slate-100 text-slate-400 line-through"
+            : "bg-slate-100 text-slate-500 line-through"
       }`}
     >
       #{id}
@@ -140,7 +140,7 @@ function TaskCard({
           IDの周りの空きが変わるのが気になる、として不採用 (zio判断) */}
       <div className="flex items-start justify-between gap-2">
         <span className="min-w-0 text-sm font-medium leading-snug">
-          <span className="mr-1 text-xs text-slate-400">#{task.id}</span>
+          <span className="mr-1 text-xs text-slate-500">#{task.id}</span>
           {task.title}
         </span>
       </div>
@@ -156,7 +156,7 @@ function TaskCard({
           )}
           {task.blockedBy && task.blockedBy.length > 0 && (
             <span
-              className="text-[10px] text-slate-400"
+              className="text-[10px] text-slate-500"
               // #152: 「着手できません」と書いていたが、**コードは何も止めていない**
               // (mayEnterDone は依存を見ない)。AI向けの契約を「緩い参照」に直したので、
               // 人間が読む側も揃える — 入口ごとに意味が違うと、どちらを信じてよいか分からなくなる
@@ -264,9 +264,9 @@ function FoldedBox({ folded, onOpenTask }: { folded: FoldedTask[]; onOpenTask: (
       <button onClick={() => setOpen(!open)} className="flex w-full items-center justify-between gap-2 text-left">
         <span className="text-sm font-bold text-slate-700">
           📦 畳んだ完了
-          <span className="ml-1.5 text-xs font-normal text-slate-400">({folded.length}件)</span>
+          <span className="ml-1.5 text-xs font-normal text-slate-500">({folded.length}件)</span>
         </span>
-        <span className="text-xs text-slate-400">{open ? "▾" : "▸"}</span>
+        <span className="text-xs text-slate-500">{open ? "▾" : "▸"}</span>
       </button>
       {open && (
         <ul className="mt-2 space-y-1.5">
@@ -276,7 +276,7 @@ function FoldedBox({ folded, onOpenTask }: { folded: FoldedTask[]; onOpenTask: (
                 onClick={() => onOpenTask(t.id)}
                 className="text-left text-slate-700 hover:text-emerald-700 hover:underline"
               >
-                <span className="text-slate-400">#{t.id}</span> {t.title}
+                <span className="text-slate-500">#{t.id}</span> {t.title}
               </button>
             </li>
           ))}
@@ -363,7 +363,7 @@ function Column({
           )
         )}
         {tasks.length === 0 && !(folded && folded.length > 0) && (
-          <p className="rounded-lg border border-dashed border-slate-200 py-4 text-center text-xs text-slate-400">
+          <p className="rounded-lg border border-dashed border-slate-200 py-4 text-center text-xs text-slate-500">
             タスクなし
           </p>
         )}

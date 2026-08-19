@@ -13,7 +13,7 @@ export default function SettingsView() {
   return (
     <div className="mx-auto max-w-4xl space-y-5 p-6">
       <ProjectSettings />
-      <p className="text-[11px] text-slate-400">
+      <p className="text-[11px] text-slate-500">
         接続先とモデルは <span className="font-mono">backend/config.json</span> で決めます
         (見本は <span className="font-mono">backend/examples/</span>)。変更したら再起動してください。
       </p>

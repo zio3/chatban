@@ -23,15 +23,15 @@ export default function AttachmentTray({
                 <span>📄</span>
               )}
               <span className="max-w-40 truncate">{a.name}</span>
-              <button onClick={() => onRemove(i)} className="text-slate-400 hover:text-slate-600" title="外す">
+              <button onClick={() => onRemove(i)} className="text-slate-500 hover:text-slate-600" title="外す">
                 ✕
               </button>
             </span>
           ))}
-          <span className="text-[10px] text-slate-400">原本は保存されず、AIが読んだ内容だけが記録に残ります</span>
+          <span className="text-[10px] text-slate-500">原本は保存されず、AIが読んだ内容だけが記録に残ります</span>
         </div>
       )}
-      {error && <p className="mt-1 text-xs text-red-500">{error}</p>}
+      {error && <p className="mt-1 text-xs text-red-600">{error}</p>}
     </div>
   );
 }

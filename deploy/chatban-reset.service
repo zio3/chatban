@@ -1,0 +1,20 @@
+[Unit]
+Description=ChatBan demo nightly (deploy + board reset)
+# 板の停止と起動はスクリプト側でやる (停止 -> 差し替え -> 起動 の順を保証するため)
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/chatban/app/backend
+Environment=CHATBAN_DATA_DIR=/opt/chatban/data
+# systemd の既定 PATH には /opt/node/bin が無い。デプロイ側は npm を呼ぶので通しておく
+Environment=PATH=/opt/node/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+# 反映してからリセットする。新しいコードで seed を読ませたいのでこの順番 (#214)。
+#
+# **先頭の `-` は「失敗しても次へ進む」。**わざとそうしている —
+# ビルドが壊れている日でも**板のリセットだけは必ず走る**。リセットのほうが約束したこと
+# (毎朝きれいになる) で、デプロイは追随に過ぎない。
+# 失敗が黙って消えるわけではない: journal に残り、`/version.txt` の sha が古いままなので
+# **外から見て分かる** (#214 で version.txt をビルドの副産物にしたのはこのため)
+ExecStart=-/opt/node/bin/node scripts/deploy-demo.mjs --yes
+ExecStart=/opt/node/bin/node scripts/reset-demo.mjs --yes

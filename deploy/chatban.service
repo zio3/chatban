@@ -1,0 +1,35 @@
+[Unit]
+Description=ChatBan public demo (chatban.zio3.net)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=chatban
+Group=chatban
+Environment=HOME=/opt/chatban/home
+# アプリはDBとログしか書かない。侵害時の被害を狭める
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/chatban/data /opt/chatban/app/backend/logs /opt/chatban/home
+Type=simple
+WorkingDirectory=/opt/chatban/app/backend
+Environment=PORT=8080
+Environment=CHATBAN_DATA_DIR=/opt/chatban/data
+Environment=NODE_ENV=production
+Environment=TZ=Asia/Tokyo
+Environment=CHATBAN_ALLOWED_ORIGINS=https://chatban.zio3.net
+# 公開デモの既定値をまとめて入れる (#213)。中身は backend/src/demoMode.ts:
+#   添付を閉じる / JSONの上限を256kbへ / 提案チップを実質OFF (人が何もしていなくても呼ばれるのを避ける)
+# 個別の環境変数を書けばそちらが勝つ。
+Environment=DEMO_MODE=on
+Environment=PATH=/opt/node/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+# npx ではなく配置済みの tsx を直に叩く (起動時にネットワークへ出ない)
+ExecStart=/opt/node/bin/node /opt/chatban/app/backend/node_modules/tsx/dist/cli.mjs src/index.ts
+Restart=always
+RestartSec=5
+MemoryMax=512M
+
+[Install]
+WantedBy=multi-user.target

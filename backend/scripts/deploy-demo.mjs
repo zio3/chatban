@@ -74,8 +74,14 @@ function repoOwner() {
 
 function step(cmd, cmdArgs, cwd, owner) {
   console.log(`\n$ ${cmd} ${cmdArgs.join(" ")}   (${cwd})`);
+  // **sudo は PATH を捨てる** (secure_path)。node を /opt/node/bin のような場所に置いていると、
+  // そのままでは npm が見つからない (実測: `sudo: npm: command not found`)。
+  // 呼んだ側の PATH をそのまま渡す — このスクリプトを起動できた PATH なら npm も同じ場所にある
   const r = owner
-    ? spawnSync("sudo", ["-u", `#${owner.uid}`, "-H", cmd, ...cmdArgs], { cwd, stdio: "inherit" })
+    ? spawnSync("sudo", ["-u", `#${owner.uid}`, "-H", "env", `PATH=${process.env.PATH}`, cmd, ...cmdArgs], {
+        cwd,
+        stdio: "inherit",
+      })
     : spawnSync(cmd, cmdArgs, { cwd, stdio: "inherit" });
   if (r.error) throw new Error(`${cmd} を実行できない: ${r.error.message}`);
   if (r.status !== 0) throw new Error(`${cmd} が失敗した (exit ${r.status})`);

@@ -41,14 +41,6 @@ export interface Project {
   lanes: CustomLane[];
 }
 
-/** #199: アプリ全体の設定。プロジェクトごとではなく1つ。
- * 提案チップのON/OFF は #167 で Project の属性として入れたが、
- * 「使うかどうか」は持ち主の好みでプロジェクトの性質ではないので、ここへ移した */
-export interface Settings {
-  /** AI提案チップ(#75)を出すか。OFFの間はLLMを呼ばない */
-  suggestEnabled: boolean;
-}
-
 export const api = {
   projects: () => apiFetch("/api/projects").then((r) => json<{ projects: Project[] }>(r)),
   createProject: (name: string) =>
@@ -59,13 +51,6 @@ export const api = {
     }).then((r) => json<{ ok: boolean }>(r)),
   activateProject: (id: number) =>
     apiFetch(`/api/projects/${id}/activate`, { method: "POST" }).then((r) => json<{ projects: Project[] }>(r)),
-  settings: () => apiFetch("/api/settings").then((r) => json<Settings>(r)),
-  updateSettings: (patch: Settings) =>
-    apiFetch("/api/settings", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(patch),
-    }).then((r) => json<Settings>(r)),
   updateProject: (
     id: number,
     // #19: custom1Label / custom2Label は**空文字を送るとそのレーンを畳む**

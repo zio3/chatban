@@ -26,8 +26,6 @@ import {
   reportOrphanFiles,
   setActiveProjectId,
   setProjectArchived,
-  setSuggestEnabled,
-  suggestEnabled,
   trashProject,
   withProject,
 } from "./store.js";
@@ -539,7 +537,7 @@ app.patch("/api/projects/:id", (req, res) => {
     resetPromptState(); // 索引の説明文が変わるのでプロンプトの基準を作り直す
   }
   // #167 → #199: 提案チップのON/OFF はここで受けていた。システム全体で1つの設定になったので
-  // PATCH /api/settings へ移した (プロジェクトのPATCHで全体設定を書き換えるのは形が合わない)
+  // PATCH /api/settings へ移し、#209 でその設定ごと撤去した
   io.emit("project:changed", { projects: projectSummaries() });
   broadcastBoard(id);
   res.json({ ok: true, projects: projectSummaries() });
@@ -568,37 +566,14 @@ app.delete("/api/projects/:id", (req, res) => {
 // 宛先・キー・APIの形式・モデル3つは常にセットで動くので、1枚にまとめて
 // examples/ から丸ごとコピーさせれば、間違った組み合わせが作れなくなる
 
-// #199: アプリ全体の設定。いまは提案チップのON/OFF 1つだけ。
-// **接続設定 (宛先・キー・モデル) はここに戻さない** — #182 で config.json 1枚に集約した。
-// ここに置くのは「持ち主の好み」だけで、実効値がDBと設定ファイルに二重化するものは置かない
-app.get("/api/settings", (_req, res) => {
-  res.json({ suggestEnabled: suggestEnabled() });
-});
-
-app.patch("/api/settings", (req, res) => {
-  const body = req.body ?? {};
-  const KNOWN = ["suggestEnabled"];
-  // 入口で確かめる。**書き換えるものが1つも無い要求を200で返さない** — 綴り違いや型違いが
-  // 「成功したのに何も変わらない」で通ると、呼んだ側は反映されたつもりで待ち続ける (自動レビュー指摘)。
-  // 知らないフィールドも名指しで断る (無視して通すと、消えた設定を書き続けても気づけない)
-  const unknown = Object.keys(body).filter((k) => !KNOWN.includes(k));
-  if (unknown.length > 0)
-    return res.status(400).json({ error: `知らない設定です: ${unknown.join(", ")} (書けるのは ${KNOWN.join(", ")})` });
-  if (typeof body.suggestEnabled !== "boolean")
-    return res.status(400).json({ error: "suggestEnabled には true / false を渡してください" });
-
-  // 提案チップのON/OFF。次の /api/suggestions から効く (再起動不要)
-  setSuggestEnabled(body.suggestEnabled);
-  log("settings", `suggest -> ${body.suggestEnabled ? "on" : "off"}`);
-
-  // タブは複数開いている前提 (#97) なので、片方で切ったらもう片方のトグルも合わせる。
-  // **中身は載せない。**受け手はこれを合図に GET し直す — project:changed と同じ形。
-  // 値を配ると「HTTP応答と配信のどちらが先に着くか」を受け手が解く羽目になり、
-  // そのために版と起動世代を持つところまで行った (自動レビューで10周かけた)。
-  // サーバーが権威で、クライアントは常に取り直す。これなら順序の問題自体が起きない
-  io.emit("settings:changed");
-  res.json({ ok: true, suggestEnabled: suggestEnabled() });
-});
+// #199 → #209: アプリ全体の設定 (/api/settings) はエンドポイントごと撤去した。
+// 中身は提案チップのON/OFF 1つだけで、その設定が解いていた問題 (呼びすぎ・課金) は
+// **#208 (1回あたりを半分に) と #209 (キャッシュをプロジェクト別に・起動猶予) で別の形で解けた**。
+// 残すと空の設定画面と、タブ間で同期する状態が1つ残る。
+//
+// **UIだけ消して設定を残す選択は無い。**値はDBに残るので「画面から変えられない値が
+// 実効値として優先され続ける」(#181と同じ事故) になる — 実際この撤去の直前、値は OFF だった。
+// 起動時に settings の行も消している (store.ts)
 
 // プロジェクト前提情報の閲覧 (#73)。編集はチャット経由のみ (update_project_context)
 app.get("/api/project-context", (_req, res) => {

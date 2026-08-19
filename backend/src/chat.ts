@@ -22,7 +22,7 @@ import {
   updateTask,
   updateTasks,
 } from "./db.js";
-import { currentProjectId, customLanes, suggestEnabled } from "./store.js";
+import { currentProjectId, customLanes } from "./store.js";
 import { chatCompletion } from "./llm.js";
 import { getModel } from "./config.js";
 import { foldedContainer } from "./archive.js";
@@ -635,8 +635,26 @@ function buildAttachmentParts(attachments: ChatAttachment[]): OpenAI.Chat.Comple
 // 提案はボード状態だけの関数なので、同じ状態なら作り直さない。
 // StrictModeの二重実行・複数タブ・F5連打・🆕新しい会話のいずれでもLLMを再度叩かずに済む
 // (クライアント側を直しても他の経路が残るため、費用の歯止めはサーバー側に置く)
-let suggestCache: { key: string; value: { label: string; message: string }[]; at: number } | null = null;
+// #209: **プロジェクトごとに持つ。**以前は単一スロットで、タブが別プロジェクトを開いていると
+// 読み込むたびに互いを蹴り出して毎回ミスしていた (実測 2026-08-17: #1/#4/#6/#2/#11 の5つが同時に動き、
+// 5分TTLがあるのに suggest が781回)。#119 で suggestInflight を同じ理由でプロジェクト単位にしたのに、
+// **キャッシュだけ1個のまま残っていた** — 同じ穴を片方だけ塞いだ形
+const suggestCache = new Map<number, { key: string; value: { label: string; message: string }[]; at: number }>();
 const SUGGEST_TTL_MS = 5 * 60 * 1000;
+
+/** #209: 起動直後は提案を出さない。**開発中の再起動のたびに全タブが呼び直すのを避ける**ため
+ * (tsx watch は1日35回走っていた)。キャッシュはプロセス内なので再起動で空になり、
+ * 直後の読み込みは必ずミスする — そこだけ塞ぐ。
+ *
+ * **タイマーは持たない。**「時間が来たら呼ぶ」ではなく「リクエストが来た時点で判定する」
+ * (読み取りは状態を変えない #200 と同じ形)。
+ *
+ * 環境で分岐させない。NODE_ENV で切ると「開発では出ないが本番では出る」差ができ、
+ * 動かして確かめられなくなる。本番は再起動が滅多に無いので存在しないのと同じ */
+// E2Eだけ 0 にする (playwright.config.ts)。AUTO_ARCHIVE=0 と同じ形の試験用の口で、
+// **NODE_ENV による自動分岐ではない** — 既定は開発でも本番でも同じ60秒
+const BOOT_GRACE_MS = Number(process.env.SUGGEST_BOOT_GRACE_MS ?? 60_000);
+const BOOTED_AT = Date.now();
 // #119: 同時実行の合流もプロンプト単位で持つ。1本しか持たないと、
 // プロジェクトAの生成中にBが要求したときAの結果がBへ返る (タブごとに別プロジェクト #97)
 const suggestInflight = new Map<string, Promise<{ label: string; message: string }[]>>();
@@ -687,11 +705,12 @@ function abortSuggestsFor(projectId: number): void {
  * 順番に意味がある: OFF が最優先 (切っている間はコストも止めたい #167)、次に会話中は譲る (#162)、
  * 最後に空ボード (読むべき文脈が無い #86) */
 export function suggestSkipReason(state: {
-  enabled: boolean;
+  /** 起動からの経過ミリ秒 */
+  sinceBootMs: number;
   chatBusy: boolean;
   emptyBoard: boolean;
-}): "off" | "chat-busy" | "empty-board" | null {
-  if (!state.enabled) return "off";
+}): "booting" | "chat-busy" | "empty-board" | null {
+  if (state.sinceBootMs < BOOT_GRACE_MS) return "booting";
   if (state.chatBusy) return "chat-busy";
   if (state.emptyBoard) return "empty-board";
   return null;
@@ -699,7 +718,7 @@ export function suggestSkipReason(state: {
 
 export async function generateSuggestions(): Promise<{ label: string; message: string }[]> {
   const skip = suggestSkipReason({
-    enabled: suggestEnabled(), // #199: システム全体で1つの設定 (プロジェクト別ではない)
+    sinceBootMs: Date.now() - BOOTED_AT,
     chatBusy: isChatBusy(currentProjectId()),
     // #200: 畳んだ箱も見る。**入口ごとにズレると事故る** — 画面側 (App.tsx の isEmptyBoard) は
     // 箱を見ているので、ここだけタスクしか見ないと「板には箱が出ているのに提案だけ空」になる
@@ -707,21 +726,23 @@ export async function generateSuggestions(): Promise<{ label: string; message: s
   });
   if (skip) return [];
   const systemPrompt = buildSystemPrompt();
-  if (suggestCache && suggestCache.key === systemPrompt && Date.now() - suggestCache.at < SUGGEST_TTL_MS) {
-    return suggestCache.value;
+  const projectId = currentProjectId();
+  const cached = suggestCache.get(projectId);
+  if (cached && cached.key === systemPrompt && Date.now() - cached.at < SUGGEST_TTL_MS) {
+    return cached.value;
   }
   // 同時到着 (StrictModeの二重実行はほぼ同時に来る) は1本にまとめる
   const running = suggestInflight.get(systemPrompt);
   if (running) return running;
   // チャットが始まったら中断できるようにしておく
-  const project = currentProjectId();
+  const project = projectId;
   const ac = new AbortController();
   const acs = suggestAborts.get(project) ?? new Set<AbortController>();
   acs.add(ac);
   suggestAborts.set(project, acs);
   const job = generateSuggestionsUncached(systemPrompt, ac.signal)
     .then((value) => {
-      suggestCache = { key: systemPrompt, value, at: Date.now() };
+      suggestCache.set(projectId, { key: systemPrompt, value, at: Date.now() });
       return value;
     })
     // 中断は失敗ではない (チャットに譲っただけ)。呼び出し側の catch まで投げず空で返す —

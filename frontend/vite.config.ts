@@ -1,12 +1,13 @@
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import { defineConfig } from "vite";
+import { versionFile } from "./vite-plugin-version";
 
 // E2E等でbackendを別ポートに向けたい場合は BACKEND_URL で上書き
 const backend = process.env.BACKEND_URL ?? "http://localhost:8787";
 
 export default defineConfig({
-  plugins: [react(), tailwindcss()],
+  plugins: [react(), tailwindcss(), versionFile()],
   // #158: 1本509KBで chunk size 警告が出ていた。動作に影響は無いが、警告が常時出ていると
   // 「いつも出ているもの」になって、本当に効く警告を見落とす。
   //

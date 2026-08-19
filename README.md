@@ -83,7 +83,91 @@ AIに何をさせないか (権限境界) と、割り切った部分は [docs/s
 
 ## 起動方法
 
-前提: Node.js 20+ と、**いずれか1つ**のLLM接続先(OpenAI / Anthropic / OrcaRouter)。
+前提: **Node.js 20+** と、**いずれか1つ**のLLM接続先(OpenAI / Anthropic / OrcaRouter)。それ以外に入れておくものはありません。
+
+**確かめたのは Windows と Linux です。**Linux は WSL2 (Ubuntu / Node 22) で、clone から起動案内までを実際に通しました。**macOS は手元に実機が無いので未確認です** — コマンドは Linux と同じはずですが、「同じはず」と書いてあるだけだと思って読んでください。
+
+### 入れる
+
+#### 1. 取ってくる
+
+```
+git clone https://github.com/zio3/chatban.git
+cd chatban
+```
+
+#### 2. setup.mjs を走らせる
+
+```
+node setup.mjs
+```
+
+依存の導入 → 接続先の選択 → `backend/config.json` の作成 までをやり、**最後にAPIキーの置き場所を表示して終わります**。3つのOSで同じコマンドです。
+
+- **キーは受け取りません。**表示されたパスに自分で書きます(次の項)。打ち込んだ値がターミナルにもシェル履歴にも残らないので、置いたあとに気にすることがありません
+- **`backend/config.json` が既にあれば触りません。**キーやモデルIDを自分で書き換えていても消えません
+- 対話せずに進めるなら `node setup.mjs --provider openai`(`anthropic` / `orcarouter`)
+
+#### 3. APIキーを置く
+
+接続先を1つ選んで、そこでキーを作り、**指定されたファイルに1行だけ**書きます。`setup.mjs` が最後に表示するパスがこれです。
+
+| 接続先 | キーを作る場所 | 置き場所 | 備考 |
+|---|---|---|---|
+| OpenAI | https://platform.openai.com/api-keys | `~/.openai/apikey.txt` | 動作確認済み |
+| Anthropic | https://console.anthropic.com/settings/keys | `~/.anthropic/apikey.txt` | プロンプトキャッシュが効きます |
+| OrcaRouter | https://www.orcarouter.ai | `~/.orcarouter/apikey.txt` | 1つのキーで多くのモデル。モデルIDは `provider/model` 形式 |
+
+`~` はホームフォルダです(Windows なら `C:\Users\<あなた>`)。フォルダが無ければ作ります。
+
+```powershell
+# Windows (PowerShell)
+New-Item -ItemType Directory -Force ~/.openai
+notepad ~/.openai/apikey.txt
+```
+
+```bash
+# macOS / Linux
+mkdir -p ~/.openai
+nano ~/.openai/apikey.txt
+```
+
+**エディタで開いて貼り付けてください。**`echo "sk-..." > apikey.txt` のようにコマンドで書くと、キーがシェルの履歴に残ります。ファイルの中身はキーだけの1行で、前後の空白や改行は無視されます。
+
+置いたら確かめます:
+
+```
+node setup.mjs --check
+```
+
+宛先・キー・モデルIDが揃っているかを、実際にLLMへ小さく投げて見ます(わずかに課金されます)。**ここが通らなければ、この先は必ず失敗します。**
+
+#### 4. 起動する
+
+```powershell
+# Windows
+.\start-dev.ps1
+```
+
+```bash
+# macOS / Linux — サーバーを2つとも動かし続けるので、ターミナルを2つ使います
+cd backend && npm run dev      # ターミナル1 → http://localhost:8787
+cd frontend && npm run dev     # ターミナル2 → http://localhost:5173
+```
+
+`start-dev.ps1` は Windows 前提のスクリプトで、DBのバックアップ・2つのサーバーの起動・ヘルスチェックをまとめてやります。やっていることは上の2コマンドと同じなので、**他のOSでは2ターミナル方式がそのまま代わりになります**。
+
+開くのは **http://localhost:5173** です(8787 はAPI側なので、そちらを開いても画面は出ません)。
+
+#### 5. 入ったかどうかを確かめる
+
+**起動しただけでは分かりません。**画面が出てもチャットだけ失敗している状態がありえます(設定はLLMを使うときに初めて読まれるため)。
+
+1. http://localhost:5173 を開く。空のボードと、チャットが出ます
+2. チャットに **「牛乳を買う、をタスクに追加して」** と打つ
+3. **Todo列にカードが生えたら、入っています**
+
+生えなければ下の「詰まったとき」を見てください。データは `backend/data/` に置かれ(プロジェクトごとに1つのSQLiteファイル)、初回起動時に「マイプロジェクト」が1つ作られます。
 
 ### AI CLI に任せる場合
 
@@ -120,67 +204,37 @@ LLMの接続先は <OpenAI / Anthropic> を使う。
 
 ボードをエージェントから直接操作させたくなったら、あとで「MCPで繋いで」と言えば足ります(→ [MCP連携](#mcp連携-ドッグフーディング))。MCPが無くてもボードとチャットだけで道具として成立するので、最初から繋ぐ必要はありません。
 
-**これが唯一の入口ではありません。**AI CLI を持っていなくても、次の `setup.mjs` か、その下の手順で入ります。
+### 手で進める場合
 
-### setup.mjs に任せる場合
-
-clone したディレクトリで1行です。**Node だけで動く**ので、先に何かを入れる必要はありません。
-
-```
-node setup.mjs
-```
-
-依存の導入 → 接続先の選択 → `backend/config.json` の作成 までをやり、**最後にAPIキーの置き場所を表示して終わります**。
-
-- **キーは受け取りません。**表示されたパス(`~/.openai/apikey.txt` など)に、自分で1行だけ書いてください。打ち込んだ値がターミナルやシェル履歴に残らないので、置いたあとに気にすることがありません
-- **`backend/config.json` が既にあれば触りません。**キーやモデルIDを自分で書き換えていても消えません
-- 対話せずに進めるなら `node setup.mjs --provider openai`(`anthropic` / `orcarouter`)
-- 置いたあとに `node setup.mjs --check` で、宛先・キー・モデルIDが揃っているかを確かめられます(実際にLLMへ小さく投げるので、わずかに課金されます)
-
-起動は表示される案内の通りです(Windows は `.\start-dev.ps1`、macOS / Linux はターミナル2つ)。
-
-### 手順
-
-`setup.mjs` が中でやっているのはこれです。手で進めたい場合や、途中だけやり直したい場合に使ってください。
-
-**1〜4 はすべてリポジトリのルートから始めます**(各行の最後で元の場所に戻します)。
+`setup.mjs` が中でやっているのはこれだけです。途中からやり直したいときや、何が起きているかを見たいときに使ってください。**すべてリポジトリのルートから始めます**(各行の最後で元の場所に戻します)。
 
 ```powershell
-# 1. 依存関係
+# Windows
 cd backend; npm install; cd ../frontend; npm install; cd ..
-
-# 2. LLMの設定 — 使うプロバイダの見本を1枚コピーしてキーを書く
 copy backend\examples\config.openai.json backend\config.json
-
-# 3. 疎通確認 (設定されたモデルへ小さなリクエストを1回投げます)
 cd backend; npx tsx scripts/check-config.ts; cd ..
-
-# 4. 起動 (DBバックアップ → 両サーバーを別ウィンドウで起動 → ヘルスチェック)
 .\start-dev.ps1
 ```
 
-起動したら **http://localhost:5173 を開きます**(8787 はAPI側です)。
-
-`start-dev.ps1` を使わない場合は、**サーバーを2つとも動かし続ける必要がある**ので、ターミナルを2つ使います:
-
-```powershell
-# ターミナル1
-cd backend; npm run dev     # http://localhost:8787
-
-# ターミナル2 (別ウィンドウ)
-cd frontend; npm run dev    # http://localhost:5173 ← こちらを開く。/api と /socket.io は8787へproxy
+```bash
+# macOS / Linux
+cd backend && npm install && cd ../frontend && npm install && cd ..
+cp backend/examples/config.openai.json backend/config.json
+cd backend && npx tsx scripts/check-config.ts && cd ..
+# 起動は上の「4. 起動する」の2ターミナル方式で
 ```
 
-macOS / Linux では、2 が `cp backend/examples/config.openai.json backend/config.json`、4 は `start-dev.ps1` を使わず上の2ターミナル方式になります(あのスクリプトはWindows前提で、DBバックアップとヘルスチェックを兼ねているだけです)。
-
-データは `backend/data/` に置かれます(プロジェクトごとに1つのSQLiteファイル)。初回起動時に「マイプロジェクト」が1つ作られます。
+見本は**そのままコピーするだけで使えます** — `apiKeyFile` が既定でホームの下を指しているので、中身を書き換える必要はありません。
 
 ### 詰まったとき
 
 | 症状 | 原因 |
 |---|---|
+| `node: command not found` / `'node' は認識されていません` | Node.js が入っていません。https://nodejs.org から入れます(20以上)。入れ直したらターミナルを開き直してください(PATHが反映されません) |
+| `npm install` が途中で失敗する | ネットワークかプロキシです。`setup.mjs` は npm の出力をそのまま流すので、その行が原因です。直したら `node setup.mjs` をもう一度走らせれば、済んだところは飛ばします |
+| カードが生えない・「考え中…」のまま止まる | `node setup.mjs --check` を実行します。**ここが通るならキーと宛先は正しい**ので、ブラウザの再読み込みとサーバー側のログ(`backend/logs/`)を見ます |
 | 画面は開くが、チャットだけ失敗する | `backend/config.json` が無い。設定はLLMを使う操作で初めて要求されるので、起動そのものは通ります |
-| 設定の不備を名指しで怒られる | `apiStyle` の綴り違い、`models` の3つのどれかが空、`apiKeyFile` の指す先が空(空のキーで動き出して401になるより早いので、そこで止めています)、`baseURL` がhttp://の外部宛(キーが平文で飛ぶので弾いています)。メッセージの通りに直します。**起動時ではなく、`check-config.ts` か最初のLLM操作のときに出ます**(設定は必要になってから読むので、起動そのものは通ってしまいます) |
+| 設定の不備を名指しで怒られる | `apiStyle` の綴り違い、`models.main` が空、`apiKeyFile` の指す先が空(空のキーで動き出して401になるより早いので、そこで止めています)、`baseURL` がhttp://の外部宛(キーが平文で飛ぶので弾いています)。メッセージの通りに直します。**起動時ではなく、`check-config.ts` か最初のLLM操作のときに出ます**(設定は必要になってから読むので、起動そのものは通ってしまいます) |
 | `model_not_found` | モデルIDの書き方が宛先と合っていません。直接APIは接頭辞なし (`gpt-5.4-mini-2026-03-17`)、OrcaRouter経由は `provider/model` 形式 |
 | ポートが埋まっている | 症状は**どう起動したかで変わります**。`start-dev.ps1` は既にListenしているポートを「already running」として起動しないので、**古いサーバーを見続けている**ことがあります。手動起動なら backend は `EADDRINUSE` で止まり、Viteは**別ポート(5174など)へ逃げます** — この場合は画面が開くのに、**そのオリジンが許可リストに無いので書き込み系のAPIが403**になります(`CHATBAN_ALLOWED_ORIGINS` の既定は5173)。いずれも**残っているプロセスを探してツリーごと止めるのが先**です(Listenしているプロセスだけ落とすと `tsx watch` の親が残って再発します) |
 

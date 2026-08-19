@@ -66,12 +66,14 @@ const SEED = process.env.CHATBAN_SEED_DIR ?? path.join(ROOT, "seed");
  * **root で走らせると、置いたファイルが root 所有になってサービスが書けなくなる** (systemctl を
  * 叩くので root で走らせるのが普通)。壊れ方が「リセットの直後は動いていて、次の書き込みで落ちる」
  * なので気づきにくい。root でないとき・Windows では何もしない */
-function matchOwner(to, dir) {
+function matchOwner(to, root, owner) {
   if (process.getuid?.() !== 0) return;
-  const { uid, gid } = statSync(dir);
+  const { uid, gid } = statSync(owner);
   chownSync(to, uid, gid);
-  // 作った途中のディレクトリも合わせる (projects/ が root 所有のままだと中身を足せない)
-  for (let d = path.dirname(to); d.startsWith(dir) && d !== dir; d = path.dirname(d)) chownSync(d, uid, gid);
+  // 作った途中のディレクトリも合わせる (projects/ が root 所有のままだと中身を足せない)。
+  // **持ち主を見る場所 (owner) と、辿る根 (root) は別。**seed へ採るときは
+  // 「data の持ち主」を「seed の下のディレクトリ」に付ける
+  for (let d = path.dirname(to); d !== root && d.startsWith(root); d = path.dirname(d)) chownSync(d, uid, gid);
 }
 
 /** 停止・起動の指示。**stop に失敗したらデータに触らない**ので、呼び出し側は戻り値を見ること */
@@ -139,7 +141,7 @@ async function main() {
         const to = path.join(SEED, rel);
         mkdirSync(path.dirname(to), { recursive: true });
         copyFileSync(path.join(DATA, rel), to);
-        matchOwner(to, DATA);
+        matchOwner(to, SEED, DATA);
       }
       say(`seed を更新しました (${dbs.length}件)。`);
     } else {
@@ -155,7 +157,7 @@ async function main() {
         const to = path.join(DATA, rel);
         mkdirSync(path.dirname(to), { recursive: true });
         copyFileSync(path.join(SEED, rel), to);
-        matchOwner(to, DATA);
+        matchOwner(to, DATA, DATA);
       }
       say(`リセットしました (${doomed.length}件を削除 / ${seeds.length}件を復元)。`);
     }

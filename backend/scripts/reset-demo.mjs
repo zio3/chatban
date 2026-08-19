@@ -32,9 +32,16 @@ export function isResettable(name) {
   return /\.db$/.test(name) || SIDECAR_SUFFIXES.some((s) => name.endsWith(`.db${s}`));
 }
 
-/** seed に採るもの = DB本体だけ。副産物はコピーしない (整合が取れているのは .db 側) */
+/** seed に採るもの = DB本体と `-wal`。**`.db` だけでは中身が入らない。**
+ *
+ * WALモードでは、書いた内容はしばらく `-wal` 側にあり、`.db` には取り込まれていない。
+ * 実測 (2026-08-19 デモ環境): カードを3枚置いた直後の `.db` は 4,096バイト、`-wal` が 140KB。
+ * `.db` だけ採ると**空の板が seed になる**。
+ *
+ * 「`-wal` を混ぜると壊れる」のは**新しい `.db` に古い `-wal` が残っている**ときの話で、
+ * 停止中に揃いで採って揃いで戻すぶんには整合している。`-shm` は採らない (SQLiteが作り直す) */
 export function isSeedable(name) {
-  return /\.db$/.test(name);
+  return /\.db$/.test(name) || name.endsWith(".db-wal");
 }
 
 /** 引数の解釈。未知のフラグは黙って捨てない (setup.mjs と同じ規則) */
@@ -63,6 +70,8 @@ function matchOwner(to, dir) {
   if (process.getuid?.() !== 0) return;
   const { uid, gid } = statSync(dir);
   chownSync(to, uid, gid);
+  // 作った途中のディレクトリも合わせる (projects/ が root 所有のままだと中身を足せない)
+  for (let d = path.dirname(to); d.startsWith(dir) && d !== dir; d = path.dirname(d)) chownSync(d, uid, gid);
 }
 
 /** 停止・起動の指示。**stop に失敗したらデータに触らない**ので、呼び出し側は戻り値を見ること */

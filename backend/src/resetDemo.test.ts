@@ -16,9 +16,12 @@ test("消す対象はDB本体と副産物だけ", () => {
   assert.equal(isResettable("backup/chatban.db.bak"), false);
 });
 
-test("seed に採るのはDB本体だけ (副産物を混ぜると差し替えで壊れる)", () => {
+test("seed には .db と -wal を揃いで採る (.db だけでは中身が入らない)", () => {
   assert.equal(isSeedable("chatban-admin.db"), true);
-  for (const s of SIDECAR_SUFFIXES) assert.equal(isSeedable(`chatban-admin.db${s}`), false);
+  // WALモードでは書いた内容が -wal 側に残る。実測で .db=4KB / -wal=140KB だった
+  assert.equal(isSeedable("chatban-admin.db-wal"), true);
+  // -shm は採らない (SQLiteが作り直す)
+  assert.equal(isSeedable("chatban-admin.db-shm"), false);
 });
 
 test("既定は「確認あり・サービスを触る・リセット」", () => {

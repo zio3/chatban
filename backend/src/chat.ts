@@ -26,6 +26,7 @@ import { currentProjectId, customLanes } from "./store.js";
 import { chatCompletion } from "./llm.js";
 import { getModel } from "./config.js";
 import { foldedContainer } from "./archive.js";
+import { suggestBootGraceMs } from "./demoMode.js";
 import { log } from "./log.js";
 import type { CustomLane, TaskStatus, UiAction } from "./types.js";
 
@@ -655,7 +656,7 @@ const SUGGEST_TTL_MS = Number(process.env.SUGGEST_TTL_MS ?? 5 * 60 * 1000);
  * 動かして確かめられなくなる。本番は再起動が滅多に無いので存在しないのと同じ */
 // E2Eだけ 0 にする (playwright.config.ts)。AUTO_ARCHIVE=0 と同じ形の試験用の口で、
 // **NODE_ENV による自動分岐ではない** — 既定は開発でも本番でも同じ60秒
-const BOOT_GRACE_MS = Number(process.env.SUGGEST_BOOT_GRACE_MS ?? 60_000);
+const BOOT_GRACE_MS = suggestBootGraceMs();
 const BOOTED_AT = Date.now();
 // #119: 同時実行の合流。1本しか持たないと、プロジェクトAの生成中にBが要求したとき
 // Aの結果がBへ返る (タブごとに別プロジェクト #97)。

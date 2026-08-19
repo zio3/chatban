@@ -51,11 +51,14 @@ export default function Chat({
   onSend,
   onStop,
   onReset,
+  canAttach = true,
 }: {
   log: ChatEntry[];
   sending: boolean;
   elapsedSec: number;
   suggestions: Suggestion[];
+  /** #213: 添付の入口が開いているか (公開デモでは閉じる)。押せないボタンを出さないため */
+  canAttach?: boolean;
   /** AIが直前の返答に添えた簡易返信。押すとその文字列がそのまま発言として送られ、次の発言で消える */
   askOptions: string[];
   onOpenTask: (id: number) => void;
@@ -127,7 +130,8 @@ export default function Chat({
       onDrop={(e) => {
         e.preventDefault();
         setDragOver(false);
-        atts.addFiles(e.dataTransfer.files);
+        // #213: ボタンを隠すだけでは、ドロップと貼り付けの経路が残る
+        if (canAttach) atts.addFiles(e.dataTransfer.files);
       }}
     >
       {dragOver && (
@@ -295,24 +299,29 @@ export default function Chat({
           <div className="border-t border-slate-100 px-4 py-3">
             <AttachmentTray attachments={atts.attachments} error={atts.error} onRemove={atts.remove} />
             <div className="flex items-center gap-1.5 rounded-2xl border border-slate-300 bg-white px-2 py-1.5 focus-within:border-indigo-500">
+              {/* #213: 添付を閉じているときは入口ごと出さない (断るのはサーバー側 #123) */}
+              {canAttach && (
+                <>
               <input
-                ref={fileInputRef}
-                type="file"
-                multiple
-                accept="image/*,application/pdf"
-                className="hidden"
-                onChange={(e) => {
-                  if (e.target.files) atts.addFiles(e.target.files);
-                  e.target.value = "";
-                }}
-              />
-              <button
-                onClick={() => fileInputRef.current?.click()}
-                title="画像/PDFを添付 (貼り付け・ドロップも可)。原本は保存されず、AIが読んだ内容だけが残ります"
-                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-lg text-slate-500 hover:bg-slate-100"
-              >
-                +
-              </button>
+                  ref={fileInputRef}
+                  type="file"
+                  multiple
+                  accept="image/*,application/pdf"
+                  className="hidden"
+                  onChange={(e) => {
+                    if (e.target.files) atts.addFiles(e.target.files);
+                    e.target.value = "";
+                  }}
+                />
+                <button
+                  onClick={() => fileInputRef.current?.click()}
+                  title="画像/PDFを添付 (貼り付け・ドロップも可)。原本は保存されず、AIが読んだ内容だけが残ります"
+                  className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-lg text-slate-500 hover:bg-slate-100"
+                >
+                  +
+                </button>
+                </>
+              )}
               {/* #76: Enter=送信 / Shift+Enter・Ctrl+Enter=改行 (AIチャット作法)。初期2段 */}
               <textarea
                 ref={inputRef}
@@ -339,7 +348,7 @@ export default function Chat({
                     submit();
                   }
                 }}
-                onPaste={(e) => atts.addFromPaste(e)}
+                onPaste={(e) => canAttach && atts.addFromPaste(e)}
                 placeholder="ボードに話しかける… (Shift+Enterで改行 / スクショやPDFも貼れます)"
                 className="min-w-0 flex-1 resize-none bg-transparent px-1 py-1.5 text-sm outline-none"
               />

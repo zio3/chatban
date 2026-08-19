@@ -106,7 +106,7 @@ export default function App() {
       if (p.folded) setFolded(p.folded);
       // **空配列も反映する。**`if (p.lanes)` にすると最後の1本を畳んだときだけ列が残る
       if (p.lanes) setLanes(p.lanes);
-      // 通れば false が飛んでくるので、直ったときに自然に消える
+      // 断られた/直った の変化があったときにサーバーが流してくれるので、直れば消える
       setLlmRefused(!!p.llmRefused);
     };
     // Done要約カードの非同期再生成中インジケータ (#56)

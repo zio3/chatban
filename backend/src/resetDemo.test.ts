@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 // @ts-ignore -- scripts/ は素のJS (依存を入れる前に動く必要があるので型を持たない)
-import { parseArgs, isResettable, isSeedable, SIDECAR_SUFFIXES } from "../scripts/reset-demo.mjs";
+import { parseArgs, isResettable, isSeedable, matchesProject, SIDECAR_SUFFIXES } from "../scripts/reset-demo.mjs";
 
 // #183: 判断だけを純粋関数にしてある。ファイルを消す処理そのものはテストしない
 // (消す対象の**決め方**が合っていれば、消す処理は fs のもの)
@@ -42,4 +42,24 @@ test("知らない引数は黙って捨てない (打ち間違いに気づけな
   assert.deepEqual(parseArgs(["--force"]).unknown, ["--force"]);
   // 打ち間違いが「確認なしで消す」に化けないこと
   assert.equal(parseArgs(["--yess"]).yes, false);
+});
+
+test("--project は番号でも名前の一部でも指せる", () => {
+  assert.equal(matchesProject("projects/3-demo.db", "3"), true);
+  assert.equal(matchesProject("projects/3-demo.db", "demo"), true);
+  // 番号は前方一致にしない (3 で 13 を巻き込まない)
+  assert.equal(matchesProject("projects/13-x.db", "3"), false);
+  // 絞らないときは全部通る
+  assert.equal(matchesProject("chatban-admin.db", null), true);
+});
+
+test("--project で絞ったら管理DBには触らない (他の板が消えるため)", () => {
+  assert.equal(matchesProject("chatban-admin.db", "3"), false);
+  assert.equal(matchesProject("chatban-admin.db-wal", "demo"), false);
+});
+
+test("--project の値を受け取る", () => {
+  assert.equal(parseArgs(["--project", "3"]).project, "3");
+  assert.equal(parseArgs(["--project=demo"]).project, "demo");
+  assert.equal(parseArgs([]).project, null);
 });

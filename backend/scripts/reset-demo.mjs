@@ -44,14 +44,31 @@ export function isSeedable(name) {
   return /\.db$/.test(name) || name.endsWith(".db-wal");
 }
 
+/** `--project` の絞り込み。プロジェクトDBは `projects/<id>-<名前>.db` という名前なので、
+ * **番号でも名前の一部でも指せる** (`--project 3` / `--project デモ`)。
+ *
+ * 絞ったときは **`projects/` の下しか見ない** — 管理DB (chatban-admin.db) を巻き込むと、
+ * プロジェクトの一覧ごと差し替わって**他のプロジェクトが消える**。手元の実録の板と
+ * お試しの板が同じデータディレクトリに同居しているときに、これが効く */
+export function matchesProject(rel, needle) {
+  if (!needle) return true;
+  const p = rel.split(path.sep).join("/");
+  if (!p.startsWith("projects/")) return false;
+  const base = p.slice("projects/".length);
+  return /^\d+$/.test(needle) ? base.startsWith(`${needle}-`) : base.includes(needle);
+}
+
 /** 引数の解釈。未知のフラグは黙って捨てない (setup.mjs と同じ規則) */
 export function parseArgs(argv) {
-  const out = { yes: false, snapshot: false, service: true, help: false, unknown: [] };
-  for (const a of argv) {
+  const out = { yes: false, snapshot: false, service: true, help: false, project: null, unknown: [] };
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
     if (a === "--yes" || a === "-y") out.yes = true;
     else if (a === "--snapshot") out.snapshot = true;
     else if (a === "--no-service") out.service = false;
     else if (a === "--help" || a === "-h") out.help = true;
+    else if (a === "--project") out.project = argv[++i] ?? "";
+    else if (a.startsWith("--project=")) out.project = a.slice("--project=".length);
     else out.unknown.push(a);
   }
   return out;
@@ -89,6 +106,10 @@ const USAGE = `使い方:
   node backend/scripts/reset-demo.mjs --snapshot  いまの板を seed として保存する
   node backend/scripts/reset-demo.mjs --no-service サービスを止めずに実行する (手元での確認用)
 
+  --project <番号 or 名前の一部>  そのプロジェクトの板だけを採る/戻す。
+      管理DBには触らないので、**同じデータディレクトリにある他の板は無事**。
+      手元で「お試しの板だけ元に戻す」ときはこちら
+
   データ: ${DATA}
   seed  : ${SEED}
   サービス: ${SERVICE} (環境変数 CHATBAN_SERVICE / CHATBAN_DATA_DIR / CHATBAN_SEED_DIR で変えられる)`;
@@ -119,6 +140,10 @@ async function main() {
     process.exit(1);
   }
 
+  // 動いたまま差し替えると、開きっぱなしのDBと `-wal` の対応が崩れる。
+  // systemctl の無い環境 (Windows の開発機など) では手で止めてから使うことになるので、念を押す
+  if (!args.service) say("※ サービスを止めずに実行します。動いているならDBが壊れることがあります。");
+
   // --- サービスを止める。ここが失敗したら**何も触らない** ---
   if (!service("stop", args.service)) {
     say(`${SERVICE} を止められませんでした。データには触っていません。`);
@@ -127,16 +152,20 @@ async function main() {
 
   try {
     if (args.snapshot) {
-      const dbs = readdirSync(DATA, { recursive: true }).map(String).filter(isSeedable);
+      const dbs = readdirSync(DATA, { recursive: true })
+        .map(String)
+        .filter((f) => isSeedable(f) && matchesProject(f, args.project));
       if (dbs.length === 0) {
-        say("DBが1つも無いので、seed に採るものがありません。");
+        say(args.project ? `${args.project} に当たるプロジェクトDBがありません。` : "DBが1つも無いので、seed に採るものがありません。");
         process.exit(1);
       }
       if (!args.yes && !(await confirm(`${SEED} を ${dbs.length}件のDBで置き換えます。`))) {
         say("やめました。");
         process.exit(0);
       }
-      rmSync(SEED, { recursive: true, force: true });
+      // **絞ったときは seed を消さない。**他の板の seed を巻き添えにしないため、
+      // 当たったファイルだけを上書きする
+      if (!args.project) rmSync(SEED, { recursive: true, force: true });
       for (const rel of dbs) {
         const to = path.join(SEED, rel);
         mkdirSync(path.dirname(to), { recursive: true });
@@ -145,8 +174,19 @@ async function main() {
       }
       say(`seed を更新しました (${dbs.length}件)。`);
     } else {
-      const seeds = existsSync(SEED) ? readdirSync(SEED, { recursive: true }).map(String).filter(isSeedable) : [];
-      const doomed = readdirSync(DATA, { recursive: true }).map(String).filter(isResettable);
+      const seeds = existsSync(SEED)
+        ? readdirSync(SEED, { recursive: true })
+            .map(String)
+            .filter((f) => isSeedable(f) && matchesProject(f, args.project))
+        : [];
+      const doomed = readdirSync(DATA, { recursive: true })
+        .map(String)
+        .filter((f) => isResettable(f) && matchesProject(f, args.project));
+      if (args.project && seeds.length === 0) {
+        // 絞ったのに戻すものが無い = 採る前に戻そうとしている。消すだけになるので止める
+        say(`${args.project} の seed がありません。先に --snapshot で採ってください。`);
+        process.exit(1);
+      }
       const what = seeds.length > 0 ? `seed の ${seeds.length}件` : "空の板";
       if (!args.yes && !(await confirm(`いまの ${doomed.length}件を捨てて ${what} に戻します。`))) {
         say("やめました。");

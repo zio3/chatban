@@ -7,6 +7,7 @@ import { foldDoneColumn, foldedContainer, onTaskReopened } from "./archive.js";
 import { generateSuggestions, runChatTurn } from "./chat.js";
 import { warnIfConfigNotIgnored } from "./config.js";
 import { hooks } from "./hooks.js";
+import { upstreamRefused } from "./llm.js";
 import { log } from "./log.js";
 import { buildMcpServer } from "./mcp.js";
 import { isAllowedOrigin, isBrowserCrossSite } from "./origin.js";
@@ -169,7 +170,14 @@ function rejoinFollowers(projectId: number) {
 /** ボードが受け取る一式。**取得と配信で同じ関数を通す** —
  * 「初回だけ揃っていて以後ズレる」を型で防ぐ (#19 で lanes を足したとき、片方だけ直る形にしない) */
 function boardPayload(projectId: number) {
-  return { tasks: listTasks(), folded: foldedContainer(projectId) ?? [], lanes: customLanes(projectId) };
+  return {
+    tasks: listTasks(),
+    folded: foldedContainer(projectId) ?? [],
+    lanes: customLanes(projectId),
+    // #212: 上流に断られたまま (残高切れ・キー失効・混雑)。**板を開いた時点で伝わる**ようにする。
+    // わざわざ確かめには行かない — 定期監視はそれ自体が課金経路になる (#183)
+    llmRefused: upstreamRefused(),
+  };
 }
 
 function broadcastBoard(projectId = currentProjectId()) {
@@ -394,6 +402,10 @@ app.post("/api/chat", async (req, res) => {
     res.json(result);
   } catch (e: any) {
     log("chat", `#${id} FAILED ${Date.now() - t0}ms: ${e?.message ?? e}`);
+    // #212: 上流に断られたことを板にも流す。**失敗そのものは板を変えない**ので、
+    // ここで流さないと画面は次のリロードまで気づけない (E2Eで実際に踏んだ)。
+    // 断られたときだけなので、失敗のたびに配信が増えることはない
+    if (upstreamRefused()) broadcastBoard();
     res.status(500).json({ error: e?.message ?? "chat failed" });
   }
 });
@@ -440,6 +452,10 @@ app.post("/api/tasks/:id/chat", async (req, res) => {
     res.json(result);
   } catch (e: any) {
     log("chat", `#${id} FAILED ${Date.now() - t0}ms: ${e?.message ?? e}`);
+    // #212: 上流に断られたことを板にも流す。**失敗そのものは板を変えない**ので、
+    // ここで流さないと画面は次のリロードまで気づけない (E2Eで実際に踏んだ)。
+    // 断られたときだけなので、失敗のたびに配信が増えることはない
+    if (upstreamRefused()) broadcastBoard();
     res.status(500).json({ error: e?.message ?? "chat failed" });
   }
 });

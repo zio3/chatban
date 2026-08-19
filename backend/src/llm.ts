@@ -142,6 +142,27 @@ function dumpRequest(
   }
 }
 
+/** 上流が断ったかどうか (#212)。**番号を名指ししない。**
+ *
+ * 残高切れが 402 で返るとは限らない — OrcaRouter は枠切れを 403 で返していたし、
+ * 失効は 401 だった。実際に何が返るかは宣伝と違うことがあるので、
+ * **「4xx = 上流が断った」までしか見ない**。番号に依存しなければ、番号を知らなくても正しく動く。
+ *
+ * 残高切れ・キー失効・混雑を見分けて見せる必要は、デモを触っている人には無い
+ * (判別は人間が backend/logs/ の本文でやる。伏字は #191 で入っている) */
+export function isUpstreamRefusal(status: unknown): boolean {
+  return typeof status === "number" && status >= 400 && status < 500;
+}
+
+/** 直近の呼び出しで上流に断られたか。**成功したら消える**ので、混雑のような一時的なものは自然に戻る。
+ *
+ * わざわざ見に行かない (定期監視は、それ自体が課金経路になる #183)。
+ * **最後に失敗したことを覚えているだけ**で、板を開いた人に伝わる */
+let refused = false;
+export function upstreamRefused(): boolean {
+  return refused;
+}
+
 export async function chatCompletion(
   purpose: string,
   model: string,
@@ -189,9 +210,11 @@ export async function chatCompletion(
       log("llm", `-- ${purpose} model=${model} ABORTED after ${Date.now() - t0}ms (呼び出し側が中断)`);
     } else {
       log("llm", `!! ${purpose} model=${model} FAILED after ${Date.now() - t0}ms: ${e?.status ?? ""} ${e?.message ?? e}`);
+      if (isUpstreamRefusal(e?.status)) refused = true;
     }
     throw e;
   }
+  refused = false; // 通ったので忘れる
   const elapsedMs = Date.now() - t0;
   const cachedTokens = (res.usage as any)?.prompt_tokens_details?.cached_tokens ?? 0;
   // キャッシュに書いたぶん。Messages API 経路だけが返す (OpenAI互換は自動キャッシュで書き込み料金が無い)

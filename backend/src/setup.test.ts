@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import path from "node:path";
+import { existsSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 
 /** #192: ルートの setup.mjs の判断部分。
  *
@@ -32,10 +34,13 @@ test("isSupportedNode: Node 20 以上を通す", () => {
 
 test("parseProviderChoice: 番号でも名前でも選べる", () => {
   assert.equal(setup.parseProviderChoice("1").key, "openai");
-  assert.equal(setup.parseProviderChoice("3").key, "ollama");
+  assert.equal(setup.parseProviderChoice("3").key, "orcarouter");
   assert.equal(setup.parseProviderChoice("openai").key, "openai");
-  assert.equal(setup.parseProviderChoice("  Ollama  ".toLowerCase().trim()).key, "ollama");
+  assert.equal(setup.parseProviderChoice("  Anthropic  ".toLowerCase().trim()).key, "anthropic");
   assert.equal(setup.parseProviderChoice(" 2 ").key, "anthropic");
+  // 見本が消えた宛先は選べない (#206: config.local.json は #202 で削除された)
+  assert.equal(setup.parseProviderChoice("ollama"), null);
+  assert.equal(setup.parseProviderChoice("4"), null);
 });
 
 test("parseProviderChoice: 決められない入力は null (既定へ倒さない)", () => {
@@ -60,9 +65,9 @@ test("expandHome: backend/src/config.ts と同じ規則", () => {
 });
 
 test("keyStatus: 直書きのキーは置き場を案内しない", () => {
-  // Ollama の見本は "apiKey": "ollama" (SDKが空文字を嫌うためのダミー)。
-  // ここで missing を返すと、キーの要らない構成なのにキーを置けと言い出す
-  const st = setup.keyStatus({ apiKey: "ollama" }, () => false);
+  // apiKey を直に書いた設定 (キーをファイルに逃がさない書き方)。
+  // ここで missing を返すと、置き場所の無いキーを置けと言い出す
+  const st = setup.keyStatus({ apiKey: "sk-written-directly" }, () => false);
   assert.equal(st.kind, "not-needed");
 });
 
@@ -89,18 +94,31 @@ test("keyStatus: どちらも無い設定は unknown (勝手に直さない)", (
 test("parseArgs: 知らない引数を黙って捨てない", () => {
   assert.deepEqual(setup.parseArgs(["--check"]).check, true);
   assert.deepEqual(setup.parseArgs(["--provider", "openai"]).provider, "openai");
-  assert.deepEqual(setup.parseArgs(["--provider=ollama"]).provider, "ollama");
+  assert.deepEqual(setup.parseArgs(["--provider=orcarouter"]).provider, "orcarouter");
   assert.deepEqual(setup.parseArgs([]).provider, null);
   // 打ち間違いに気づけるように、拾えなかったものを残す
   assert.deepEqual(setup.parseArgs(["--chek"]).unknown, ["--chek"]);
   assert.deepEqual(setup.parseArgs(["--help"]).help, true);
 });
 
-test("PROVIDERS: 見本のファイル名と一対一で、番号は並び順どおり", () => {
+test("PROVIDERS: 番号は並び順どおり", () => {
   const keys = setup.PROVIDERS.map((p: any) => p.key);
-  assert.deepEqual(keys, ["openai", "anthropic", "ollama", "orcarouter"]);
+  assert.deepEqual(keys, ["openai", "anthropic", "orcarouter"]);
   // 番号での選択は並び順に依存するので、順序が変わったらこのテストで気づく
   for (const [i, p] of setup.PROVIDERS.entries()) {
     assert.equal(setup.parseProviderChoice(String(i + 1)).file, p.file);
+  }
+});
+
+/** #206: **見本ファイルが実在することまで見る。**
+ *
+ * #202 が `backend/examples/config.local.json` を消したとき、setup.mjs の PROVIDERS には
+ * ollama が残っていたので `--provider ollama` が必ず「見本が見つかりません」で落ちた。
+ * 2つのPRが並行していて、どちらも自分の変更の中では正しく、gitも衝突として検出しない。
+ * **名前の対応だけを見るテストでは、参照先が消えたことに気づけない** — 実在を見て初めて落ちる */
+test("PROVIDERS: 見本ファイルが backend/examples/ に実在する", () => {
+  const examples = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "examples");
+  for (const p of setup.PROVIDERS) {
+    assert.ok(existsSync(path.join(examples, p.file)), `見本が無い: ${p.file}`);
   }
 });

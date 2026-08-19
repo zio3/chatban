@@ -4,7 +4,7 @@
  *
  *   node setup.mjs              対話。依存導入 → 宛先を選んで config.json を作る → キーの置き場を案内
  *   node setup.mjs --provider openai   対話なし (宛先を引数で決める)
- *   node setup.mjs --check      設定が実際に通るか確かめるだけ (LLMへ3回投げる)
+ *   node setup.mjs --check      設定が実際に通るか確かめるだけ (LLMへ小さく投げる)
  *
  * **Nodeの標準機能だけで書く。**依存を入れる前に動く必要があるので、npm パッケージを import しない。
  * `.mjs` にしてあるのは、ルートに package.json が無く `type: module` を宣言できないため。
@@ -26,11 +26,15 @@ const ROOT = path.dirname(fileURLToPath(import.meta.url));
 /** better-sqlite3 のビルド済みバイナリと、backend/frontend の実装が前提にしている下限 */
 export const MIN_NODE_MAJOR = 20;
 
-/** 見本 (backend/examples/) と一対一。ここに並べた順で番号が振られる */
+/** 見本 (backend/examples/) と一対一。ここに並べた順で番号が振られる。
+ *
+ * **見本が消えたらここも直す。**#202 で `config.local.json` (Ollama) が削除されたとき、
+ * ここに ollama が残っていたので `--provider ollama` が必ず「見本が見つかりません」で落ちた。
+ * 並行した2つのPRがそれぞれ自分の中では正しく、gitも衝突として検出しない形だったので、
+ * **setup.test.ts で実ファイルの存在を確かめる**ようにしてある (次は同じ形で気づける) */
 export const PROVIDERS = [
   { key: "openai", label: "OpenAI", file: "config.openai.json", note: "実測済み。キーが要ります" },
   { key: "anthropic", label: "Anthropic", file: "config.anthropic.json", note: "キーが要ります。プロンプトキャッシュが効きます" },
-  { key: "ollama", label: "Ollama (ローカル)", file: "config.local.json", note: "キー不要・課金なし。別途 ollama pull が要ります" },
   { key: "orcarouter", label: "OrcaRouter", file: "config.orcarouter.json", note: "1つのキーで多くのモデル。無料枠は429で埋まります" },
 ];
 
@@ -63,7 +67,7 @@ export function parseProviderChoice(input, providers = PROVIDERS) {
 }
 
 /** config.json を読んで、キーの状態を判定する。
- * - `not-needed`: apiKey が直に書いてある (Ollama の `"apiKey": "ollama"` など)
+ * - `not-needed`: apiKey が直に書いてある (キーをファイルに逃がさない書き方)
  * - `present` / `missing`: apiKeyFile の指す先があるか
  * - `unknown`: どちらも無い (見本を編集して壊した場合。ここでは直さず、check に任せる) */
 export function keyStatus(config, exists = existsSync, home = homedir()) {
@@ -90,7 +94,7 @@ export function parseArgs(argv) {
 const USAGE = `使い方:
   node setup.mjs                    対話でセットアップする
   node setup.mjs --provider openai  宛先を指定して対話なしで進める
-  node setup.mjs --check            設定が通るか確かめる (LLMへ3回投げます)
+  node setup.mjs --check            設定が通るか確かめる (LLMへ小さく投げます)
 
 宛先: ${PROVIDERS.map((p) => p.key).join(" / ")}`;
 
@@ -246,7 +250,7 @@ async function main(argv) {
       say("backend/config.json がありません。先に node setup.mjs を実行してください。");
       return 1;
     }
-    say("設定を確かめます (用途別の3モデルへ1回ずつ投げます)...\n");
+    say("設定を確かめます (設定されたモデルへ小さなリクエストを投げます)...\n");
     return await run("npx", ["tsx", "scripts/check-config.ts"], path.join(ROOT, "backend"));
   }
 

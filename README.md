@@ -83,7 +83,7 @@ AIに何をさせないか (権限境界) と、割り切った部分は [docs/s
 
 ## 起動方法
 
-前提: Node.js 20+ と、**いずれか1つ**のLLM接続先(OpenAI / Anthropic / OrcaRouter / ローカルLLM)。
+前提: Node.js 20+ と、**いずれか1つ**のLLM接続先(OpenAI / Anthropic / OrcaRouter)。
 
 ### AI CLI に任せる場合
 
@@ -134,8 +134,8 @@ node setup.mjs
 
 - **キーは受け取りません。**表示されたパス(`~/.openai/apikey.txt` など)に、自分で1行だけ書いてください。打ち込んだ値がターミナルやシェル履歴に残らないので、置いたあとに気にすることがありません
 - **`backend/config.json` が既にあれば触りません。**キーやモデルIDを自分で書き換えていても消えません
-- 対話せずに進めるなら `node setup.mjs --provider openai`(`anthropic` / `ollama` / `orcarouter`)
-- 置いたあとに `node setup.mjs --check` で、宛先・キー・モデルIDが揃っているかを確かめられます(用途別の3モデルへ1回ずつ投げるので、わずかに課金されます)
+- 対話せずに進めるなら `node setup.mjs --provider openai`(`anthropic` / `orcarouter`)
+- 置いたあとに `node setup.mjs --check` で、宛先・キー・モデルIDが揃っているかを確かめられます(実際にLLMへ小さく投げるので、わずかに課金されます)
 
 起動は表示される案内の通りです(Windows は `.\start-dev.ps1`、macOS / Linux はターミナル2つ)。
 
@@ -152,7 +152,7 @@ cd backend; npm install; cd ../frontend; npm install; cd ..
 # 2. LLMの設定 — 使うプロバイダの見本を1枚コピーしてキーを書く
 copy backend\examples\config.openai.json backend\config.json
 
-# 3. 疎通確認 (用途別の3モデルすべてに1回ずつ投げます)
+# 3. 疎通確認 (設定されたモデルへ小さなリクエストを1回投げます)
 cd backend; npx tsx scripts/check-config.ts; cd ..
 
 # 4. 起動 (DBバックアップ → 両サーバーを別ウィンドウで起動 → ヘルスチェック)
@@ -205,9 +205,7 @@ macOS / Linux では、2 が `cp backend/examples/config.openai.json backend/con
   "baseURL": "https://api.openai.com/v1",
   "apiStyle": "chat",                     // "chat" | "messages" (APIの形式。プロバイダ名ではない)
   "models": {
-    "main": "gpt-5.4-mini-2026-03-17",    // 対話
-    "archive": "gpt-5.6-luna",            // 要約の要素分解
-    "cheap": "gpt-5.6-luna"               // 定型処理
+    "main": "gpt-5.4-mini-2026-03-17"     // 対話。LLMを呼ぶのはここだけ (#202)
   }
 }
 ```

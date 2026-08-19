@@ -29,6 +29,8 @@ export default function App() {
   const [lanes, setLanes] = useState<CustomLane[]>([]);
   // #212: 上流に断られたまま (残高切れ・キー失効・混雑)。原因は断定しない — 見分けて見せる必要が無い
   const [llmRefused, setLlmRefused] = useState(false);
+  // #213: 添付の入口。公開デモでは閉じる (既定は開いている)
+  const [canAttach, setCanAttach] = useState(true);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [toast, setToast] = useState<Toast | null>(null);
@@ -77,6 +79,7 @@ export default function App() {
       setFolded(b.folded ?? []);
       setLanes(b.lanes ?? []);
       setLlmRefused(!!b.llmRefused);
+      setCanAttach(b.attachments !== false);
     } catch (e: any) {
       setLoadError(e?.message ?? String(e));
     } finally {
@@ -101,13 +104,14 @@ export default function App() {
     };
     // #72: メインチャットはリロードで新規 (会話は作業記憶。重要事項はプロジェクト前提/タスク経緯メモに
     // 蒸留されて残り、生ログはDBに保存済みで query_log から引ける)。タスクチャットは経緯ログなので復元維持
-    const onBoard = (p: { tasks: Task[]; folded?: FoldedTask[]; lanes?: CustomLane[]; llmRefused?: boolean }) => {
+    const onBoard = (p: { tasks: Task[]; folded?: FoldedTask[]; lanes?: CustomLane[]; llmRefused?: boolean; attachments?: boolean }) => {
       setTasks(p.tasks);
       if (p.folded) setFolded(p.folded);
       // **空配列も反映する。**`if (p.lanes)` にすると最後の1本を畳んだときだけ列が残る
       if (p.lanes) setLanes(p.lanes);
       // 断られた/直った の変化があったときにサーバーが流してくれるので、直れば消える
       setLlmRefused(!!p.llmRefused);
+      setCanAttach(p.attachments !== false);
     };
     // Done要約カードの非同期再生成中インジケータ (#56)
     // プロジェクトが切り替わったら全部読み直す (他のタブ/端末での切り替えにも追従する)
@@ -459,6 +463,7 @@ export default function App() {
         onSend={sendFromChat}
         onStop={mainChat.stop}
         onReset={resetChat}
+        canAttach={canAttach}
       />
       </div>
       {detailTask && (

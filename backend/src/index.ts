@@ -8,6 +8,7 @@ import { generateSuggestions, runChatTurn } from "./chat.js";
 import { warnIfConfigNotIgnored } from "./config.js";
 import { hooks } from "./hooks.js";
 import { upstreamRefused } from "./llm.js";
+import { attachmentsEnabled, jsonLimit } from "./demoMode.js";
 import { log } from "./log.js";
 import { buildMcpServer } from "./mcp.js";
 import { isAllowedOrigin, isBrowserCrossSite } from "./origin.js";
@@ -94,7 +95,8 @@ app.use((req, res, next) => {
   log("api", `許可していないOriginからの要求を拒否しました: ${req.header("Origin")} ${req.method} ${req.path}`);
   res.status(403).json({ error: "forbidden origin" });
 });
-app.use(express.json({ limit: "25mb" })); // #68: 添付(画像/PDFのbase64)を受けるため拡大
+// #68: 添付(画像/PDFのbase64)を受けるため拡大。#213: デモでは添付を閉じるので小さくする
+app.use(express.json({ limit: jsonLimit() }));
 
 // #97: どのプロジェクトへの操作かはクライアントがヘッダで明示する (UIはURL /p/<id> が持つ)。
 // 指定が無ければ既定プロジェクト (スクリプトやcurlからの素の呼び出し用)。
@@ -177,6 +179,9 @@ function boardPayload(projectId: number) {
     // #212: 上流に断られたまま (残高切れ・キー失効・混雑)。**板を開いた時点で伝わる**ようにする。
     // わざわざ確かめには行かない — 定期監視はそれ自体が課金経路になる (#183)
     llmRefused: upstreamRefused(),
+    // #213: 添付の入口が開いているか。**画面を隠すだけでは足りない**ので下で断ってもいるが、
+    // 押せないボタンを出しておく理由も無い
+    attachments: attachmentsEnabled(),
   };
 }
 
@@ -367,6 +372,10 @@ let chatSeq = 0;
 app.post("/api/chat", async (req, res) => {
   const { message, history, attachments, view } = req.body ?? {};
   if (!message) return res.status(400).json({ error: "message required" });
+  // #213: **入口ごとにズレると事故る。**画面の「+」を隠しても curl では通るので、ここで断る。
+  // 黙って捨てない — 送ったのに読まれていない、が一番たちが悪い (#123 と同じ線)
+  if (attachments?.length && !attachmentsEnabled())
+    return res.status(400).json({ error: "このデモでは添付を受け付けていません" });
   const id = ++chatSeq;
   const t0 = Date.now();
   log(
@@ -424,6 +433,10 @@ app.post("/api/tasks/:id/chat", async (req, res) => {
   const taskId = Number(req.params.id);
   const { message, history, attachments, view } = req.body ?? {};
   if (!message) return res.status(400).json({ error: "message required" });
+  // #213: **入口ごとにズレると事故る。**画面の「+」を隠しても curl では通るので、ここで断る。
+  // 黙って捨てない — 送ったのに読まれていない、が一番たちが悪い (#123 と同じ線)
+  if (attachments?.length && !attachmentsEnabled())
+    return res.status(400).json({ error: "このデモでは添付を受け付けていません" });
   // 対象が居ないなら、LLMを呼ぶ前に断る。以前は存在確認が無く、taskFocus が undefined のまま
   // 通常チャットに近い状態で有料の呼び出しが走り、存在しないIDの会話ログまで残っていた
   // (chat_messages.task_id に外部キーは無い。自動レビュー指摘)。

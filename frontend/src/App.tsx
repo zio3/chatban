@@ -27,6 +27,8 @@ export default function App() {
   // #19: 有効な任意レーン。**ボードと一緒に届く** — 別のAPIで取りに行くと、
   // レーン名を変えた直後だけ列とカードの表示がズレる (同じ配信物に載せておけば起きない)
   const [lanes, setLanes] = useState<CustomLane[]>([]);
+  // #212: 上流に断られたまま (残高切れ・キー失効・混雑)。原因は断定しない — 見分けて見せる必要が無い
+  const [llmRefused, setLlmRefused] = useState(false);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [toast, setToast] = useState<Toast | null>(null);
@@ -74,6 +76,7 @@ export default function App() {
       setTasks(b.tasks);
       setFolded(b.folded ?? []);
       setLanes(b.lanes ?? []);
+      setLlmRefused(!!b.llmRefused);
     } catch (e: any) {
       setLoadError(e?.message ?? String(e));
     } finally {
@@ -98,11 +101,13 @@ export default function App() {
     };
     // #72: メインチャットはリロードで新規 (会話は作業記憶。重要事項はプロジェクト前提/タスク経緯メモに
     // 蒸留されて残り、生ログはDBに保存済みで query_log から引ける)。タスクチャットは経緯ログなので復元維持
-    const onBoard = (p: { tasks: Task[]; folded?: FoldedTask[]; lanes?: CustomLane[] }) => {
+    const onBoard = (p: { tasks: Task[]; folded?: FoldedTask[]; lanes?: CustomLane[]; llmRefused?: boolean }) => {
       setTasks(p.tasks);
       if (p.folded) setFolded(p.folded);
       // **空配列も反映する。**`if (p.lanes)` にすると最後の1本を畳んだときだけ列が残る
       if (p.lanes) setLanes(p.lanes);
+      // 断られた/直った の変化があったときにサーバーが流してくれるので、直れば消える
+      setLlmRefused(!!p.llmRefused);
     };
     // Done要約カードの非同期再生成中インジケータ (#56)
     // プロジェクトが切り替わったら全部読み直す (他のタブ/端末での切り替えにも追従する)
@@ -399,6 +404,17 @@ export default function App() {
         {/* #179: ここに担当フィルタのチップが並んでいた (担当という軸ごと撤去)。
             #180: 右端にあったアカウント表示とログイン/ログアウトも、認証の廃止で消えた */}
       </header>
+      {/* #212: 上流に断られたまま。**原因を断定しない** — 残高切れ・キー失効・混雑を
+          見分けて見せる必要は、触っている人には無い (判別は人間が backend/logs/ の本文でやる)。
+          公開デモは「残高が尽きたら終わり」を期限そのものにしているので、これが終了の合図にもなる */}
+      {llmRefused && (
+        <div
+          data-testid="llm-refused"
+          className="border-b border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-800"
+        >
+          チャットの接続がいま使えません。板の操作 (カードの追加・移動・検収) はそのまま使えます。
+        </div>
+      )}
       <main className="min-h-0 flex-1 overflow-auto p-3">
         {view === "context" && <ContextView />}
         {view === "settings" && <SettingsView />}

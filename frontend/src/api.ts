@@ -70,7 +70,7 @@ export const api = {
   purgeTask: (id: number) => apiFetch(`/api/trash/${id}`, { method: "DELETE" }).then((r) => json<{ ok: boolean }>(r)),
   board: () =>
     apiFetch("/api/board").then((r) =>
-      json<{ tasks: Task[]; folded: FoldedTask[]; lanes: CustomLane[] }>(r)
+      json<{ tasks: Task[]; folded: FoldedTask[]; lanes: CustomLane[]; llmRefused?: boolean }>(r)
     ),
   updateTask: (id: number, patch: Partial<Pick<Task, "title" | "summary" | "sort">> & { status?: TaskStatus }) =>
     apiFetch(`/api/tasks/${id}`, {

@@ -7,6 +7,7 @@ import { foldDoneColumn, foldedContainer, onTaskReopened } from "./archive.js";
 import { generateSuggestions, runChatTurn } from "./chat.js";
 import { warnIfConfigNotIgnored } from "./config.js";
 import { hooks } from "./hooks.js";
+import { upstreamRefused } from "./llm.js";
 import { log } from "./log.js";
 import { buildMcpServer } from "./mcp.js";
 import { isAllowedOrigin, isBrowserCrossSite } from "./origin.js";
@@ -169,7 +170,14 @@ function rejoinFollowers(projectId: number) {
 /** ボードが受け取る一式。**取得と配信で同じ関数を通す** —
  * 「初回だけ揃っていて以後ズレる」を型で防ぐ (#19 で lanes を足したとき、片方だけ直る形にしない) */
 function boardPayload(projectId: number) {
-  return { tasks: listTasks(), folded: foldedContainer(projectId) ?? [], lanes: customLanes(projectId) };
+  return {
+    tasks: listTasks(),
+    folded: foldedContainer(projectId) ?? [],
+    lanes: customLanes(projectId),
+    // #212: 上流に断られたまま (残高切れ・キー失効・混雑)。**板を開いた時点で伝わる**ようにする。
+    // わざわざ確かめには行かない — 定期監視はそれ自体が課金経路になる (#183)
+    llmRefused: upstreamRefused(),
+  };
 }
 
 function broadcastBoard(projectId = currentProjectId()) {
@@ -369,6 +377,10 @@ app.post("/api/chat", async (req, res) => {
   res.on("close", () => {
     if (!res.writableEnded) log("chat", `#${id} CLIENT DISCONNECTED after ${Date.now() - t0}ms`);
   });
+  // #212: 断られた/直った の**変化があったときだけ**板に流す。
+  // 直った側を流さないと、成功しても板が変わらない応答 (ツールを呼ばない会話) では
+  // バナーが出たまま残る — 「通れば false が飛んでくる」が嘘になる
+  const wasRefused = upstreamRefused();
   try {
     const result = await runChatTurn(
       message,
@@ -391,9 +403,13 @@ app.post("/api/chat", async (req, res) => {
       "chat",
       `#${id} OK ${Date.now() - t0}ms rounds=${result.usage.rounds} tools=[${result.trace.map((t) => t.tool).join(",")}] reply=${result.reply.length}ch`
     );
+    if (wasRefused !== upstreamRefused()) broadcastBoard();
     res.json(result);
   } catch (e: any) {
     log("chat", `#${id} FAILED ${Date.now() - t0}ms: ${e?.message ?? e}`);
+    // #212: 上流に断られたことを板にも流す。**失敗そのものは板を変えない**ので、
+    // ここで流さないと画面は次のリロードまで気づけない (E2Eで実際に踏んだ)
+    if (wasRefused !== upstreamRefused()) broadcastBoard();
     res.status(500).json({ error: e?.message ?? "chat failed" });
   }
 });
@@ -416,6 +432,10 @@ app.post("/api/tasks/:id/chat", async (req, res) => {
   const id = ++chatSeq;
   const t0 = Date.now();
   log("chat", `#${id} TASK-CHAT(task=${taskId}) REQ "${String(message).slice(0, 120)}"`);
+  // #212: 断られた/直った の**変化があったときだけ**板に流す。
+  // 直った側を流さないと、成功しても板が変わらない応答 (ツールを呼ばない会話) では
+  // バナーが出たまま残る — 「通れば false が飛んでくる」が嘘になる
+  const wasRefused = upstreamRefused();
   try {
     const result = await runChatTurn(
       message,
@@ -437,9 +457,13 @@ app.post("/api/tasks/:id/chat", async (req, res) => {
     );
     saveChatMessage("assistant", result.reply, result.trace, result.usage, taskId);
     log("chat", `#${id} OK ${Date.now() - t0}ms rounds=${result.usage.rounds} tools=[${result.trace.map((t) => t.tool).join(",")}]`);
+    if (wasRefused !== upstreamRefused()) broadcastBoard();
     res.json(result);
   } catch (e: any) {
     log("chat", `#${id} FAILED ${Date.now() - t0}ms: ${e?.message ?? e}`);
+    // #212: 上流に断られたことを板にも流す。**失敗そのものは板を変えない**ので、
+    // ここで流さないと画面は次のリロードまで気づけない (E2Eで実際に踏んだ)
+    if (wasRefused !== upstreamRefused()) broadcastBoard();
     res.status(500).json({ error: e?.message ?? "chat failed" });
   }
 });

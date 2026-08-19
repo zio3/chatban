@@ -115,7 +115,7 @@ node setup.mjs
 | 接続先 | キーを作る場所 | 置き場所 | 備考 |
 |---|---|---|---|
 | OpenAI | https://platform.openai.com/api-keys | `~/.openai/apikey.txt` | 動作確認済み |
-| Anthropic | https://console.anthropic.com/settings/keys | `~/.anthropic/apikey.txt` | プロンプトキャッシュが効きます |
+| Anthropic | https://console.anthropic.com/settings/keys | `~/.anthropic/apikey.txt` | プロンプトキャッシュが効きます。**未検証**(手元のキーが失効していて通していません。モデルIDも候補です) |
 | OrcaRouter | https://www.orcarouter.ai | `~/.orcarouter/apikey.txt` | 1つのキーで多くのモデル。モデルIDは `provider/model` 形式 |
 
 `~` はホームフォルダです(Windows なら `C:\Users\<あなた>`)。フォルダが無ければ作ります。
@@ -155,7 +155,7 @@ cd backend && npm run dev      # ターミナル1 → http://localhost:8787
 cd frontend && npm run dev     # ターミナル2 → http://localhost:5173
 ```
 
-`start-dev.ps1` は Windows 前提のスクリプトで、DBのバックアップ・2つのサーバーの起動・ヘルスチェックをまとめてやります。やっていることは上の2コマンドと同じなので、**他のOSでは2ターミナル方式がそのまま代わりになります**。
+`start-dev.ps1` は Windows 前提のスクリプトで、**DBのバックアップ**・2つのサーバーの起動・ヘルスチェックをまとめてやります。**サーバーを起動する部分だけが上の2コマンドと同じ**で、バックアップとヘルスチェックは他のOSでは行われません。`backend/data/` が育ってきたら、**自分でバックアップを取ってください**(中身はSQLiteファイルなので、コピーで足ります)。
 
 開くのは **http://localhost:5173** です(8787 はAPI側なので、そちらを開いても画面は出ません)。
 

@@ -259,7 +259,7 @@ cd backend && npx tsx scripts/check-config.ts && cd ..
   "baseURL": "https://api.openai.com/v1",
   "apiStyle": "chat",                     // "chat" | "messages" (APIの形式。プロバイダ名ではない)
   "models": {
-    "main": "gpt-5.4-mini-2026-03-17"     // 対話。LLMを呼ぶのはここだけ (#202)
+    "main": "gpt-5.6-luna"                // 対話。LLMを呼ぶのはここだけ (#202)
   }
 }
 ```

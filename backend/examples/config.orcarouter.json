@@ -17,6 +17,6 @@
   "baseURL": "https://api.orcarouter.ai/v1",
   "apiStyle": "chat",
   "models": {
-    "main": "openai/gpt-5.4-mini-2026-03-17"
+    "main": "openai/gpt-5.6-luna"
   }
 }

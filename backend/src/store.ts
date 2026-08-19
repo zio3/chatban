@@ -102,7 +102,7 @@ CREATE TABLE IF NOT EXISTS settings (
       "DELETE FROM settings WHERE key LIKE 'auth.%' OR key LIKE 'model.%' OR key LIKE 'suggest.enabled.%' OR key = 'suggest.enabled'"
     )
     .run().changes;
-  if (purged > 0) log("schema", `認証・モデル・プロジェクト別提案設定 ${purged}件を削除しました (#180 / #181 / #199)`);
+  if (purged > 0) log("schema", `認証・モデル・提案チップの設定 ${purged}件を削除しました (#180 / #181 / #199 / #209)`);
 
   // #181: 計測系のテーブルを落とす。llm_calls (呼び出しごとのトークン・単価・概算額) と
   // model_prices (182件の料金表)。**読まないだけにして残さない** — #179/#180 と同じ判断で、

@@ -6,14 +6,20 @@ import AttachmentTray from "./AttachmentTray";
 import ThinkingIndicator from "./ThinkingIndicator";
 import type { ChatEntry } from "../types";
 
+/** trace のチップに出す道具の名前 (「🔧 カード追加」)。進捗表示 (backend の TOOL_LABELS) は
+ * 動詞形で、こちらは名詞形。**用途が違うので表は分けたまま**、揃っているかは
+ * backend の toolLabels.test.ts が buildTools() と突き合わせて見張る (#229)。
+ * 道具を増減したら、backend と合わせてここも直すこと */
 const TOOL_LABELS: Record<string, string> = {
   create_cards: "カード追加",
   update_cards: "カード更新",
-  delete_cards: "カード削除",
-  set_view: "ビュー切替",
+  // #102: 削除ではなくゴミ箱行き。画面に「削除」と出すと取り返しがつかないものに見える
+  delete_cards: "ゴミ箱へ移動",
+  restore_cards: "ゴミ箱から復元",
+  reorder_cards: "並び順変更",
+  search_cards: "経緯検索",
+  query_log: "記録集計",
   update_project_context: "前提情報更新",
-  compact_archive: "ログ整頓",
-  get_task_details: "詳細取得",
   update_task_context: "経緯メモ更新",
 };
 

@@ -605,12 +605,15 @@ const VIEW_HINTS: Record<string, string> = {
   ].join("\n"),
 };
 
-const TOOL_LABELS: Record<string, string> = {
+/** ツール実行中の進捗表示 (「カードを追加中…」)。**画面側の trace ラベルとは別物**で、
+ * あちらは名詞形 (「カード追加」)。用途が違うので表を分けているが、
+ * **どちらも buildTools() の道具立てと合っていないと嘘になる** — 揃っているかは
+ * toolLabels.test.ts が見張る (#229: set_view という存在しない道具が載っていた) */
+export const TOOL_LABELS: Record<string, string> = {
   create_cards: "カードを追加",
   update_cards: "カードを更新",
   delete_cards: "ゴミ箱へ移動",
   restore_cards: "ゴミ箱から復元",
-  set_view: "ビューを切替",
   update_project_context: "前提情報を更新",
   reorder_cards: "並び順を変更",
   search_cards: "経緯を検索",

@@ -400,22 +400,11 @@ export function setProjectContext(rawText: string, version?: number): { ok: bool
   return { ok: true };
 }
 
-// #88: 実行時設定 (管理画面から変更可能な値)。未設定ならenv/既定値にフォールバックする。
-// モデル設定はプロジェクトをまたいで共通なので管理DB側 (#86)
-export function getSetting(key: string): string | null {
-  const r = admin.prepare("SELECT value FROM settings WHERE key = ?").get(key) as { value: string } | undefined;
-  return r?.value ?? null;
-}
-
-export function setSetting(key: string, value: string): void {
-  admin.prepare(
-    "INSERT INTO settings (key, value, updated_at) VALUES (?, ?, datetime('now', 'localtime')) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at"
-  ).run(key, value);
-}
-
-export function deleteSetting(key: string): void {
-  admin.prepare("DELETE FROM settings WHERE key = ?").run(key);
-}
+// #225: settings の読み書きアクセサ (getSetting / setSetting / deleteSetting) はここに置かない。
+// #88 の設定タブ (#181で撤去) と提案チップの設定 (#209で撤去) が使っていたもので、利用者がいなくなった。
+// **settings テーブル自体は現役**だが、唯一の利用者 (store.ts の project.active) は生SQLで触っている。
+// store.ts 側に寄せたのは依存の向きが決めた — db.ts が store.ts から admin を貰っているので、
+// 逆にすると循環する。触り方を1つにしておかないと、次に設定が要るときにどちらを使うか迷う
 
 export function saveChatMessage(
   role: "user" | "assistant",
@@ -469,26 +458,13 @@ export function listChatMessages(limit = 50, taskId?: number): {
 // backend/logs/chatban-YYYY-MM-DD.log で足りる (リクエスト・LLM往復・ツール実行・切断が全部残る)。
 // 会話ログ (chat_messages) は残っているので、「いつ何を頼んだか」は query_log で引ける
 
-/** #93: 「直近なにをしてた?」に実データで答えるための活動ログ。
- * 生ログ全部ではなく、経緯を語るのに要る分だけを絞って返す
- * (ツールの戻り値がそのままプロンプトに乗るので、量がコストに直結する)。
- * 会話ログは含めない — 進行中の会話は履歴として既にモデルの手元にあるため */
-export function recentActivity(limit = 15) {
-  const tasks = (
-    db()
-      .prepare(
-        "SELECT id, title, status, rejected, updated_at FROM cards WHERE trashed_at IS NULL ORDER BY updated_at DESC, id DESC LIMIT ?"
-      )
-      .all(limit) as any[]
-  ).map((r) => ({
-    id: r.id,
-    title: r.title,
-    status: r.status,
-    ...(r.rejected ? { rejected: true } : {}),
-    at: r.updated_at,
-  }));
-  return { updatedTasks: tasks };
-}
+// #225: #93 の recentActivity (「直近なにしてた?」用) はここに置かない。
+// **役目を終えている** — SQL窓口 (#108) に、欲しい形を毎回書ける窓口がある。
+// query_log で `SELECT id, status, title, summary, updated_at FROM live_cards
+// ORDER BY updated_at DESC LIMIT 15` と書けば近い一覧が引ける (アーカイブ済みも見たいなら
+// live_cards ではなく cards を、却下も分けたいなら rejected を足す — 旧関数は
+// アーカイブ込み・rejected 付きで固定だった)。**固定の形を関数で持たない**のがSQL窓口の趣旨で、
+// 専用の関数が別に残っていると、次に「直近」を出すときにどちらで書くかが分かれる
 
 // #91: 並べ替えはLLMが決めた順番(ID列)をそのまま受け取る。
 //

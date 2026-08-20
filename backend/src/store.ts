@@ -436,7 +436,7 @@ export function getProject(id: number): ProjectRow | undefined {
   return admin.prepare("SELECT * FROM projects WHERE id = ?").get(id) as ProjectRow | undefined;
 }
 
-export function insertProject(name: string): ProjectRow {
+function insertProject(name: string): ProjectRow {
   const info = admin.prepare("INSERT INTO projects (name, file) VALUES (?, '')").run(name);
   const id = Number(info.lastInsertRowid);
   const file = join("projects", `${id}-${slug(name)}.db`);
@@ -465,18 +465,18 @@ export function setProjectArchived(id: number, archived: boolean): void {
   admin.prepare("UPDATE projects SET archived = ? WHERE id = ?").run(archived ? 1 : 0, id);
 }
 
-export function deleteProjectRow(id: number): void {
+function deleteProjectRow(id: number): void {
   admin.prepare("DELETE FROM projects WHERE id = ?").run(id);
 }
 
-export function projectFilePath(p: ProjectRow): string {
+function projectFilePath(p: ProjectRow): string {
   return join(DATA_DIR, p.file);
 }
 
 // 開いたハンドルは使い回す (better-sqlite3は同期APIなのでプロセス内で持てば足りる)
 const handles = new Map<number, Database.Database>();
 
-export function projectDb(id: number): Database.Database {
+function projectDb(id: number): Database.Database {
   const cached = handles.get(id);
   if (cached) return cached;
   const row = getProject(id);
@@ -496,7 +496,7 @@ export function projectDb(id: number): Database.Database {
  *
  * 「接続を1つ足したら、閉じる側にも足す」を忘れると、Windowsでだけ壊れる。
  * 開ける場所が2つあるなら閉じる場所も2つ要る */
-export function closeProjectDb(id: number): void {
+function closeProjectDb(id: number): void {
   for (const map of [handles, roHandles]) {
     const h = map.get(id);
     if (h) {

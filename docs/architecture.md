@@ -220,11 +220,10 @@ DateTimeOffset に相当する型が無く (TEXT/INTEGER/REAL/BLOB/NULL のみ)�
 オフセットを測り、想定 (既定 `+09:00`、`CHATBAN_TZ_OFFSET` で変更可) と違えば
 理由と直し方を出して `process.exit(1)` する (`backend/src/timezone.ts`)。
 
-## チャットのツール (9)
+## チャットのツール (8)
 
 `create_cards` / `update_cards` / `delete_cards`(ゴミ箱行き) / `restore_cards` /
-`update_task_context` / `reorder_cards` /
-`search_cards` / `query_log` / `update_project_context`
+`reorder_cards` / `search_cards` / `query_log` / `update_project_context`
 
 **読み取りは `query_log` (SQL) に寄せている (#108)**。人間のWebUIは画面が決まっているので
 固定のクエリ関数を使うが、チャット/MCPは「何をどう見たいか」が毎回違うのでSQLを組ませる。

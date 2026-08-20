@@ -20,7 +20,6 @@ const TOOL_LABELS: Record<string, string> = {
   search_cards: "経緯検索",
   query_log: "記録集計",
   update_project_context: "前提情報更新",
-  update_task_context: "経緯メモ更新",
 };
 
 export interface Suggestion {

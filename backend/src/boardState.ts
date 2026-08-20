@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { getProjectContextRow, listTasks } from "./db.js";
+import { getProjectContextRow, listCards } from "./db.js";
 import { currentProjectId } from "./store.js";
 import { log } from "./log.js";
 
@@ -101,7 +101,7 @@ const snapshots = new Map<number, BoardSnapshot[]>();
 /** いまのボードを写し取る。DBに触るのはここだけで、差分計算(diffBoards)は純粋関数にしてある */
 export function captureBoard(): Omit<BoardSnapshot, "syncToken" | "takenAt"> {
   const cards = new Map<number, TaskFacts>(
-    listTasks().map((t) => [
+    listCards().map((t) => [
       t.id,
       {
         title: t.title,
@@ -121,7 +121,7 @@ export function captureBoard(): Omit<BoardSnapshot, "syncToken" | "takenAt"> {
 
 /** 列ごとの「並んでいるIDの列」。sort の数値ではなくこの並びを比べる。
  * only を渡すと、そこに含まれるIDだけで並びを作る (追加・消滅による見かけの変化を除くため)。
- * sort が同値のときは id で決める — 実データは listTasks の ORDER BY sort, id 順で入るので、
+ * sort が同値のときは id で決める — 実データは listCards の ORDER BY sort, id 順で入るので、
  * 比較関数にも同じ規則を書いておく (暗黙の安定性に寄りかからない) */
 function columnLists(cards: Map<number, TaskFacts>, only?: Set<number>): Map<string, number[]> {
   const byStatus = new Map<string, { id: number; sort: number }[]>();
@@ -315,14 +315,6 @@ export interface BoardDelta {
 }
 
 /**
- * MCPの応答に載せるボード状況を組み立てる。
- *
- * - 同期トークンが無い / メモリに無い / 失効している → **全件を返す** (エラーにしない)。
- *   失効は正常系で、エラーを返すとLLMがリトライを考え始める
- * - 見つかれば、そこからの差分だけ返す
- * - 差分が MAX_CHANGES を超えたら、読ませる負担が上回るので全件に切り替える
- */
-/**
  * 書き込み応答に混ぜるボード部分を組み立てる。**boardDelta と分けてあるのはテストのため** —
  * ここはDBに触らない純粋関数なので、キーの取り違えを単体で固定できる。
  *
@@ -345,6 +337,14 @@ export function formatBoardUpdate(d: BoardDelta, syncToken?: string): Record<str
   };
 }
 
+/**
+ * MCPの応答に載せるボード状況を組み立てる。
+ *
+ * - 同期トークンが無い / メモリに無い / 失効している → **全件を返す** (エラーにしない)。
+ *   失効は正常系で、エラーを返すとLLMがリトライを考え始める
+ * - 見つかれば、そこからの差分だけ返す
+ * - 差分が MAX_CHANGES を超えたら、読ませる負担が上回るので全件に切り替える
+ */
 export function boardDelta(syncToken?: string): BoardDelta {
   const snap = takeSnapshot();
   const base = syncToken ? findSnapshot(syncToken) : null;

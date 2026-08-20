@@ -12,7 +12,7 @@ import {
   createTask,
   trashTask,
   getTask,
-  listTasks,
+  listCards,
   PUBLIC_TABLES,
   queryLogHelp,
   queryProjectData,
@@ -755,7 +755,7 @@ export async function generateSuggestions(): Promise<{ label: string; message: s
     chatBusy: isChatBusy(currentProjectId()),
     // #200: 畳んだ箱も見る。**入口ごとにズレると事故る** — 画面側 (App.tsx の isEmptyBoard) は
     // 箱を見ているので、ここだけカードしか見ないと「板には箱が出ているのに提案だけ空」になる
-    emptyBoard: listTasks().length === 0 && (foldedContainer(currentProjectId()) ?? []).length === 0,
+    emptyBoard: listCards().length === 0 && (foldedContainer(currentProjectId()) ?? []).length === 0,
   });
   if (skip) return [];
   const projectId = currentProjectId();

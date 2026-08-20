@@ -41,7 +41,7 @@ import {
   getProjectContextRow,
   getTask,
   listChatMessages,
-  listTasks,
+  listCards,
   saveChatMessage,
   updateTask,
   updateTasks,
@@ -173,7 +173,7 @@ function rejoinFollowers(projectId: number) {
  * 「初回だけ揃っていて以後ズレる」を型で防ぐ (#19 で lanes を足したとき、片方だけ直る形にしない) */
 function boardPayload(projectId: number) {
   return {
-    cards: listTasks(),
+    cards: listCards(),
     folded: foldedContainer(projectId) ?? [],
     lanes: customLanes(projectId),
     // #212: 上流に断られたまま (残高切れ・キー失効・混雑)。**板を開いた時点で伝わる**ようにする。

@@ -72,6 +72,11 @@ const REMOVED: { word: string; why: string; allow?: RegExp }[] = [
   { word: "llm_calls", why: "#181 で計測系を撤去" },
   { word: "model_prices", why: "#181 で料金表を撤去" },
   { word: "summary_cards", why: "#200 で要約カードを撤去" },
+  // #223: update_cards の薄いラッパーで、機能はすべて update_cards にある。
+  // **チャットの道具で唯一 task を名乗っていた** (#215 の取りこぼし) 上に、MCP側には無く、
+  // 返り値の形も他と違った (失敗が英語の {error} だけ)。誘導先はプロンプトに2箇所あったので、
+  // 定義を消しただけでは「無い道具を呼べ」と書いてある状態になる — そこをここで見る
+  { word: "update_task_context", why: "#223 で撤去 (update_cards の context_append に寄せた)" },
 ];
 
 for (const { word, why, allow } of REMOVED) {

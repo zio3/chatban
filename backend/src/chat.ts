@@ -343,26 +343,6 @@ export function buildTools(lanes: CustomLane[]): OpenAI.Chat.Completions.ChatCom
   {
     type: "function",
     function: {
-      name: "update_task_context",
-      description: "カードの経緯メモを更新する。既定は全文上書き(既存を query_log で読みマージした全文を渡す)。append=true なら末尾に追記する",
-      parameters: {
-        type: "object",
-        properties: {
-          id: { type: "integer", description: "カードID。会話で「#112」と呼ばれるものと同じで、cards テーブルの主キー(id)。プロジェクトごとに1から振られるので、別プロジェクトの#112とは別物" },
-          text: { type: "string", description: "新しいcontext全文 (append=true のときは追記する文だけ)" },
-          append: { type: "boolean", description: `trueなら追記。${CONTEXT_APPEND_DESCRIPTION}` },
-          context_version: {
-            type: "integer",
-            description: "全文上書き(append=false)のときのみ必須。query_log で読んだ context_version をそのまま渡す。読んでから書くまでの間に他から追記されていないかの確認に使う",
-          },
-        },
-        required: ["id", "text"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
       name: "reorder_cards",
       description: REORDER_DESCRIPTION,
       parameters: {
@@ -472,19 +452,6 @@ async function execTool(name: string, args: any, uiActions: UiAction[], events: 
       events.add("board");
       return r;
     }
-    case "update_task_context": {
-      // #112/#114: 経緯メモの上書きも agentWrite を通す (版の確認を1箇所に集約)
-      const r = updateTasksAsAgent([
-        args.append
-          ? { id: args.id, context_append: cleanAgentText(args.text) ?? "" }
-          : { id: args.id, context: cleanAgentText(args.text) ?? "", context_version: args.context_version },
-      ]);
-      if (r.conflicts?.length) return { ok: false, conflict: r.conflicts[0], note: r.note };
-      const updated = r.updated[0] as ReturnType<typeof getTask>;
-      if (!updated) return { error: `task #${args.id} not found` };
-      events.add("board");
-      return { ok: true, id: updated.id };
-    }
     case "reorder_cards": {
       const r = reorderTasks(args.ids ?? [], args.status);
       events.add("board");
@@ -542,7 +509,7 @@ export function buildSystemPrompt(taskFocus?: ReturnType<typeof getTask>, view?:
     "- 「終わりました」等の完了報告は status=review に置き、「Reviewに置いたので確認OKなら承認を」と一言返す。勝手に done にしない (doneは検収済みの意味で、即アーカイブされる)。",
     "- あなたは done に変更できない (ツールが受け付けず review に置き換わる)。完了・却下・承認はすべて status=review に置き、done への確定はボードのReview列の検収チェック(人間の操作)だけが行う。「doneにして」「まとめて承認」と言われたら review に置いた上で「確定はReview列の検収チェックからお願いします」と案内する。",
     "- 共通の前提・決まりごと(締切、方針、用語など)を伝えられたら update_project_context で前提情報に反映する。",
-    "- 特定カードの経緯・決定事項・補足(「#22は◯◯方式でいくことにした」等)は update_task_context でそのカードの経緯メモに記録する。",
+    "- 特定カードの経緯・決定事項・補足(「#22は◯◯方式でいくことにした」等)は update_cards の context_append でそのカードの経緯メモに1行足す。",
     "- summary は「いまどうなっているか」。進捗・完了報告は summary に一言で書き、詳細な根拠は経緯メモ(context)に書く。",
     "- 過去の判断や経緯・過去の会話を聞かれたら(「なんで◯◯にしたんだっけ」「あんな話してたっけ」)、索引のタイトルだけで答えず search_cards で本文と会話ログを引く。言い換え・英日表記を自分で並べて渡し、空振りしたら語を変えて引き直す。検索結果のsnippetは断片なので、理由を答える前に query_log で経緯メモの全文を読む。時期や条件で絞りたいとき(「8/9の午前に何を話していたか」等)は query_log を使う。",
     "- 削除と却下は文脈で使い分ける: 誤登録・重複・ダミー(「消して」「間違えた」)は delete_cards (ゴミ箱行きで復元可。返答で復元方法を説明する必要はない)。やらない決定(「見送り」「却下」「やらないことにした」)は削除せず update_cards で status=review + rejected=true にし、なぜやらないと決めたかを summary に一言・詳しい経緯を経緯メモ(context / context_append)に書いて「却下としてReviewに置きました。検収で確定します」と返す (検収後、決定としてDone列に残る)。",
@@ -595,7 +562,7 @@ export function buildSystemPrompt(taskFocus?: ReturnType<typeof getTask>, view?:
           `## いま注目しているカード (このチャットは #${taskFocus.id} 専用)`,
           JSON.stringify(taskFocus),
           `- 「これ」「このカード」等の指示語は #${taskFocus.id} を指す。`,
-          `- この会話で決まったこと・分かったことは update_task_context で #${taskFocus.id} の経緯メモに反映する (既存contextを読んでマージ)。`,
+          `- この会話で決まったこと・分かったことは update_cards の context_append で #${taskFocus.id} の経緯メモに足す (既存を読む必要も版も要らない)。`,
         ].join("\n")
       : "",
   ]
@@ -638,7 +605,6 @@ export const TOOL_LABELS: Record<string, string> = {
   reorder_cards: "並び順を変更",
   search_cards: "経緯を検索",
   query_log: "記録を集計",
-  update_task_context: "経緯メモを更新",
 };
 
 // #68: 添付は「保存しない蒸留型」— 画像もPDFもそのままLLMに渡し(前処理なし、原本はどこにも残さない)、

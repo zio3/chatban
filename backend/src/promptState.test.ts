@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { cardIndexJson, clampSummary } from "./promptState.js";
 import { SUMMARY_DESCRIPTION } from "./chat.js";
@@ -72,4 +75,19 @@ test("120字ちょうどまでは切らない (通常運用では発火しない
   const just = "あ".repeat(120);
   assert.equal(clampSummary(just), just);
   assert.equal(clampSummary("実装完了 (commit abc123)"), "実装完了 (commit abc123)");
+});
+
+// #222: 索引は列の**名前**だけを持ち、意味づけはしない。
+// 前提情報 (CONTEXT_TEMPLATE) は「review が検収待ちか相手待ちかはプロジェクトによる」と
+// 明言していて、その前提情報の**下に**索引が出る。索引がハードコードの語で意味を書くと、
+// プロジェクトが決めたはずの定義を後から上書きしてしまう。
+// 実行時の値ではなくソースを見るのは、ここが「書かないこと」の検査だから
+test("索引は列の意味をハードコードしない (前提情報の定義を上書きしない)", () => {
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  const src = fs.readFileSync(path.resolve(here, "promptState.ts"), "utf-8");
+  const header = /## ボードの索引[^`]*/.exec(src);
+  assert.ok(header, "索引の見出しを読めない (組み立ての書き方が変わった可能性がある)");
+  for (const gloss of ["未着手", "作業中", "レビュー中", "検収待ち", "相手待ち", "完了"]) {
+    assert.ok(!header[0].includes(gloss), `索引の見出しが列の意味「${gloss}」を語っている`);
+  }
 });

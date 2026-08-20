@@ -14,7 +14,7 @@ import type { CustomLane, Task, TaskStatus } from "./types.js";
 // ここは「いまアクティブなプロジェクトのDB」に対する操作だけを書く。
 // db() = プロジェクトDB / admin = 管理DB (プロジェクト一覧・アプリ設定・LLM呼び出し記録)
 
-export function listTasks(includeArchived = false): Task[] {
+export function listCards(includeArchived = false): Task[] {
   // sort未設定の既存行はid順に混ざる (COALESCEでidを暫定sortとして扱う)
   // #102: ゴミ箱(trashed_at)は常に除外。復元できる形にしただけで、見え方は削除と同じ
   const where = includeArchived ? "WHERE trashed_at IS NULL" : "WHERE archived = 0 AND trashed_at IS NULL";
@@ -505,11 +505,11 @@ export function reorderTasks(
   ids: number[],
   status: TaskStatus
 ): { ordered: number; appended: number; ignored?: number[] } {
-  // 母集団はサーバー側で決める。listTasks() が archived=0 AND trashed_at IS NULL なので、
+  // 母集団はサーバー側で決める。listCards() が archived=0 AND trashed_at IS NULL なので、
   // アーカイブ済み・ゴミ箱は最初から対象外 — query_log の説明で読み手に教えている
   // 「生きているカードはこの条件」と同じ母集団を、書き込み側は実装で強制する。
   // 読みは教育で守り、書きは実装で守る (zio)
-  const targets = listTasks().filter((t) => t.status === status);
+  const targets = listCards().filter((t) => t.status === status);
   const byId = new Map(targets.map((t) => [t.id, t]));
   const seen = new Set<number>();
   const ignored: number[] = [];

@@ -1,4 +1,4 @@
-import { getProjectContext, listTasks } from "./db.js";
+import { getProjectContext, listCards } from "./db.js";
 import type { Task } from "./types.js";
 import { currentProjectId, customLanes } from "./store.js";
 import { log } from "./log.js";
@@ -106,7 +106,7 @@ export function cardIndexJson(
 }
 
 function capture(): Snapshot {
-  const cards = new Map(listTasks().map((t) => [t.id, cardIndexJson(t)]));
+  const cards = new Map(listCards().map((t) => [t.id, cardIndexJson(t)]));
   return {
     cards,
     projectContext: getProjectContext() ?? "",
@@ -121,12 +121,16 @@ function buildBaselineText(s: Snapshot): string {
   return [
     `## 今日: ${s.date}`,
     s.projectContext ? `## プロジェクトの前提情報 (全員共有)\n${s.projectContext}\n` : "",
-    `## ボードの索引 — 基準スナップショット (status: todo=未着手, inprogress=作業中, review=レビュー中${s.lanes
+    // #222: **列の意味をここで語らない。**以前は「review=レビュー中」等をハードコードしていたが、
+    // 列の意味はプロジェクトごとに違うと前提情報の雛形が明言しており (review は検収待ちか相手待ちか)、
+    // その前提情報の**下に**索引が出るので、決めたはずの定義をハードコードの語が上書きしていた。
+    // ここが持つべきは「どんな値があるか」だけ。任意レーンの表示名は索引にしか無い情報なので残す
+    `## ボードの索引 — 基準スナップショット (status の値: todo, inprogress, review${s.lanes
       ? `, ${s.lanes
           .split(",")
           .map((x) => x.replace("=", "=「") + "」")
           .join(", ")}`
-      : ""}, done=完了)`,
+      : ""}, done。各列の意味はプロジェクトの前提情報に書いてある)`,
     "タイトルは要約品質。詳細(経緯メモ)が必要なら query_log で取る (SELECT context FROM cards WHERE id=...)。完了カードは自動アーカイブされここには載らない。",
     "後続に「変更イベント」がある場合、この索引にそれを適用した状態が現在のボードである。",
     `[${[...s.cards.values()].join(",")}]`,
@@ -154,7 +158,7 @@ export function getBoardPromptSection(): string {
     st.lastSeen = capture();
     st.baselineText = buildBaselineText(st.lastSeen);
     st.events = [];
-    log("prompt", `rebaseline (project #${currentProjectId()}): tasks=${st.lastSeen.cards.size}`);
+    log("prompt", `rebaseline (project #${currentProjectId()}): cards=${st.lastSeen.cards.size}`);
     return st.baselineText;
   }
 

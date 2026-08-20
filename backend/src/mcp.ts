@@ -32,7 +32,7 @@ import {
   trashTask,
   getProjectContextRow,
   getTask,
-  listTasks,
+  listCards,
   listTrashedTasks,
   searchTasks,
   setProjectContext,
@@ -379,7 +379,7 @@ export function buildMcpServer(onEvent: (kind: "board" | "proposals") => void): 
         projectContextVersion: d.projectContextVersion,
         // checked は brief に無いのでここで足す。**人が検収したかどうかは全件応答からも
         // 読めないといけない** — 差分だけ直しても、取り直したときに分からなければ同じ事故が起きる
-        cards: listTasks().map((t) => ({ ...brief(t)!, checked: !!t.checkedAt })),
+        cards: listCards().map((t) => ({ ...brief(t)!, checked: !!t.checkedAt })),
       });
     }
   );

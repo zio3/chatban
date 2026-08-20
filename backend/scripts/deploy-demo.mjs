@@ -104,7 +104,7 @@ async function health() {
       if (res.ok) {
         const board = await res.json();
         console.log(`\nヘルスチェック ok: ${HEALTH}`);
-        console.log(`  attachments=${board.attachments} llmRefused=${board.llmRefused} tasks=${board.tasks?.length}`);
+        console.log(`  attachments=${board.attachments} llmRefused=${board.llmRefused} cards=${board.cards?.length}`);
         return;
       }
     } catch {

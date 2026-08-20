@@ -6,7 +6,7 @@ import path from "node:path";
 const API = "http://localhost:8799";
 
 async function createTask(title: string, status = "todo"): Promise<number> {
-  const res = await fetch(`${API}/api/tasks`, {
+  const res = await fetch(`${API}/api/cards`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ title, status }),
@@ -15,16 +15,16 @@ async function createTask(title: string, status = "todo"): Promise<number> {
   return task.id;
 }
 
-/** Doneのタスクを用意する。POST /api/tasks に status:"done" を渡しても通らないので
+/** Doneのタスクを用意する。POST /api/cards に status:"done" を渡しても通らないので
  * (Doneへの扉は検収だけ)、本番と同じ道を通す: review → 検収チェック → 確定 */
 async function createDoneTask(title: string): Promise<number> {
   const id = await createTask(title, "review");
-  await fetch(`${API}/api/tasks/${id}/checked`, {
+  await fetch(`${API}/api/cards/${id}/checked`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ checked: true }),
   });
-  await fetch(`${API}/api/tasks/approve`, {
+  await fetch(`${API}/api/cards/approve`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ ids: [id] }),
@@ -35,7 +35,7 @@ async function createDoneTask(title: string): Promise<number> {
 async function getTaskStatus(id: number): Promise<string | undefined> {
   const res = await fetch(`${API}/api/board`);
   const board = await res.json();
-  return board.tasks.find((t: any) => t.id === id)?.status;
+  return board.cards.find((t: any) => t.id === id)?.status;
 }
 
 // dnd-kit PointerSensor (distance:4) を発火させる手動ドラッグ
@@ -57,7 +57,7 @@ test("ボードが4列+件数バッジで表示される", async ({ page }) => {
   }
   // 件数バッジがAPIの実数と一致する
   const board = await (await fetch(`${API}/api/board`)).json();
-  const todoCount = board.tasks.filter((t: any) => t.status === "todo").length;
+  const todoCount = board.cards.filter((t: any) => t.status === "todo").length;
   await expect(page.getByTestId("count-todo")).toHaveText(String(todoCount));
 });
 
@@ -107,7 +107,7 @@ test("更新失敗時はロールバックしトースト表示、リトライ�
   await expect(card).toBeVisible();
 
   // PATCH を強制失敗させる
-  await page.route(`**/api/tasks/${id}`, (route) =>
+  await page.route(`**/api/cards/${id}`, (route) =>
     route.request().method() === "PATCH" ? route.fulfill({ status: 500, body: "forced failure" }) : route.continue()
   );
   await drag(page, card, page.getByTestId("column-review"));
@@ -118,7 +118,7 @@ test("更新失敗時はロールバックしトースト表示、リトライ�
   expect(await getTaskStatus(id)).toBe("todo");
 
   // 障害解除してリトライ → 移動が成立しトーストが消える
-  await page.unroute(`**/api/tasks/${id}`);
+  await page.unroute(`**/api/cards/${id}`);
   await page.getByTestId("toast").getByRole("button", { name: "リトライ" }).click();
   await expect(page.getByTestId("toast")).toBeHidden();
   await expect(page.getByTestId("column-review").getByTestId(`task-card-${id}`)).toBeVisible();
@@ -181,7 +181,7 @@ test("プロジェクト: 切り替えるとボードが入れ替わり、#IDは
   // 元プロジェクトのタスクは見えない (ファイルごと別なので混ざらない)
   await expect(page.getByTestId(`task-card-${inFirst}`)).toBeHidden();
   // 新プロジェクトの最初のタスクは #1 (対象プロジェクトはヘッダで明示する #97)
-  const res = await fetch(`${API}/api/tasks`, {
+  const res = await fetch(`${API}/api/cards`, {
     method: "POST",
     headers: { "Content-Type": "application/json", "X-ChatBan-Project": String(pid) },
     body: JSON.stringify({ title: "E2E: 新プロジェクトの1件目" }),
@@ -199,13 +199,13 @@ test("削除はゴミ箱行きで復元できる。実体を消せるのはゴ�
   await page.goto("/");
   await expect(page.getByTestId(`task-card-${id}`)).toBeVisible();
 
-  // チャット/MCPと同じ経路 (DELETE /api/tasks/:id) はゴミ箱行き
-  await fetch(`${API}/api/tasks/${id}`, { method: "DELETE" });
+  // チャット/MCPと同じ経路 (DELETE /api/cards/:id) はゴミ箱行き
+  await fetch(`${API}/api/cards/${id}`, { method: "DELETE" });
   await expect(page.getByTestId(`task-card-${id}`)).toBeHidden();
 
   // 実体は残っている
   const trashed = await (await fetch(`${API}/api/trash`)).json();
-  expect(trashed.tasks.some((t: any) => t.id === id)).toBe(true);
+  expect(trashed.cards.some((t: any) => t.id === id)).toBe(true);
 
   // ゴミ箱画面から戻せる
   await page.getByRole("button", { name: "🗑 ゴミ箱" }).click();
@@ -214,14 +214,14 @@ test("削除はゴミ箱行きで復元できる。実体を消せるのはゴ�
   await expect(page.getByTestId(`task-card-${id}`)).toBeVisible();
 
   // 完全削除は二段階 (押し間違いで消えない)
-  await fetch(`${API}/api/tasks/${id}`, { method: "DELETE" });
+  await fetch(`${API}/api/cards/${id}`, { method: "DELETE" });
   await page.getByRole("button", { name: "🗑 ゴミ箱" }).click();
   await page.getByRole("button", { name: "完全に削除" }).first().click();
   await expect(page.getByRole("button", { name: "本当に消す" })).toBeVisible();
   await page.getByRole("button", { name: "本当に消す" }).click();
   await expect(page.getByText("ゴミ箱は空です")).toBeVisible(); // 反映を待ってから実体を確認する
   const after = await (await fetch(`${API}/api/trash`)).json();
-  expect(after.tasks.some((t: any) => t.id === id)).toBe(false);
+  expect(after.cards.some((t: any) => t.id === id)).toBe(false);
 });
 
 test("配信はプロジェクト単位のroomへ届く (#99)", async () => {
@@ -239,7 +239,7 @@ test("配信はプロジェクト単位のroomへ届く (#99)", async () => {
 
   const sock = io(API, { query: { project: 1 }, transports: ["websocket"] });
   const received: number[] = [];
-  sock.on("board:changed", (p: { tasks: unknown[] }) => received.push(p.tasks.length));
+  sock.on("board:changed", (p: { cards: unknown[] }) => received.push(p.cards.length));
   await new Promise<void>((r) => sock.on("connect", () => r()));
 
   // プロジェクト1への変更は届く
@@ -248,7 +248,7 @@ test("配信はプロジェクト単位のroomへ届く (#99)", async () => {
   const afterFirst = received.length;
 
   // 別プロジェクトを触っても届かない (#97: 対象はヘッダで明示する)
-  await fetch(`${API}/api/tasks`, {
+  await fetch(`${API}/api/cards`, {
     method: "POST",
     headers: { "Content-Type": "application/json", "X-ChatBan-Project": String(other) },
     body: JSON.stringify({ title: "E2E: room検証(別プロジェクト)" }),
@@ -280,7 +280,7 @@ test("タブごとに別プロジェクトを開ける。片方の更新はも�
   await expect(other2.getByTestId("count-todo")).toHaveText("0");
 
   // 2枚目のプロジェクトにタスクを足すと、2枚目だけが増える
-  await fetch(`${API}/api/tasks`, {
+  await fetch(`${API}/api/cards`, {
     method: "POST",
     headers: { "Content-Type": "application/json", "X-ChatBan-Project": String(other) },
     body: JSON.stringify({ title: "E2E: 別タブのタスク" }),
@@ -342,7 +342,7 @@ test("経緯メモの上書きは版が合うときだけ通る。状態変更�
   const id = await createTask("楽観ロックの検証");
 
   // 版を添えないと適用されない (「必須」がプロンプトではなく契約で効いている)
-  const noVersion = await mcp("update_tasks", { updates: [{ id, context: "版なしで書く" }] });
+  const noVersion = await mcp("update_cards", { updates: [{ id, context: "版なしで書く" }] });
   expect(noVersion.conflicts?.[0]?.id).toBe(id);
   expect(noVersion.conflicts[0].contextVersion).toBe(1);
   // #120: 弾いたものを updated に載せない。成功と失敗を排他にする
@@ -350,18 +350,18 @@ test("経緯メモの上書きは版が合うときだけ通る。状態変更�
   expect(noVersion.updated).toHaveLength(0);
 
   // 正しい版なら通り、版が上がる
-  const ok = await mcp("update_tasks", { updates: [{ id, context: "Aの追記", context_version: 1 }] });
+  const ok = await mcp("update_cards", { updates: [{ id, context: "Aの追記", context_version: 1 }] });
   expect(ok.conflicts).toBeUndefined();
   expect(ok.updated[0].contextVersion).toBe(2);
 
   // 古い版のままだと衝突し、Aの追記は消えない。現在の全文が返るのでマージできる
-  const stale = await mcp("update_tasks", { updates: [{ id, context: "Bの追記", context_version: 1 }] });
+  const stale = await mcp("update_cards", { updates: [{ id, context: "Bの追記", context_version: 1 }] });
   expect(stale.conflicts[0].context).toBe("Aの追記");
   expect(stale.conflicts[0].contextVersion).toBe(2);
 
   // 状態変更は版を要求されず、経緯メモの版も上げない
   // (1本の版で守ると、長い書き戻しが無関係な状態変更で弾かれてしまう)
-  const statusOnly = await mcp("update_tasks", { updates: [{ id, status: "inprogress" }] });
+  const statusOnly = await mcp("update_cards", { updates: [{ id, status: "inprogress" }] });
   expect(statusOnly.conflicts).toBeUndefined();
   expect(statusOnly.updated[0].status).toBe("inprogress");
   expect(statusOnly.updated[0].contextVersion).toBe(2);
@@ -371,32 +371,32 @@ test("検収の印はDBに残り、AIは読めるが付けられない (#108)", 
   const id = await createTask("検収フラグの検証", "review");
 
   // 人間の経路(REST)でだけ付く
-  await fetch(`${API}/api/tasks/${id}/checked`, {
+  await fetch(`${API}/api/cards/${id}/checked`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ checked: true }),
   });
-  const checked = await (await fetch(`${API}/api/tasks/${id}`)).json();
+  const checked = await (await fetch(`${API}/api/cards/${id}`)).json();
   expect(checked.checkedAt).toBeTruthy();
 
   // エージェントはSQL窓口で読める
-  const read = await mcp("query_log", { sql: `SELECT checked_at FROM tasks WHERE id = ${id}` });
+  const read = await mcp("query_log", { sql: `SELECT checked_at FROM cards WHERE id = ${id}` });
   expect(read.rows[0].checked_at).toBeTruthy();
 
   // 書く口はどこにも無い: SQL窓口は読み取り専用、update_tasks のスキーマにも無い
   const write = await mcp("query_log", { sql: `UPDATE tasks SET checked_at = NULL WHERE id = ${id}` });
   expect(write.ok).toBe(false);
-  await mcp("update_tasks", { updates: [{ id, checked_at: null, checkedAt: null }] });
-  const afterAgent = await (await fetch(`${API}/api/tasks/${id}`)).json();
+  await mcp("update_cards", { updates: [{ id, checked_at: null, checkedAt: null }] });
+  const afterAgent = await (await fetch(`${API}/api/cards/${id}`)).json();
   expect(afterAgent.checkedAt).toBeTruthy(); // エージェントの指定は素通りする(消せない)
 
   // 作業中の列へ戻すと印は消える (確かめたのは前の状態に対してなので)
-  await fetch(`${API}/api/tasks/${id}`, {
+  await fetch(`${API}/api/cards/${id}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ status: "inprogress" }),
   });
-  const reopened = await (await fetch(`${API}/api/tasks/${id}`)).json();
+  const reopened = await (await fetch(`${API}/api/cards/${id}`)).json();
   expect(reopened.checkedAt).toBeFalsy();
 });
 
@@ -411,7 +411,7 @@ test("sync_board: 同期トークンで差分が返り、他所の変更も拾�
 
   // **自分以外の経路**で動かす。差分の値打ちは「自分が見ていない間に何が動いたか」にある
   const id = await createTask("E2E: 差分で拾われるタスク");
-  await fetch(`${API}/api/tasks/${id}`, {
+  await fetch(`${API}/api/cards/${id}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ status: "review" }),
@@ -420,7 +420,7 @@ test("sync_board: 同期トークンで差分が返り、他所の変更も拾�
   const delta = await mcp("sync_board", { sync_token: full.syncToken });
   expect(delta.syncToken).not.toBe(full.syncToken);
   // 全件は返らない (差分なのでタスク配列を持たない)
-  expect(delta.tasks).toBeUndefined();
+  expect(delta.cards).toBeUndefined();
   const line = (delta.boardChanges as string[]).find((c) => c.includes(`#${id}`));
   expect(line).toBeTruthy();
   // **行だけ見て現在が確定すること。**IDしか書いていない差分だと古い一覧とマージさせることになる
@@ -428,7 +428,7 @@ test("sync_board: 同期トークンで差分が返り、他所の変更も拾�
 
   // 失効したトークンでも失敗させない (エラーを返すとLLMがリトライを考え始める)
   const stale = await mcp("sync_board", { sync_token: "p1-20200101T000000-1" });
-  expect(Array.isArray(stale.tasks)).toBe(true);
+  expect(Array.isArray(stale.cards)).toBe(true);
   expect(String(stale.note)).toContain("全件");
 });
 
@@ -459,7 +459,7 @@ test("MCPの読み取りはSQL窓口1本。落とした一覧ツールは同じ�
   // **作ったタスクに絞って引く** — 全件だと query_log の上限 (200行) で切られ、
   // 積み重なったE2Eデータでは新しいものが範囲外に落ちる (実測: 387件で発生)
   const board = await mcp("query_log", {
-    sql: `SELECT id, status, title FROM tasks WHERE archived=0 AND trashed_at IS NULL AND id=${id}`,
+    sql: `SELECT id, status, title FROM cards WHERE archived=0 AND trashed_at IS NULL AND id=${id}`,
   });
   expect(board.rows.some((r: any) => r.id === id)).toBe(true);
 
@@ -470,23 +470,23 @@ test("MCPの読み取りはSQL窓口1本。落とした一覧ツールは同じ�
 test("done_at は完了に入った瞬間だけ打刻され、その後の編集では動かない (#108)", async () => {
   const id = await createTask("done_atの検証", "review");
   const patch = (body: unknown) =>
-    fetch(`${API}/api/tasks/${id}`, {
+    fetch(`${API}/api/cards/${id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
-  const get = async () => (await (await fetch(`${API}/api/tasks/${id}`)).json()) as any;
+  const get = async () => (await (await fetch(`${API}/api/cards/${id}`)).json()) as any;
 
   expect((await get()).doneAt).toBeFalsy();
 
   // 検収チェックを先に付ける。approve はサーバー側で「Review列 + 検収済み」を確かめるので、
   // チェック無しでは通らない (以前は無条件に done にできたため、このテストも省略していた)
-  await fetch(`${API}/api/tasks/${id}/checked`, {
+  await fetch(`${API}/api/cards/${id}/checked`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ checked: true }),
   });
-  await fetch(`${API}/api/tasks/approve`, {
+  await fetch(`${API}/api/cards/approve`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ ids: [id] }),
@@ -508,7 +508,7 @@ test("done_at は完了に入った瞬間だけ打刻され、その後の編集
 test("依存チップをクリックすると依存先の詳細が開く (カード自体のクリックと取り合わない) (#111)", async ({ page }) => {
   const depId = await createTask("依存先のタスク", "inprogress");
   const id = await createTask("依存元のタスク");
-  await fetch(`${API}/api/tasks/${id}`, {
+  await fetch(`${API}/api/cards/${id}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ blockedBy: [depId] }),
@@ -530,7 +530,7 @@ test("依存チップをクリックすると依存先の詳細が開く (カー
 test("パネルから依存を双方向に辿れる (これ待ち → 待ち) (#111)", async ({ page }) => {
   const depId = await createTask("先に終わらせるタスク", "inprogress");
   const id = await createTask("それを待っているタスク");
-  await fetch(`${API}/api/tasks/${id}`, {
+  await fetch(`${API}/api/cards/${id}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ blockedBy: [depId] }),
@@ -572,21 +572,21 @@ test("並べ替えの母集団はサーバー側で絞る。対象外のIDは無
   const a = await createTask("並べ替えA");
   const b = await createTask("並べ替えB");
   const gone = await createTask("アーカイブ行き", "review");
-  await fetch(`${API}/api/tasks/approve`, {
+  await fetch(`${API}/api/cards/approve`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ ids: [gone] }),
   });
 
   // アーカイブ済みと存在しないIDを混ぜても、全体は失敗せず ignored で返る
-  const r = await mcp("reorder_tasks", { status: "todo", ids: [b, gone, 999999, a] });
+  const r = await mcp("reorder_cards", { status: "todo", ids: [b, gone, 999999, a] });
   expect(r.ignored).toContain(gone);
   expect(r.ignored).toContain(999999);
   expect(r.ordered).toBe(2);
 
   // 指定した2件は指定順に並ぶ
   const board = await (await fetch(`${API}/api/board`)).json();
-  const todo = board.tasks.filter((t: any) => t.status === "todo").sort((x: any, y: any) => x.sort - y.sort);
+  const todo = board.cards.filter((t: any) => t.status === "todo").sort((x: any, y: any) => x.sort - y.sort);
   const idx = (id: number) => todo.findIndex((t: any) => t.id === id);
   expect(idx(b)).toBeLessThan(idx(a));
 });
@@ -607,10 +607,10 @@ test("設定のプロジェクト一覧からMCP接続先をコピーできる (
 
 test("版が合わない更新は、同じ行の他のフィールドも保存しない (#120)", async () => {
   const id = await createTask("部分適用しないことの検証");
-  const before = (await (await fetch(`${API}/api/tasks/${id}`)).json()) as any;
+  const before = (await (await fetch(`${API}/api/cards/${id}`)).json()) as any;
 
   // context と summary を一緒に送り、context の版だけ古い
-  const r = await mcp("update_tasks", {
+  const r = await mcp("update_cards", {
     updates: [{ id, context: "古い版で書く", context_version: 999, summary: "これも保存されてはいけない" }],
   });
 
@@ -618,7 +618,7 @@ test("版が合わない更新は、同じ行の他のフィールドも保存�
   expect(r.updated).toHaveLength(0); // 弾いた行は updated に載らない
   expect(r.note).toContain("一切適用していません");
 
-  const after = (await (await fetch(`${API}/api/tasks/${id}`)).json()) as any;
+  const after = (await (await fetch(`${API}/api/cards/${id}`)).json()) as any;
   expect(after.summary).toBe(before.summary); // 巻き添えで保存されない
   expect(after.updatedAt).toBe(before.updatedAt); // 拒否された書き込みで最終更新も動かない
 });
@@ -627,7 +627,7 @@ test("存在しないIDは notFound で名指しし、成功と混ぜない (#12
   const id = await createTask("実在するタスク");
 
   // 一部だけ失敗 = partial。適用できた行だけが updated に入り、null は混ざらない
-  const partial = await mcp("update_tasks", {
+  const partial = await mcp("update_cards", {
     updates: [{ id: 999999, summary: "存在しない" }, { id, summary: "実在する方" }],
   });
   expect(partial.ok).toBe(false);
@@ -638,15 +638,15 @@ test("存在しないIDは notFound で名指しし、成功と混ぜない (#12
   expect(partial.note).toContain("2件のうち1件を適用しました");
 
   // 実在する方は実際に書けている (部分適用は「できたものはできた」)
-  const after = (await (await fetch(`${API}/api/tasks/${id}`)).json()) as any;
+  const after = (await (await fetch(`${API}/api/cards/${id}`)).json()) as any;
   expect(after.summary).toBe("実在する方");
 
   // 全滅は failed。ok:false だけだと「全部か一部か」が分からないので状態で言う
-  const failed = await mcp("update_tasks", { updates: [{ id: 999998, summary: "x" }] });
+  const failed = await mcp("update_cards", { updates: [{ id: 999998, summary: "x" }] });
   expect(failed.status).toBe("failed");
   expect(failed.updated).toHaveLength(0);
 
-  const all = await mcp("update_tasks", { updates: [{ id, summary: "全部通る" }] });
+  const all = await mcp("update_cards", { updates: [{ id, summary: "全部通る" }] });
   expect(all.ok).toBe(true);
   expect(all.status).toBe("ok");
 });
@@ -655,34 +655,34 @@ test("経緯メモは版なしで追記でき、追記どうしは互いを消�
   const id = await createTask("追記の検証");
 
   // 全文上書きは版が要る (既存の守り)。追記は要らない — 足すだけなので他人の追記を消さない
-  const a = await mcp("update_tasks", { updates: [{ id, context_append: "1件目の追記" }] });
+  const a = await mcp("update_cards", { updates: [{ id, context_append: "1件目の追記" }] });
   expect(a.ok).toBe(true);
 
   // 読み直さずにもう1件足せる。版を持っていなくても通る
-  const b = await mcp("update_tasks", { updates: [{ id, context_append: "2件目の追記" }] });
+  const b = await mcp("update_cards", { updates: [{ id, context_append: "2件目の追記" }] });
   expect(b.ok).toBe(true);
 
-  const after = (await (await fetch(`${API}/api/tasks/${id}`)).json()) as any;
+  const after = (await (await fetch(`${API}/api/cards/${id}`)).json()) as any;
   expect(after.context).toBe(["1件目の追記", "2件目の追記"].join("\n\n")); // 1件目が残っている
   expect(after.contextVersion).toBeGreaterThan(1); // 版は進む (全文置換しようとしている人を弾くため)
 
   // 全文上書きは従来どおり版が要る
-  const stale = await mcp("update_tasks", { updates: [{ id, context: "全部消す", context_version: 1 }] });
+  const stale = await mcp("update_cards", { updates: [{ id, context: "全部消す", context_version: 1 }] });
   expect(stale.ok).toBe(false);
-  const still = (await (await fetch(`${API}/api/tasks/${id}`)).json()) as any;
+  const still = (await (await fetch(`${API}/api/cards/${id}`)).json()) as any;
   expect(still.context).toContain("1件目の追記");
 });
 
-test("生きているタスクは live_tasks ビューで引ける (母集団の条件を毎回書かせない)", async () => {
+test("生きているタスクは live_cards ビューで引ける (母集団の条件を毎回書かせない)", async () => {
   const alive = await createTask("生きているタスク");
   const trashed = await createTask("ゴミ箱行きのタスク");
-  await mcp("delete_tasks", { ids: [trashed] });
+  await mcp("delete_cards", { ids: [trashed] });
 
   // **この2件に絞って引く。**母集団を全件取ると query_log の上限 (200行) で切られ、
   // 積み重なったE2Eデータでは新しく作ったほうが範囲外に落ちて落ちる (実測: 387件で発生)。
-  // 確かめたいのは「live_tasks にゴミ箱が混ざらない」ことなので、母集団の大きさは要らない
+  // 確かめたいのは「live_cards にゴミ箱が混ざらない」ことなので、母集団の大きさは要らない
   const r = await mcp("query_log", {
-    sql: `SELECT id, title FROM live_tasks WHERE id IN (${alive}, ${trashed})`,
+    sql: `SELECT id, title FROM live_cards WHERE id IN (${alive}, ${trashed})`,
   });
   const ids = (r.rows as any[]).map((x) => x.id);
   expect(ids).toContain(alive);
@@ -690,7 +690,7 @@ test("生きているタスクは live_tasks ビューで引ける (母集団の
 
   // tasks を直に引けばゴミ箱も見える (見たいときは見られる)
   const raw = await mcp("query_log", {
-    sql: `SELECT id FROM tasks WHERE id=${trashed} AND trashed_at IS NOT NULL`,
+    sql: `SELECT id FROM cards WHERE id=${trashed} AND trashed_at IS NOT NULL`,
   });
   expect(raw.rows).toHaveLength(1);
 });
@@ -760,7 +760,7 @@ test("summary の契約はチャットとMCPで同じ文言になっている (�
   const line = body.split("\n").find((l) => l.startsWith("data: ")) ?? body;
   const tools = JSON.parse(line.replace(/^data: /, "")).result.tools as any[];
 
-  const update = tools.find((t) => t.name === "update_tasks");
+  const update = tools.find((t) => t.name === "update_cards");
   const summaryDesc = update.inputSchema.properties.updates.items.properties.summary.description;
   // MCP側は以前「現況の一言。カードに表示される」だけで、読み手が誰かが抜けていた
   expect(summaryDesc).toContain("AIとユーザーの両方に");
@@ -777,7 +777,7 @@ test("summary の契約はチャットとMCPで同じ文言になっている (�
   expect(dep).toContain("循環していても矛盾ではない");
   expect(dep).not.toContain("着手できない");
   // 依存を優先順位に使う失敗 (#41) への歯止めは残っていること
-  expect(dep).toContain("reorder_tasks");
+  expect(dep).toContain("reorder_cards");
 
   // 契約が「渡せないもの」を案内していないこと。additionalProperties:false なので、
   // 存在しないパラメータ名を書くと渡した側が確実にエラーになる (実際 rejected の説明が
@@ -792,22 +792,22 @@ test("summary の契約はチャットとMCPで同じ文言になっている (�
   expect(update.description).toContain("context_append");
 });
 
-test("完了は done_tasks ビューで引ける。登録日と取り違えようがない", async () => {
+test("完了は done_cards ビューで引ける。登録日と取り違えようがない", async () => {
   const id = await createTask("完了ビューの検証", "review");
   // 検収 → Done。done_at はこの瞬間に打刻される
-  await fetch(`${API}/api/tasks/${id}/checked`, {
+  await fetch(`${API}/api/cards/${id}/checked`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ checked: true }),
   });
-  await fetch(`${API}/api/tasks/approve`, {
+  await fetch(`${API}/api/cards/approve`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ ids: [id] }),
   });
 
   const r = await mcp("query_log", {
-    sql: `SELECT id, done_day, done_at FROM done_tasks WHERE id=${id}`,
+    sql: `SELECT id, done_day, done_at FROM done_cards WHERE id=${id}`,
   });
   expect(r.rows).toHaveLength(1);
   // 日付は列として出ているので date() を書かなくてよい
@@ -816,7 +816,7 @@ test("完了は done_tasks ビューで引ける。登録日と取り違えよ�
   // 終わっていないものは入らない (created_at を完了日と取り違える余地がない)
   const alive = await createTask("まだ終わっていない");
   const none = await mcp("query_log", {
-    sql: `SELECT id FROM done_tasks WHERE id=${alive}`,
+    sql: `SELECT id FROM done_cards WHERE id=${alive}`,
   });
   expect(none.rows).toHaveLength(0);
 });
@@ -834,31 +834,31 @@ test("撤去した summary_cards はSQL窓口からも消えている (#200)", a
 
 test("SQLが失敗したら、直せる材料を一緒に返す (説明を厚くする代わりの事後注入)", async () => {
   // 列名を間違えたら、実DBから引いたスキーマが返る (説明とスキーマがズレない)
-  const badCol = await mcp("query_log", { sql: "SELECT id, titel FROM live_tasks LIMIT 1" });
+  const badCol = await mcp("query_log", { sql: "SELECT id, titel FROM live_cards LIMIT 1" });
   expect(badCol.ok).toBe(false);
-  expect(badCol.schema["live_tasks (ビュー)"]).toContain("title");
-  expect(badCol.hint).toContain("live_tasks");
+  expect(badCol.schema["live_cards (ビュー)"]).toContain("title");
+  expect(badCol.hint).toContain("live_cards");
 
   // 他のDBの関数を使ったら、SQLiteでの書き方が返る
-  const badFn = await mcp("query_log", { sql: "SELECT date_trunc('day', created_at) FROM live_tasks" });
+  const badFn = await mcp("query_log", { sql: "SELECT date_trunc('day', created_at) FROM live_cards" });
   expect(badFn.ok).toBe(false);
   expect(JSON.stringify(badFn.dialect)).toContain("start of month");
 });
 
 test("エラーにならない間違いには、結果と一緒に一言添える", async () => {
   // tasks 直引き = ゴミ箱もアーカイブも混ざる。エラーにならないので気づけない
-  const raw = await mcp("query_log", { sql: "SELECT id, title FROM tasks LIMIT 3" });
+  const raw = await mcp("query_log", { sql: "SELECT id, title FROM cards LIMIT 3" });
   expect(raw.rows.length).toBeGreaterThan(0); // 結果は普通に返る
-  expect(raw.note).toContain("live_tasks");
+  expect(raw.note).toContain("live_cards");
 
   // created_at で完了を数える = 登録日を数えている (実データで踏まれていた間違い)
   const wrongDate = await mcp("query_log", {
-    sql: "SELECT date(created_at) d, COUNT(*) n FROM tasks WHERE archived=1 GROUP BY 1",
+    sql: "SELECT date(created_at) d, COUNT(*) n FROM cards WHERE archived=1 GROUP BY 1",
   });
   expect(wrongDate.note).toContain("done_at");
 
   // 正しく引いたときは余計なことを言わない
-  const ok = await mcp("query_log", { sql: "SELECT id, title FROM live_tasks LIMIT 3" });
+  const ok = await mcp("query_log", { sql: "SELECT id, title FROM live_cards LIMIT 3" });
   expect(ok.note).toBeUndefined();
 });
 
@@ -868,10 +868,10 @@ test("検収の確定はサーバー側で条件を確かめる (UIのフィル�
   const todo = await createTask("検収ガード: Todoのまま");
   const unchecked = await createTask("検収ガード: Review未検収", "review");
   const trashed = await createTask("検収ガード: ゴミ箱");
-  await fetch(`${API}/api/tasks/${trashed}`, { method: "DELETE" });
+  await fetch(`${API}/api/cards/${trashed}`, { method: "DELETE" });
 
   const ng = await (
-    await fetch(`${API}/api/tasks/approve`, {
+    await fetch(`${API}/api/cards/approve`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ ids: [todo, unchecked, trashed] }),
@@ -890,13 +890,13 @@ test("検収の確定はサーバー側で条件を確かめる (UIのフィル�
 
   // 正常系: Review + 検収済み は通る
   const ok = await createTask("検収ガード: 正しく検収済み", "review");
-  await fetch(`${API}/api/tasks/${ok}/checked`, {
+  await fetch(`${API}/api/cards/${ok}/checked`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ checked: true }),
   });
   const r = await (
-    await fetch(`${API}/api/tasks/approve`, {
+    await fetch(`${API}/api/cards/approve`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ ids: [ok] }),
@@ -908,13 +908,13 @@ test("検収の確定はサーバー側で条件を確かめる (UIのフィル�
 });
 
 test("検収APIを通らないRESTからもDoneには入れない (扉は1つ)", async () => {
-  // 検収APIだけを厳しくしても、PATCH /api/tasks/:id に status:"done" を投げれば素通りしていた
+  // 検収APIだけを厳しくしても、PATCH /api/cards/:id に status:"done" を投げれば素通りしていた
   // (自動レビュー指摘)。フロントは Board.tsx の handleDragEnd で Done列へのD&Dを禁止しているが、
   // その禁止がクライアント側にしか無く、PR #1 で塞いだのとまったく同じ形の穴だった。
   // 条件そのもの (Review列 + 検収済み) を updateTasks の不変条件にしたので、入口を問わない
   const patch = async (id: number, body: unknown) =>
     (
-      await fetch(`${API}/api/tasks/${id}`, {
+      await fetch(`${API}/api/cards/${id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
@@ -935,7 +935,7 @@ test("検収APIを通らないRESTからもDoneには入れない (扉は1つ)",
 
   // 新規作成でいきなりDoneも作れない (生まれた瞬間に検収済みのものは無い)
   const created = await (
-    await fetch(`${API}/api/tasks`, {
+    await fetch(`${API}/api/cards`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ title: "扉は1つ: 最初からDone", status: "done" }),
@@ -946,7 +946,7 @@ test("検収APIを通らないRESTからもDoneには入れない (扉は1つ)",
 
   // 正常系: 検収を通ればこの経路でも入る (条件を満たすかどうかだけを見ている)
   const ok = await createTask("扉は1つ: 検収済みならPATCHでも通る", "review");
-  await fetch(`${API}/api/tasks/${ok}/checked`, {
+  await fetch(`${API}/api/cards/${ok}/checked`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ checked: true }),
@@ -960,7 +960,7 @@ test("入口で確かめる: 知らない列・居ないタスク・居ないプ
   // TypeScriptの型は実行時に消えるので、RESTは何でも保存できた。status:"banana" は
   // ボードの4列に出ず、詳細を開くと STATUS_LABELS[status] が undefined で画面が落ちる。
   // 「消えた」ように見えて実在する、が一番たちが悪い (自動レビュー指摘)
-  const created = await fetch(`${API}/api/tasks`, {
+  const created = await fetch(`${API}/api/cards`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ title: "知らない列", status: "banana" }),
@@ -969,7 +969,7 @@ test("入口で確かめる: 知らない列・居ないタスク・居ないプ
   expect((await created.json()).error).toContain("todo / inprogress / review / done");
 
   const id = await createTask("入口の検証");
-  const patched = await fetch(`${API}/api/tasks/${id}`, {
+  const patched = await fetch(`${API}/api/cards/${id}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ status: "banana" }),
@@ -978,7 +978,7 @@ test("入口で確かめる: 知らない列・居ないタスク・居ないプ
   expect(await getTaskStatus(id)).toBe("todo"); // 何も書き換わっていない
 
   // 居ないタスクの専用チャットは、LLMを呼ぶ前に断る (呼んでから気づくと課金だけ発生する)
-  const ghost = await fetch(`${API}/api/tasks/999999/chat`, {
+  const ghost = await fetch(`${API}/api/cards/999999/chat`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ message: "このタスクを進めて" }),
@@ -999,7 +999,7 @@ test("検収の印を付けられるのはReview列だけ (順序を飛ばして
   // Todoのうちに印を付けてからReviewへ動かすと、Reviewに入ってから一度も確かめずに
   // 確定まで通せた (自動レビュー指摘)。順序そのものを守らせる
   const check = (id: number, checked = true) =>
-    fetch(`${API}/api/tasks/${id}/checked`, {
+    fetch(`${API}/api/cards/${id}/checked`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ checked }),
@@ -1008,17 +1008,17 @@ test("検収の印を付けられるのはReview列だけ (順序を飛ばして
   const todo = await createTask("順序飛ばし: Todoで印を付ける");
   const ng = await check(todo);
   expect(ng.status).toBe(409);
-  expect((await ng.json()).error).toContain("Review 列のタスクだけ");
+  expect((await ng.json()).error).toContain("Review 列のカードだけ");
 
   // Reviewへ動かしてからなら付く。そのうえで確定できる
-  await fetch(`${API}/api/tasks/${todo}`, {
+  await fetch(`${API}/api/cards/${todo}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ status: "review" }),
   });
   expect((await check(todo)).status).toBe(200);
   const r = await (
-    await fetch(`${API}/api/tasks/approve`, {
+    await fetch(`${API}/api/cards/approve`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ ids: [todo] }),
@@ -1028,7 +1028,7 @@ test("検収の印を付けられるのはReview列だけ (順序を飛ばして
 
   // ゴミ箱のタスクにも付けられない
   const trashed = await createTask("順序飛ばし: ゴミ箱", "review");
-  await fetch(`${API}/api/tasks/${trashed}`, { method: "DELETE" });
+  await fetch(`${API}/api/cards/${trashed}`, { method: "DELETE" });
   expect((await check(trashed)).status).toBe(409);
 
   // 外すのはいつでもよい (印を消す方向は安全)
@@ -1115,13 +1115,13 @@ test("LLMを直接呼ぶ口はGETに置かない (#180)", async () => {
   //
   // **「LLMを直接呼ぶ口」に限った検証。**#200 でDone列の蒸留をやめたので、検収と差し戻しは
   // LLMを起こさなくなった (畳み直しは同期のSQLだけ)。間接的に起こす口が減った形。
-  // 下で /api/tasks/approve と /mcp が GET で通らないことだけ確かめておく
-  for (const path of ["/api/suggestions", "/api/chat", "/api/tasks/1/chat"]) {
+  // 下で /api/cards/approve と /mcp が GET で通らないことだけ確かめておく
+  for (const path of ["/api/suggestions", "/api/chat", "/api/cards/1/chat"]) {
     const res = await fetch(`${API}${path}`);
     expect(res.status, `${path} がGETで叩ける`).toBe(404);
   }
   // 間接的に要約(=LLM)を起こす口も、GETでは入口が無い
-  expect((await fetch(`${API}/api/tasks/approve`)).status).toBe(404);
+  expect((await fetch(`${API}/api/cards/approve`)).status).toBe(404);
   // MCPは stateless で POST only。GET は405で明示的に断る (ルートは在るので404ではない)
   expect((await fetch(`${API}/mcp/1`)).status).toBe(405);
 
@@ -1147,7 +1147,7 @@ test("ゴミ箱のタスクはプロジェクトの未完了件数に数えな�
   const before = await (await fetch(`${API}/api/projects`)).json();
   const beforeCount = before.projects.find((p: any) => p.id === 1).openTasks as number;
 
-  const res = await fetch(`${API}/api/tasks`, {
+  const res = await fetch(`${API}/api/cards`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ title: "E2E: ゴミ箱と件数" }),
@@ -1159,13 +1159,13 @@ test("ゴミ箱のタスクはプロジェクトの未完了件数に数えな�
     const board = await (await fetch(`${API}/api/board`)).json();
     return {
       project: projects.projects.find((p: any) => p.id === 1).openTasks as number,
-      onBoard: board.tasks.some((t: any) => t.id === id),
+      onBoard: board.cards.some((t: any) => t.id === id),
     };
   };
   expect((await counts()).project).toBe(beforeCount + 1);
 
   // ゴミ箱へ移すと、ボードからも件数からも消える (片方だけ残らない)
-  await fetch(`${API}/api/tasks/${id}`, { method: "DELETE" });
+  await fetch(`${API}/api/cards/${id}`, { method: "DELETE" });
   const after = await counts();
   expect(after.onBoard).toBe(false);
   expect(after.project).toBe(beforeCount);
@@ -1180,13 +1180,13 @@ test("完全削除はゴミ箱を通ったものだけ (取り返しのつく形
 
   const ng = await purge(alive);
   expect(ng.status).toBe(409);
-  expect((await ng.json()).error).toContain("ゴミ箱にないタスク");
+  expect((await ng.json()).error).toContain("ゴミ箱にないカード");
   expect(await getTaskStatus(alive)).toBe("todo"); // 消えていない
 
   // ゴミ箱へ移してからなら通る
-  await fetch(`${API}/api/tasks/${alive}`, { method: "DELETE" });
+  await fetch(`${API}/api/cards/${alive}`, { method: "DELETE" });
   expect((await purge(alive)).status).toBe(200);
-  expect((await fetch(`${API}/api/tasks/${alive}`)).status).toBe(404);
+  expect((await fetch(`${API}/api/cards/${alive}`)).status).toBe(404);
 
   // 存在しないIDは404 (「ゴミ箱に無い」と「そもそも無い」を区別する)
   expect((await purge(999999)).status).toBe(404);
@@ -1237,13 +1237,13 @@ test("同じIDを2回渡しても1件として確定する (#157)", async () => 
   // 判定も更新も2度走り、updated に同じタスクが2件載って「2件確定しました」に見えていた。
   // 押した数と通った数を突き合わせられるようにしてあるのに、その数字が水増しされては意味がない
   const id = await createTask("重複ID: 1件として数える", "review");
-  await fetch(`${API}/api/tasks/${id}/checked`, {
+  await fetch(`${API}/api/cards/${id}/checked`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ checked: true }),
   });
   const r = await (
-    await fetch(`${API}/api/tasks/approve`, {
+    await fetch(`${API}/api/cards/approve`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ ids: [id, id, id] }),
@@ -1297,15 +1297,15 @@ test("Doneから差し戻すと検収の印は消える (確認し直さずに�
   // 差し戻しで印が残ると、確認し直さずにもう一度Doneへ通せてしまう
   const id = await createTask("差し戻しで印が消える検証", "review");
   const check = (checked: boolean) =>
-    fetch(`${API}/api/tasks/${id}/checked`, {
+    fetch(`${API}/api/cards/${id}/checked`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ checked }),
     });
-  const get = async () => (await (await fetch(`${API}/api/tasks/${id}`)).json()) as any;
+  const get = async () => (await (await fetch(`${API}/api/cards/${id}`)).json()) as any;
   const approve = async () =>
     (await (
-      await fetch(`${API}/api/tasks/approve`, {
+      await fetch(`${API}/api/cards/approve`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ ids: [id] }),
@@ -1318,7 +1318,7 @@ test("Doneから差し戻すと検収の印は消える (確認し直さずに�
   expect((await get()).checkedAt).toBeTruthy(); // Doneでは検収の結果として残る
 
   // Doneから差し戻す (チャットの「戻して」やD&Dで起きる)
-  await fetch(`${API}/api/tasks/${id}`, {
+  await fetch(`${API}/api/cards/${id}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ status: "review" }),
@@ -1342,7 +1342,7 @@ test("存在しないプロジェクトを指定した操作は既定へ落と�
 
   // 読み取りも書き込みも 400。黙って既定プロジェクトへ落ちない
   expect((await fetch(`${API}/api/board`, { headers: bad })).status).toBe(400);
-  const write = await fetch(`${API}/api/tasks`, {
+  const write = await fetch(`${API}/api/cards`, {
     method: "POST",
     headers: { "Content-Type": "application/json", ...bad },
     body: JSON.stringify({ title: "9999のつもりで作る" }),
@@ -1351,7 +1351,7 @@ test("存在しないプロジェクトを指定した操作は既定へ落と�
 
   // 既定プロジェクトに混入していない
   const board = await (await fetch(`${API}/api/board`)).json();
-  expect(board.tasks.some((t: any) => t.title.includes("9999のつもり"))).toBe(false);
+  expect(board.cards.some((t: any) => t.title.includes("9999のつもり"))).toBe(false);
 
   // 無指定は既定プロジェクトで通る (curl・スクリプト用の経路は残す)
   expect((await fetch(`${API}/api/board`)).status).toBe(200);
@@ -1368,7 +1368,7 @@ test("MCPは接続URLのプロジェクトしか触れない (#125)", async () =
       jsonrpc: "2.0",
       id: 1,
       method: "tools/call",
-      params: { name: "update_tasks", arguments: { updates: [{ id, summary: "別プロジェクトから書き換えた" }] } },
+      params: { name: "update_cards", arguments: { updates: [{ id, summary: "別プロジェクトから書き換えた" }] } },
     }),
   });
   const body = await res.text();
@@ -1380,7 +1380,7 @@ test("MCPは接続URLのプロジェクトしか触れない (#125)", async () =
   const r = JSON.parse(JSON.parse(line).result.content[0].text);
   expect(r.notFound).toContain(id);
 
-  const after = (await (await fetch(`${API}/api/tasks/${id}`)).json()) as any;
+  const after = (await (await fetch(`${API}/api/cards/${id}`)).json()) as any;
   expect(after.summary).toBeFalsy();
 });
 
@@ -1388,16 +1388,16 @@ test("日本語が \\uXXXX エスケープで届いてもデコードして保�
   // 実害: project 9 の前提情報が全文エスケープで保存され、296字が1,346字(トークン3.2倍)に
   // 膨らんだうえ、LLMの読み取り精度も落ちていた (見出しの数を数え間違えた)
   const escaped = "\\u30c6\\u30b9\\u30c8\\u306e\\u30bf\\u30a4\\u30c8\\u30eb"; // 「テストのタイトル」
-  const r = await mcp("create_tasks", { tasks: [{ title: escaped, summary: escaped }] });
+  const r = await mcp("create_cards", { cards: [{ title: escaped, summary: escaped }] });
   const id = r.created[0].id;
 
-  const t = (await (await fetch(`${API}/api/tasks/${id}`)).json()) as any;
+  const t = (await (await fetch(`${API}/api/cards/${id}`)).json()) as any;
   expect(t.title).toBe("テストのタイトル");
   expect(t.summary).toBe("テストのタイトル");
 
   // 単発のエスケープは壊さない (説明文で言及したいことがある)
-  const single = await mcp("create_tasks", { tasks: [{ title: "\\u0041 は A のこと" }] });
-  const t2 = (await (await fetch(`${API}/api/tasks/${single.created[0].id}`)).json()) as any;
+  const single = await mcp("create_cards", { cards: [{ title: "\\u0041 は A のこと" }] });
+  const t2 = (await (await fetch(`${API}/api/cards/${single.created[0].id}`)).json()) as any;
   expect(t2.title).toBe("\\u0041 は A のこと");
 });
 
@@ -1426,10 +1426,10 @@ test("SQL窓口は許可リスト方式。載っていないものは名前も�
   expect((await q("SELECT * FROM sqlite_sequence")).error).toContain("参照できません");
 
   // 開けているものは素通りする (閉めすぎて使えなくなっていないこと)
-  const rows = await q("SELECT id, title FROM live_tasks LIMIT 1");
+  const rows = await q("SELECT id, title FROM live_cards LIMIT 1");
   expect(Array.isArray(rows.rows)).toBe(true);
   // WITH も通ること。EXPLAIN を1回挟むようにしたので、素直なSELECT以外が壊れていないか確かめる
-  const cte = await q("WITH x AS (SELECT id FROM live_tasks LIMIT 3) SELECT COUNT(*) c FROM x");
+  const cte = await q("WITH x AS (SELECT id FROM live_cards LIMIT 3) SELECT COUNT(*) c FROM x");
   expect(Array.isArray(cte.rows)).toBe(true);
 
   // #181: 撤去した計測系のテーブルには届かない (プロジェクトDBの接続なので、そもそも存在しない)
@@ -1496,7 +1496,7 @@ test("チャットの処理中は提案チップを生成しない (#162)", asyn
 
   // 応答が返る前に叩きたいので、待たずに走らせる。E2E環境のLLMは失敗してよい
   // (成否によらず runChatTurn には入るので、その間フラグは立つ)
-  const chatting = fetch(`${API}/api/tasks/${id}/chat`, {
+  const chatting = fetch(`${API}/api/cards/${id}/chat`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ message: "状況は?", history: [] }),
@@ -1544,7 +1544,7 @@ test("先に始まっていた提案生成は、チャットが始まったら�
 
     // 走り出してからチャットを送る
     await new Promise((r) => setTimeout(r, 300));
-    const chatting = fetch(`${API}/api/tasks/${id}/chat`, {
+    const chatting = fetch(`${API}/api/cards/${id}/chat`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ message: "状況は?", history: [] }),
@@ -1571,19 +1571,19 @@ test("先に始まっていた提案生成は、チャットが始まったら�
 test("ゴミ箱に入れると検収の印が落ちる (古い確認のままDoneへ通せない) (#161)", async () => {
   // 検収まで済ませる (人間のUI操作と同じ道)
   const id = await createTask("検収済みだがゴミ箱を通ったタスク", "review");
-  await fetch(`${API}/api/tasks/${id}/checked`, {
+  await fetch(`${API}/api/cards/${id}/checked`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ checked: true }),
   });
   const checkedAt = async () =>
-    (await mcp("query_log", { scope: "audit", sql: `SELECT checked_at FROM tasks WHERE id=${id}` }))
+    (await mcp("query_log", { scope: "audit", sql: `SELECT checked_at FROM cards WHERE id=${id}` }))
       .rows[0].checked_at;
   expect(await checkedAt(), "検収の印が付いていない").toBeTruthy();
 
   // ゴミ箱 → 復元。**AIが呼べるMCPツールだけで往復できる**のがこの穴の入口だった
-  expect((await mcp("delete_tasks", { ids: [id] })).ok).toBe(true);
-  expect((await mcp("restore_tasks", { ids: [id] })).ok).toBe(true);
+  expect((await mcp("delete_cards", { ids: [id] })).ok).toBe(true);
+  expect((await mcp("restore_cards", { ids: [id] })).ok).toBe(true);
 
   // 復元後は未検収に戻っている (ゴミ箱と復元の間に人間の確認は一度も入っていない)
   expect(await checkedAt(), "古い検収の印が生き返っている").toBeFalsy();
@@ -1594,21 +1594,21 @@ test("ゴミ箱に入れると検収の印が落ちる (古い確認のままDon
 
   // **やっていないことを報告しない。**ゴミ箱に無いタスクを restore しても成功にしない
   // (以前は更新0件でも getTask を返していたので「復元しました」と言えてしまった)
-  const again = await mcp("restore_tasks", { ids: [id] });
+  const again = await mcp("restore_cards", { ids: [id] });
   expect(again.ok, "ゴミ箱に無いのに復元成功として返っている").toBe(false);
   expect(again.notRestored).toContain(id);
   expect(again.restored, "戻していないのに restored に載っている").toHaveLength(0);
 
   // RESTは理由で応答を分ける。**実在するタスクを「無い」と言わない**
-  const already = await fetch(`${API}/api/tasks/${id}/restore`, { method: "POST" });
+  const already = await fetch(`${API}/api/cards/${id}/restore`, { method: "POST" });
   expect(already.status, "実在するのに404を返している").toBe(409);
-  const missing = await fetch(`${API}/api/tasks/99999999/restore`, { method: "POST" });
+  const missing = await fetch(`${API}/api/cards/99999999/restore`, { method: "POST" });
   expect(missing.status).toBe(404);
 
   // 同じIDを2つ渡しても、片方が成功・片方が失敗にならない (先に重複を落とす)
   const dupTarget = await createTask("重複指定で戻すタスク");
-  await mcp("delete_tasks", { ids: [dupTarget] });
-  const dup = await mcp("restore_tasks", { ids: [dupTarget, dupTarget] });
+  await mcp("delete_cards", { ids: [dupTarget] });
+  const dup = await mcp("restore_cards", { ids: [dupTarget, dupTarget] });
   expect(dup.ok, "同じIDが成功と失敗の両方になっている").toBe(true);
   expect(dup.restored).toHaveLength(1);
   expect(dup.notRestored).toBeUndefined();
@@ -1619,12 +1619,12 @@ test("ゴミ箱に入れると検収の印が落ちる (古い確認のままDon
   expect(dup.note).toContain("検収");
 
   // 印が無いので確定も通らない。setChecked はRESTにしか無いので、AIはここから先へ進めない
-  const res = await fetch(`${API}/api/tasks/approve`, {
+  const res = await fetch(`${API}/api/cards/approve`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ ids: [id] }),
   });
-  const after = await mcp("query_log", { scope: "audit", sql: `SELECT status FROM tasks WHERE id=${id}` });
+  const after = await mcp("query_log", { scope: "audit", sql: `SELECT status FROM cards WHERE id=${id}` });
   expect(res.ok).toBe(true); // 一括検収そのものは成功で返る (条件を満たす件だけ通す)
   expect(after.rows[0].status, "未検収なのにDoneへ入った").not.toBe("done");
 });
@@ -1632,7 +1632,7 @@ test("ゴミ箱に入れると検収の印が落ちる (古い確認のままDon
 test("期限は登録時にも保存される (弾くだけ足して保存を忘れない) (#153)", async () => {
   // **「検証を足したら、通ったものが効くこと」まで確かめる。**
   // 検証だけ足して createTask に渡し忘れ、正しい due が200のまま黙って捨てられていた
-  const res = await fetch(`${API}/api/tasks`, {
+  const res = await fetch(`${API}/api/cards`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ title: "登録時に期限を入れるタスク", due: "2026-08-20" }),
@@ -1642,7 +1642,7 @@ test("期限は登録時にも保存される (弾くだけ足して保存を忘
   expect(created.due, "正しい期限が黙って捨てられている").toBe("2026-08-20");
 
   // 不正な形式は登録そのものを断る
-  const bad = await fetch(`${API}/api/tasks`, {
+  const bad = await fetch(`${API}/api/cards`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ title: "だめな期限", due: "2026-02-31" }),
@@ -1651,7 +1651,7 @@ test("期限は登録時にも保存される (弾くだけ足して保存を忘
 
   // 解除の "" は空文字を保存せず null に均す (画面では解除に見えるのに
   // WHERE due IS NOT NULL のSQLに残る、という食い違いを作らない)
-  await fetch(`${API}/api/tasks/${created.id}`, {
+  await fetch(`${API}/api/cards/${created.id}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ due: "" }),
@@ -1659,7 +1659,7 @@ test("期限は登録時にも保存される (弾くだけ足して保存を忘
   const row = await mcp("query_log", {
     scope: "audit",
     // 別名に notNull は使えない (SQLite の予約語 NOTNULL とぶつかって構文エラーになる)
-    sql: `SELECT due, (due IS NOT NULL) AS has_due FROM tasks WHERE id=${created.id}`,
+    sql: `SELECT due, (due IS NOT NULL) AS has_due FROM cards WHERE id=${created.id}`,
   });
   expect(row.rows[0].has_due, "解除したのに空文字が残っている").toBe(0);
 });
@@ -1667,7 +1667,7 @@ test("期限は登録時にも保存される (弾くだけ足して保存を忘
 test("期限の形式が違うとその指定だけ捨てて名指しで返す (#153)", async () => {
   // REST は 400 で断る
   const id = await createTask("期限を入れたいタスク");
-  const bad = await fetch(`${API}/api/tasks/${id}`, {
+  const bad = await fetch(`${API}/api/cards/${id}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ due: "not-a-date" }),
@@ -1676,21 +1676,21 @@ test("期限の形式が違うとその指定だけ捨てて名指しで返す (
   expect((await bad.json()).error).toContain("YYYY-MM-DD");
 
   // エージェント経路 (MCP) は行ごと落とさず、他の項目は保存して badDue で報告する
-  const r = await mcp("update_tasks", { updates: [{ id, summary: "現況は保存される", due: "2026-02-31" }] });
+  const r = await mcp("update_cards", { updates: [{ id, summary: "現況は保存される", due: "2026-02-31" }] });
   expect(r.badDue, "期限を捨てたことが名指しで返っていない").toContain(id);
   expect(r.note).toContain("期限の形式");
 
   const row = await mcp("query_log", {
     scope: "audit",
-    sql: `SELECT due, summary FROM tasks WHERE id=${id}`,
+    sql: `SELECT due, summary FROM cards WHERE id=${id}`,
   });
   expect(row.rows[0].due, "暦に無い日付が保存された").toBeFalsy();
   expect(row.rows[0].summary, "期限以外も一緒に落ちている").toBe("現況は保存される");
 
   // 正しい形式は通る (弾きすぎていないことの確認)
-  const ok = await mcp("update_tasks", { updates: [{ id, due: "2026-08-17" }] });
+  const ok = await mcp("update_cards", { updates: [{ id, due: "2026-08-17" }] });
   expect(ok.badDue).toBeUndefined();
-  expect((await mcp("query_log", { scope: "audit", sql: `SELECT due FROM tasks WHERE id=${id}` })).rows[0].due)
+  expect((await mcp("query_log", { scope: "audit", sql: `SELECT due FROM cards WHERE id=${id}` })).rows[0].due)
     .toBe("2026-08-17");
 });
 
@@ -1699,41 +1699,41 @@ test("検索の絞り込みは引数ではなくSQLへ案内する (#176)", asyn
   const noise = await createTask("ダークモードの検討");
   // 経緯メモに語が入っているだけのタスク (#130 で実際に起きた形)。
   // context の全文上書きは版が要るので、版の要らない context_append で足す
-  await mcp("update_tasks", {
+  await mcp("update_cards", {
     updates: [{ id: noise, context_append: "提出前に見た目を揃えるかどうか。スクリーンショットの見え方も含む" }],
   });
 
   // search_tasks は広く当てる道具のまま (本文で当たるものも返る)
-  const wide = await mcp("search_tasks", { terms: ["スクリーンショット"] });
+  const wide = await mcp("search_cards", { terms: ["スクリーンショット"] });
   const wideIds = wide.hits.map((h: any) => h.id);
   expect(wideIds).toContain(hit);
   expect(wideIds, "本文で当たるものが出ていない (前提が崩れている)").toContain(noise);
 
   // **絞り込みの引数は持たない。**足しかけた title_only は撤回した (#91 と同じ判断) —
   // 渡しても黙って無視される (=引数で絞れると思わせない) ことを固定する
-  const ignored = await mcp("search_tasks", { terms: ["スクリーンショット"], title_only: true });
+  const ignored = await mcp("search_cards", { terms: ["スクリーンショット"], title_only: true });
   expect(ignored.hits.map((h: any) => h.id), "絞り込みの引数が生きている").toContain(noise);
 
   // 代わりに契約がSQLへ案内していること。案内が消えたら、絞りたいエージェントは
   // 引数を探して見つからず、広い結果を読み直すことになる
   const tools = await mcpToolList();
-  const desc = tools.find((t: any) => t.name === "search_tasks").description as string;
+  const desc = tools.find((t: any) => t.name === "search_cards").description as string;
   expect(desc).toContain("query_log");
   expect(desc).toContain("title LIKE");
 
   // **案内した先が実際に効くことまで確かめる。**手順を書くだけでなく通してみる
   const narrowed = await mcp("query_log", {
     scope: "audit",
-    sql: "SELECT id, title FROM live_tasks WHERE title LIKE '%スクリーンショット%'",
+    sql: "SELECT id, title FROM live_cards WHERE title LIKE '%スクリーンショット%'",
   });
   const narrowedIds = narrowed.rows.map((r: any) => r.id);
   expect(narrowedIds).toContain(hit);
   expect(narrowedIds, "SQLで絞ったのに本文で当たったものが残っている").not.toContain(noise);
 });
 
-test("live_tasks と done_tasks に何が入るかは、契約に書いてある通りになっている (#175)", async () => {
-  // **説明を足したら、実物がその通りかを見る。**#175 は「review が live_tasks に
-  // 入るかどうかが契約に書いていない」ために誤報 (「live_tasks に review が出ないバグ」) が
+test("live_cards と done_cards に何が入るかは、契約に書いてある通りになっている (#175)", async () => {
+  // **説明を足したら、実物がその通りかを見る。**#175 は「review が live_cards に
+  // 入るかどうかが契約に書いていない」ために誤報 (「live_cards に review が出ないバグ」) が
   // 起きた札。ビューは status ではなく archived / trashed_at / done_at で定義されているので、
   // 説明のほうを実物に合わせたうえで、その説明をここで固定する
   const todo = await createTask("live: todoのもの", "todo");
@@ -1742,22 +1742,22 @@ test("live_tasks と done_tasks に何が入るかは、契約に書いてある
 
   const live = await mcp("query_log", {
     scope: "audit",
-    sql: `SELECT id, status FROM live_tasks WHERE id IN (${todo}, ${inprogress}, ${review})`,
+    sql: `SELECT id, status FROM live_cards WHERE id IN (${todo}, ${inprogress}, ${review})`,
   });
   const ids = live.rows.map((r: any) => r.id);
   for (const [label, id] of [["todo", todo], ["inprogress", inprogress], ["review", review]] as const) {
-    expect(ids, `${label} が live_tasks に出ていない`).toContain(id);
+    expect(ids, `${label} が live_cards に出ていない`).toContain(id);
   }
 
-  // 検収してDoneへ確定すると done_tasks に現れる。
-  // **このE2Eは AUTO_ARCHIVE=0 なので畳まれず、live_tasks にも残る** —
+  // 検収してDoneへ確定すると done_cards に現れる。
+  // **このE2Eは AUTO_ARCHIVE=0 なので畳まれず、live_cards にも残る** —
   // 契約に書いた「同じタスクが両方に出る瞬間がある (不整合ではない)」がこの状態
-  await fetch(`${API}/api/tasks/${review}/checked`, {
+  await fetch(`${API}/api/cards/${review}/checked`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ checked: true }),
   });
-  await fetch(`${API}/api/tasks/approve`, {
+  await fetch(`${API}/api/cards/approve`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ ids: [review] }),
@@ -1765,21 +1765,21 @@ test("live_tasks と done_tasks に何が入るかは、契約に書いてある
 
   const done = await mcp("query_log", {
     scope: "audit",
-    sql: `SELECT id, done_day FROM done_tasks WHERE id=${review}`,
+    sql: `SELECT id, done_day FROM done_cards WHERE id=${review}`,
   });
-  expect(done.rows, "確定したのに done_tasks に出ていない").toHaveLength(1);
+  expect(done.rows, "確定したのに done_cards に出ていない").toHaveLength(1);
   expect(done.rows[0].done_day, "done_day が空 (date(done_at) が引けていない)").toBeTruthy();
 
   const stillLive = await mcp("query_log", {
     scope: "audit",
-    sql: `SELECT id FROM live_tasks WHERE id=${review}`,
+    sql: `SELECT id FROM live_cards WHERE id=${review}`,
   });
-  expect(stillLive.rows, "畳まれていないDoneが live_tasks から消えている (契約の記述と違う)").toHaveLength(1);
+  expect(stillLive.rows, "畳まれていないDoneが live_cards から消えている (契約の記述と違う)").toHaveLength(1);
 
   // 契約側にもその説明が書かれていること (書いていないと推測される #92/#175)
   const tools = await mcpToolList();
   const desc = tools.find((t: any) => t.name === "query_log").description as string;
-  for (const word of ["todo / inprogress / review", "畳まれるまでは同じタスクが両方に出る"]) {
+  for (const word of ["todo / inprogress / review", "畳まれるまでは同じカードが両方に出る"]) {
     expect(desc, `契約に「${word}」の説明が無い`).toContain(word);
   }
   // **「短時間」と書き戻さない。**畳む処理は fire-and-forget で、プロセスが止まれば
@@ -1861,7 +1861,7 @@ test.describe("任意レーン (#19)", () => {
   });
 
   test("有効化していないレーンには置けない (RESTが断る)", async () => {
-    const res = await fetch(`${API}/api/tasks`, {
+    const res = await fetch(`${API}/api/cards`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ title: "無効なレーンへ", status: "custom1" }),
@@ -1883,7 +1883,7 @@ test.describe("任意レーン (#19)", () => {
   test("レーンからDoneへは直接行けない (退場はreviewを通る)", async () => {
     await setLanes("素材");
     const id = await createTask("素材から直行を試す", "custom1");
-    const res = await fetch(`${API}/api/tasks/${id}`, {
+    const res = await fetch(`${API}/api/cards/${id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ status: "done" }),

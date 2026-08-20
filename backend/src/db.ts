@@ -725,13 +725,13 @@ function runReadonly(
  * せめて結果と一緒に言う。実際にどちらも実データで踏まれている:
  *   - cards 直引き → ゴミ箱・アーカイブ済みが混ざる (live_cards を作った理由)
  *   - created_at で完了を数える → 登録日を数えてしまう (done_cards を作った理由) */
-function silentTrap(sql: string): { note?: string } {
+export function silentTrap(sql: string): { note?: string } {
   const notes: string[] = [];
   const s = sql.toLowerCase();
-  if (/\bfrom\s+tasks\b/.test(s) && !/trashed_at|archived/.test(s)) {
+  if (/\bfrom\s+cards\b/.test(s) && !/trashed_at|archived/.test(s)) {
     notes.push("cards を直に引いています。ゴミ箱行き・アーカイブ済みも含まれるので、生きているカードだけなら live_cards を使ってください");
   }
-  if (/count\s*\(|group\s+by/.test(s) && /date\s*\(\s*created_at/.test(s) && /\bfrom\s+tasks\b/.test(s)) {
+  if (/count\s*\(|group\s+by/.test(s) && /date\s*\(\s*created_at/.test(s) && /\bfrom\s+cards\b/.test(s)) {
     notes.push("created_at は登録日です。完了の集計なら done_at (または done_cards.done_day) を使ってください");
   }
   return notes.length > 0 ? { note: notes.join(" / ") } : {};

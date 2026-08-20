@@ -55,6 +55,22 @@ function todayLabel(): string {
   return new Date().toLocaleDateString("ja-JP", { year: "numeric", month: "2-digit", day: "2-digit", weekday: "short" });
 }
 
+/** 索引に載せる summary の上限。**書き込み側には制限が無い**ので、ここで持つ (Codexレビュー指摘)。
+ *
+ * 守っているのは「プロンプトが無制限に太らないこと」であって、データの妥当性ではない。
+ * 長い summary をDBに持つこと自体は害ではない (画面には全文が出るし、query_log でも読める) —
+ * 困るのは**それが毎リクエストのプロンプトに入り、変更のたびに `~` イベントにも載る**こと。
+ * だから境界はプロンプト側に置く。書き込みで拒否すると、既に長い summary を持つDBが
+ * 更新できなくなり移行が要る (守りたいものに対して代償が大きい)。
+ *
+ * 120字の根拠: 実測 (2026-08-21) で18枚の最長が60字、平均40字。**通常運用では発火しない**大きさに置き、
+ * 異常な入力だけを止める。切ったことは「…」で分かるようにする — 索引の説明が
+ * 「詳細が必要なら query_log で取る」と案内しているので、全文が要るなら取りに行ける */
+const SUMMARY_MAX = 120;
+export function clampSummary(s: string): string {
+  return s.length <= SUMMARY_MAX ? s : `${s.slice(0, SUMMARY_MAX)}…`;
+}
+
 /** 索引1件ぶん。**DBに触らない純粋関数**にしてあるのはテストのため
  * (ここに何が載るかは契約そのもので、載り忘れても画面もテストも落ちない)。
  *
@@ -78,7 +94,7 @@ export function cardIndexJson(
     id: t.id,
     title: t.title,
     status: t.status,
-    ...(t.summary ? { summary: t.summary } : {}),
+    ...(t.summary ? { summary: clampSummary(t.summary) } : {}),
     ...(t.due ? { due: t.due } : {}),
     ...(t.blockedBy?.length ? { dep: t.blockedBy } : {}),
     ...(t.rejected ? { rejected: true } : {}),

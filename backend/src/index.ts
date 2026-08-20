@@ -173,7 +173,7 @@ function rejoinFollowers(projectId: number) {
  * 「初回だけ揃っていて以後ズレる」を型で防ぐ (#19 で lanes を足したとき、片方だけ直る形にしない) */
 function boardPayload(projectId: number) {
   return {
-    tasks: listTasks(),
+    cards: listTasks(),
     folded: foldedContainer(projectId) ?? [],
     lanes: customLanes(projectId),
     // #212: 上流に断られたまま (残高切れ・キー失効・混雑)。**板を開いた時点で伝わる**ようにする。
@@ -210,7 +210,7 @@ app.get("/api/board", (_req, res) => {
   res.json(boardPayload(currentProjectId()));
 });
 
-app.post("/api/tasks", (req, res) => {
+app.post("/api/cards", (req, res) => {
   const { title, status } = req.body ?? {};
   if (!title) return res.status(400).json({ error: "title required" });
   const ng = badStatus(status) ?? badDue(req.body?.due);
@@ -233,7 +233,7 @@ app.post("/api/tasks", (req, res) => {
 // #108: 検収の印 (人が実物で確かめたという記録)。done とは別物で、
 // done は列が動いたこと、checked_at は検収が進んだこと。片方からもう片方を推測しない。
 // エージェントには読ませるが書かせない — この口はRESTにしか無い
-app.post("/api/tasks/:id/checked", (req, res) => {
+app.post("/api/cards/:id/checked", (req, res) => {
   const { task, error } = setChecked(Number(req.params.id), !!req.body?.checked);
   if (error) return res.status(409).json({ error });
   if (!task) return res.status(404).json({ error: "not found" });
@@ -272,12 +272,12 @@ function normalizeDue(due: unknown): string | null | undefined {
 
 // status:"done" を投げられたが動かさなかったときに添える。黙って無視すると
 // 「APIは200を返したのに列が動かない」になり、UIのバグに見える
-const DONE_GATE_NOTE = `Doneへは移していません。${DONE_GATE_RULE}。確定は POST /api/tasks/approve (ボードの検収ボタン) が行います`;
+const DONE_GATE_NOTE = `Doneへは移していません。${DONE_GATE_RULE}。確定は POST /api/cards/approve (ボードの検収ボタン) が行います`;
 
 // 一括検収 (#57/#60): Review→Doneの確定。複数前提の1ルート (単一もここを通る)
 // 検収の確定。Doneへ至る唯一の扉なので、条件(Review列 + 検収済み + 生きている)はサーバーが持つ。
 // 以前はUIのフィルタにだけ依存していて、直接叩けばTodoでもゴミ箱の中でもDoneにできた
-app.post("/api/tasks/approve", (req, res) => {
+app.post("/api/cards/approve", (req, res) => {
   const ids = (req.body?.ids ?? []) as number[];
   if (!Array.isArray(ids) || ids.length === 0) return res.status(400).json({ error: "ids required" });
   const { updated, skipped } = approveChecked(ids);
@@ -294,13 +294,13 @@ app.post("/api/tasks/approve", (req, res) => {
 });
 
 // アーカイブ済み含む単一カード取得 (#59: 要約カードの#xxリンクから詳細を開く用)
-app.get("/api/tasks/:id", (req, res) => {
+app.get("/api/cards/:id", (req, res) => {
   const task = getTask(Number(req.params.id));
   if (!task) return res.status(404).json({ error: "not found" });
   res.json(task);
 });
 
-app.patch("/api/tasks/:id", (req, res) => {
+app.patch("/api/cards/:id", (req, res) => {
   const ng = badStatus(req.body?.status) ?? badDue(req.body?.due);
   if (ng) return res.status(400).json({ error: ng });
   const body = req.body ?? {};
@@ -316,7 +316,7 @@ app.patch("/api/tasks/:id", (req, res) => {
 
 // #102: 削除はゴミ箱行き (論理削除)。自然言語UIでは解釈ミスが必ず起きるので、
 // 「間違えないようにする」のではなく「間違えても取り返しがつく」形にする
-app.delete("/api/tasks/:id", (req, res) => {
+app.delete("/api/cards/:id", (req, res) => {
   const id = Number(req.params.id);
   // アーカイブ済み (Doneへ確定して要約カードに畳まれたもの) は消せない。
   // 「見つからない」と返すと、実在するのに存在しないことになって混乱する
@@ -332,10 +332,10 @@ app.delete("/api/tasks/:id", (req, res) => {
 });
 
 app.get("/api/trash", (_req, res) => {
-  res.json({ tasks: listTrashedTasks() });
+  res.json({ cards: listTrashedTasks() });
 });
 
-app.post("/api/tasks/:id/restore", (req, res) => {
+app.post("/api/cards/:id/restore", (req, res) => {
   const id = Number(req.params.id);
   const task = restoreTask(id);
   // #161: restoreTask はゴミ箱に無ければ undefined を返す。**理由で応答を分ける** —
@@ -429,7 +429,7 @@ app.get("/api/chat/log", (req, res) => {
 });
 
 // カード専用チャット (#24): 対象カードの全詳細をシステムプロンプトに注入し、会話はcard_id付きで分離保存
-app.post("/api/tasks/:id/chat", async (req, res) => {
+app.post("/api/cards/:id/chat", async (req, res) => {
   const taskId = Number(req.params.id);
   const { message, history, attachments, view } = req.body ?? {};
   if (!message) return res.status(400).json({ error: "message required" });

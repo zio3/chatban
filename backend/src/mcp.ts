@@ -117,7 +117,7 @@ export function buildMcpServer(onEvent: (kind: "board" | "proposals") => void): 
     {
       description: "カードをボードに追加する(複数可)。UIにはリアルタイム反映される",
       inputSchema: {
-        tasks: z.array(
+        cards: z.array(
           z.object({
             title: z.string(),
             status: STATUS.optional().describe(`省略時はtodo。${STATUS_DESC}`),
@@ -130,10 +130,10 @@ export function buildMcpServer(onEvent: (kind: "board" | "proposals") => void): 
         sync_token: SYNC_TOKEN_ON_WRITE,
       },
     },
-    async ({ tasks, sync_token }) => {
+    async ({ cards, sync_token }) => {
       // #114: 書き込みは agentWrite に集約。以前はMCP側にガードが無く、
       // done指定がそのまま通って「AIが自主的にDoneへ移動」する事故が起きた
-      const r = createTasksAsAgent(tasks as any);
+      const r = createTasksAsAgent(cards as any);
       onEvent("board");
       return text({
         ok: true,
@@ -371,7 +371,7 @@ export function buildMcpServer(onEvent: (kind: "board" | "proposals") => void): 
         projectContextVersion: d.projectContextVersion,
         // checked は brief に無いのでここで足す。**人が検収したかどうかは全件応答からも
         // 読めないといけない** — 差分だけ直しても、取り直したときに分からなければ同じ事故が起きる
-        tasks: listTasks().map((t) => ({ ...brief(t)!, checked: !!t.checkedAt })),
+        cards: listTasks().map((t) => ({ ...brief(t)!, checked: !!t.checkedAt })),
       });
     }
   );

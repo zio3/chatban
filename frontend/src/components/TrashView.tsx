@@ -15,7 +15,7 @@ export default function TrashView() {
   const load = useCallback(() => {
     api
       .trash()
-      .then((d) => setTasks(d.tasks))
+      .then((d) => setTasks(d.cards))
       .catch((e) => setError(String(e)));
   }, []);
 

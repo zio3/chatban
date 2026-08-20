@@ -75,13 +75,13 @@ export type TaskPatch = Partial<
 /** Doneへ入ってよい状態か。approveChecked が通す条件そのもの。
  *
  * PR #1 で「検収APIはサーバー側で条件を確かめる」ようにしたが、条件を持っていたのは
- * approveChecked だけで、PATCH /api/tasks/:id に status:"done" を投げれば素通りしていた
+ * approveChecked だけで、PATCH /api/cards/:id に status:"done" を投げれば素通りしていた
  * (自動レビュー指摘)。フロントは Board.tsx の handleDragEnd で Done列へのD&Dを禁止しているが、
  * **その禁止がクライアント側にしか無い** — PR #1 で塞いだのとまったく同じ形の穴。
  *
  * そこで「検収APIだけが厳しい」のをやめ、**Doneに入れる条件そのもの**を updateTasks の
  * 不変条件にする。approveChecked が通すものはこの条件を満たすので、迂回フラグは要らない。
- * checked_at を立てられるのは REST /api/tasks/:id/checked だけ (=人間のUI操作) なので、
+ * checked_at を立てられるのは REST /api/cards/:id/checked だけ (=人間のUI操作) なので、
  * 入口がRESTでもMCPでもチャットでも「人間が検収したものしかDoneに無い」が成立する。
  *
  * 「プロンプトは漏れるが、経路が無いことは漏れない」— 契約の文言ではなくコードで持つ。
@@ -223,7 +223,7 @@ export function updateTasks(patches: { id: number; patch: TaskPatch }[]): (Task 
 
 /** 検収の確定 (Review + 検収済み → Done)。Doneへ至る唯一の扉なので、条件はサーバーが持つ。
  *
- * 以前は POST /api/tasks/approve が ids をそのまま done にしていて、条件の判定は
+ * 以前は POST /api/cards/approve が ids をそのまま done にしていて、条件の判定は
  * フロント(App.tsx の commitApproved が status==="review" && checkedAt で絞る)にしか無かった。
  * 実測で、Todo のカードも・Review未検収も・**ゴミ箱の中のカードまで** done になった。
  *

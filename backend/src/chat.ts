@@ -234,7 +234,7 @@ export function buildTools(lanes: CustomLane[]): OpenAI.Chat.Completions.ChatCom
       parameters: {
         type: "object",
         properties: {
-          tasks: {
+          cards: {
             type: "array",
             items: {
               type: "object",
@@ -248,7 +248,7 @@ export function buildTools(lanes: CustomLane[]): OpenAI.Chat.Completions.ChatCom
             },
           },
         },
-        required: ["tasks"],
+        required: ["cards"],
       },
     },
   },
@@ -401,7 +401,7 @@ async function execTool(name: string, args: any, uiActions: UiAction[], events: 
   switch (name) {
     case "create_cards": {
       // #114: 書き込みは agentWrite に集約 (チャットとMCPで同じガードを通す)
-      const r = createTasksAsAgent(args.tasks ?? []);
+      const r = createTasksAsAgent(args.cards ?? []);
       events.add("board");
       return { ok: true, ...r };
     }

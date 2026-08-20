@@ -75,7 +75,7 @@ export default function App() {
     setLoadError(null);
     try {
       const b = await api.board();
-      setTasks(b.tasks);
+      setTasks(b.cards);
       setFolded(b.folded ?? []);
       setLanes(b.lanes ?? []);
       setLlmRefused(!!b.llmRefused);
@@ -104,8 +104,8 @@ export default function App() {
     };
     // #72: メインチャットはリロードで新規 (会話は作業記憶。重要事項はプロジェクト前提/カード経緯メモに
     // 蒸留されて残り、生ログはDBに保存済みで query_log から引ける)。カードチャットは経緯ログなので復元維持
-    const onBoard = (p: { tasks: Task[]; folded?: FoldedTask[]; lanes?: CustomLane[]; llmRefused?: boolean; attachments?: boolean }) => {
-      setTasks(p.tasks);
+    const onBoard = (p: { cards: Task[]; folded?: FoldedTask[]; lanes?: CustomLane[]; llmRefused?: boolean; attachments?: boolean }) => {
+      setTasks(p.cards);
       if (p.folded) setFolded(p.folded);
       // **空配列も反映する。**`if (p.lanes)` にすると最後の1本を畳んだときだけ列が残る
       if (p.lanes) setLanes(p.lanes);

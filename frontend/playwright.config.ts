@@ -4,6 +4,22 @@ import { defineConfig } from "@playwright/test";
 const BACKEND_PORT = 8799;
 const FRONTEND_PORT = 5199;
 
+// **E2Eは有料のLLM呼び出しを起こす (#219)。**「鍵が無いから安全」ではない —
+// 下の env はキーを消しておらず、backend/config.json がそのまま読まれる。
+//
+// 実測 (2026-08-20、全走1回): gpt-5.6-luna を **8回** (suggest×5 / chat×3)。
+//   - suggest は画面を開くたびに走る。SUGGEST_BOOT_GRACE_MS=0 / SUGGEST_TTL_MS=0 に
+//     しているのは #162 の中断テストがLLM呼び出しを必要とするためで、**その副作用**
+//   - chat はカードチャット2件と「999999」の1件
+//
+// 数えるなら backend/logs/chatban-YYYY-MM-DD.log の `[llm] -> ` 行を時刻で切り出す。
+// **自動で数える仕掛けは作らない。**ログにポートもPIDも無く、devサーバー(8787)・E2E(8799)・
+// ユニットテストが同じファイルに書くので、**devサーバーの呼び出しまで混ぜて数えてしまう**。
+// 「安全だと言っているのに実は違う」を直すのがこの節なのに、そこで嘘をつく計測を足したら本末転倒
+// (#219)。区別が要るなら、まずログ行に出し元を入れる。
+//
+// **テストを足すときは「LLMを踏むか」を見ること。**踏むなら、その1回に見合う価値があるか考える
+
 // E2Eデータのリセットは backend の webServer コマンドの前段で行う (e2e/clean-db.mjs)。
 //
 // **npm script ではなく webServer に置く。**#194: 以前は package.json の test:e2e に

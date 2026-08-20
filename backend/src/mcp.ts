@@ -15,6 +15,8 @@ import {
   QUERY_LOG_DESCRIPTION,
   REJECTED_DESCRIPTION,
   REORDER_DESCRIPTION,
+  reorderResult,
+  searchResult,
   agentStatusValues,
   reorderableStatuses,
   statusDescription,
@@ -200,12 +202,17 @@ export function buildMcpServer(onEvent: (kind: "board" | "proposals") => void): 
     "delete_cards",
     {
       description: "カードをゴミ箱に入れる(複数可)。実データは残り restore_cards で戻せる",
-      inputSchema: { ids: z.array(z.number().int()) },
+      inputSchema: { ids: z.array(z.number().int()), sync_token: SYNC_TOKEN_ON_WRITE },
     },
-    async ({ ids }) => {
+    async ({ ids, sync_token }) => {
       const results = ids.map((id) => ({ id, trashed: trashTask(id) }));
       onEvent("board");
-      return text({ ok: true, results, note: "ゴミ箱に入れました (実データは残っています)。復元は restore_cards" });
+      return text({
+        ok: true,
+        results,
+        note: "ゴミ箱に入れました (実データは残っています)。復元は restore_cards",
+        ...boardUpdate(sync_token),
+      });
     }
   );
 
@@ -213,14 +220,14 @@ export function buildMcpServer(onEvent: (kind: "board" | "proposals") => void): 
     "restore_cards",
     {
       description: RESTORE_DESCRIPTION,
-      inputSchema: { ids: z.array(z.number().int()) },
+      inputSchema: { ids: z.array(z.number().int()), sync_token: SYNC_TOKEN_ON_WRITE },
     },
-    async ({ ids }) => {
+    async ({ ids, sync_token }) => {
       // #161: 判定と報告は agentWrite に集約 (入口ごとに ok の意味が違わないように)。
       // 返す形も共通側で絞ってあるので、ここで brief() を通す必要はない —
       // **チャットとMCPで応答の形まで同じ**になる (以前は片方だけ要約していた)
       onEvent("board");
-      return text(restoreTasksAsAgent(ids));
+      return text({ ...restoreTasksAsAgent(ids), ...boardUpdate(sync_token) });
     }
   );
 
@@ -230,7 +237,7 @@ export function buildMcpServer(onEvent: (kind: "board" | "proposals") => void): 
       description: SEARCH_DESCRIPTION,
       inputSchema: { terms: z.array(z.string()).describe("検索語(最大10)。言い換え・英日表記を並べる") },
     },
-    async ({ terms }) => text(searchTasks(terms))
+    async ({ terms }) => text(searchResult(searchTasks(terms)))
   );
 
   // #108: 記録へのSQL窓口。チャットにしか無く、MCP越しの外部エージェントからは引けなかった。
@@ -263,12 +270,13 @@ export function buildMcpServer(onEvent: (kind: "board" | "proposals") => void): 
       inputSchema: {
         status: z.enum(reorderableStatuses(LANES) as [string, ...string[]]).describe("対象の列"),
         ids: z.array(z.number().int()).describe("その列のカードを並べたい順に"),
+        sync_token: SYNC_TOKEN_ON_WRITE,
       },
     },
-    async ({ status, ids }) => {
+    async ({ status, ids, sync_token }) => {
       const r = reorderTasks(ids, status as TaskStatus);
       onEvent("board");
-      return text(r);
+      return text({ ...reorderResult(r), ...boardUpdate(sync_token) });
     }
   );
 

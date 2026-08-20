@@ -54,7 +54,7 @@ export const api = {
   updateProject: (
     id: number,
     // #19: custom1Label / custom2Label は**空文字を送るとそのレーンを畳む**
-    // (サーバー側でそこに居たタスクを todo へ戻してから畳む)。undefined は「触らない」
+    // (サーバー側でそこに居たカードを todo へ戻してから畳む)。undefined は「触らない」
     patch: { name?: string; archived?: boolean; custom1Label?: string; custom2Label?: string }
   ) =>
     apiFetch(`/api/projects/${id}`, {

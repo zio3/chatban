@@ -49,7 +49,7 @@ export interface TaskFacts {
    * 2026-08-15 の事故は「人間が検収したことをエージェントが知らなかった」ために起きた。
    * setChecked は updated_at を動かさないので、タイムスタンプ方式では二重に拾えない (自動レビュー指摘) */
   checkedAt: string | null;
-  /** 並び順。reorder_tasks で動く。1件動かすと周りも連動して変わるので、差分では1行にまとめる */
+  /** 並び順。reorder_cards で動く。1件動かすと周りも連動して変わるので、差分では1行にまとめる */
   sort: number;
 }
 
@@ -147,7 +147,7 @@ function columnOrders(tasks: Map<number, TaskFacts>, only?: Set<number>): Map<st
   return out;
 }
 
-/** 列の中でそのタスクがどこに居るか。**追加行にこれが要る** —
+/** 列の中でそのカードがどこに居るか。**追加行にこれが要る** —
  * ゴミ箱からの復元は sort を保ったまま戻るので列の途中に入りうるが、
  * 「追加」は並び順の判定 (居続けたIDの比較) から外れるため、ここで言わないと位置が分からない (自動レビュー指摘) */
 function positionIn(lists: Map<string, number[]>, status: string, id: number): string {
@@ -165,7 +165,7 @@ function sameDeps(a: number[] | null, b: number[] | null): boolean {
   return x.length === y.length && x.every((v, i) => v === y[i]);
 }
 
-/** 1件のタスクについて、変わったフィールドだけを "status: todo -> inprogress" の形で並べる */
+/** 1件のカードについて、変わったフィールドだけを "status: todo -> inprogress" の形で並べる */
 function fieldChanges(prev: TaskFacts, cur: TaskFacts): string[] {
   const out: string[] = [];
   if (prev.status !== cur.status) out.push(`status: ${prev.status} -> ${cur.status}`);
@@ -199,7 +199,7 @@ export function diffBoards(
     const before = prev.tasks.get(id);
     if (!before) {
       // 追加はIDだけでは何か分からないので内容ごと載せる。
-      // **検収済みかどうかもここに要る** — 検収済みのタスクが「追加」として現れる経路があり
+      // **検収済みかどうかもここに要る** — 検収済みのカードが「追加」として現れる経路があり
       // (fieldChanges を通らないので検収状態が抜け落ちる。自動レビュー指摘)。
       // #161 以降、ゴミ箱からの復元は checked_at を落とすのでこの例からは外れたが、
       // スナップショット失効後の再ベースラインなどでは依然として起きる

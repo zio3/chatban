@@ -7,7 +7,7 @@ const TIMEOUT_MS = 90_000;
 /**
  * チャット1リクエストのライフサイクル管理 (#23/#28/#29/#30)。
  * 送信 → 考え中 → ツール実行中(chat:progress) → 完了 / エラー / タイムアウト / 手動停止 を
- * 1つの状態機械としてまとめ、メインチャットとタスクチャットで共用する。
+ * 1つの状態機械としてまとめ、メインチャットとカードチャットで共用する。
  * 停止はクライアント側破棄のみ (サーバーのLLMループは走り切り、結果はボードに反映される)。
  */
 export interface TurnAttachment {
@@ -23,7 +23,7 @@ export function useChatTurn(opts: {
     signal: AbortSignal,
     attachments?: TurnAttachment[]
   ) => Promise<ChatResponse>;
-  /** chat:progress を拾う対象。null=メインチャット / number=そのタスクのチャット */
+  /** chat:progress を拾う対象。null=メインチャット / number=そのカードのチャット */
   progressTaskId?: number | null;
   onResponse?: (res: ChatResponse) => void;
 }) {

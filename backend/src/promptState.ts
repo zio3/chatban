@@ -89,7 +89,7 @@ function buildBaselineText(s: Snapshot): string {
           .map((x) => x.replace("=", "=「") + "」")
           .join(", ")}`
       : ""}, done=完了)`,
-    "タイトルは要約品質。詳細(経緯メモ)が必要なら query_log で取る (SELECT context FROM tasks WHERE id=...)。完了タスクは自動アーカイブされここには載らない。",
+    "タイトルは要約品質。詳細(経緯メモ)が必要なら query_log で取る (SELECT context FROM tasks WHERE id=...)。完了カードは自動アーカイブされここには載らない。",
     "後続に「変更イベント」がある場合、この索引にそれを適用した状態が現在のボードである。",
     `[${[...s.tasks.values()].join(",")}]`,
     "",

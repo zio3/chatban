@@ -52,7 +52,7 @@ test("1段目は「done かつ 未アーカイブ かつ ゴミ箱でない」�
   // ゴミ箱のDoneを畳むと**ゴミ箱と箱の両方に入る** (trashTask は status を変えないので、
   // status だけ見ていると素通りする)
   assert.ok(!found.includes(trashed), "ゴミ箱のDoneを拾っている");
-  // 畳み済みを拾うと**同じタスクが2回入る**
+  // 畳み済みを拾うと**同じカードが2回入る**
   assert.ok(!found.includes(folded), "畳み済みのDoneを拾っている");
 });
 
@@ -107,16 +107,16 @@ test("24時間より古いものは箱から落ちる (板に出ない)", () => 
   for (const t of kept) t.foldedAt = Date.now() - 25 * 3600_000;
   assert.equal(foldedContainer(P), undefined, "古い箱が残っている");
 
-  // 器が消えるだけ。タスクは archived=1 のまま残り、search_tasks で引ける
+  // 器が消えるだけ。カードは archived=1 のまま残り、search_cards で引ける
   const first = kept[0].id;
-  assert.equal(getTask(first)?.status, "done", "タスクまで消えている");
+  assert.equal(getTask(first)?.status, "done", "カードまで消えている");
   assert.equal(isArchived(first), true, "板に出戻っている");
   assert.ok(!listLooseDoneIds().includes(first), "1段目に戻ってきている");
 });
 
 test("**読み取りは状態を変えない** — 板を眺めているだけでは箱の中身が消えない", () => {
   // foldedContainer は GET /api/board と broadcastBoard から呼ばれ、broadcastBoard は
-  // タスクの追加・更新・ゴミ箱・チャット・MCP操作など**Doneと無関係な経路**から何度も走る。
+  // カードの追加・更新・ゴミ箱・チャット・MCP操作など**Doneと無関係な経路**から何度も走る。
   // ここで期限切れを捨てて書き戻すと、「押した瞬間にしか動かない」が嘘になる (自動レビュー指摘)
   flush();
   const a = makeDoneTask("期限切れになるやつ");

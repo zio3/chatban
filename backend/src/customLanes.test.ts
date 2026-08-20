@@ -18,7 +18,7 @@ test("custom1 / custom2 は値としては実在する", () => {
   assert.equal(isTaskStatus("custom"), false);
 });
 
-// ここが #19 の肝。列を描かないのに保存だけ通ると、タスクが「消えたように見えて実在する」
+// ここが #19 の肝。列を描かないのに保存だけ通ると、カードが「消えたように見えて実在する」
 test("有効化していないレーンには置けない", () => {
   assert.equal(isUsableStatus("custom1", []), false);
   assert.equal(isUsableStatus("custom2", []), false);

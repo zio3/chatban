@@ -14,13 +14,13 @@ export interface Task {
   context: string | null;
   /** 期限 YYYY-MM-DD (#44) */
   due: string | null;
-  /** 依存先タスクID (#41)。**関係の覚え書きで、着手やDoneを止めるものではない** (#152) */
+  /** 依存先カードID (#41)。**関係の覚え書きで、着手やDoneを止めるものではない** (#152) */
   blockedBy: number[] | null;
   /** 却下=やらない決定 (#65) */
   /** #92: 現況の一言。カードに出る。Reviewでは検収の要点を書く (詳細はcontextへ) */
   summary?: string | null;
   rejected: boolean;
-  /** #102: ゴミ箱に入れた日時。nullなら通常のタスク */
+  /** #102: ゴミ箱に入れた日時。nullなら通常のカード */
   trashedAt?: string | null;
   checkedAt?: string | null;
   doneAt?: string | null;
@@ -29,7 +29,7 @@ export interface Task {
   updatedAt: string;
 }
 
-/** #200: Done列の2段目。直近24時間に畳んだタスクを1つにまとめた箱。
+/** #200: Done列の2段目。直近24時間に畳んだカードを1つにまとめた箱。
  * サーバーのメモリ上にしか無いので、再起動すると消える (中身は archived=1 でDBに残る) */
 export interface FoldedTask {
   id: number;

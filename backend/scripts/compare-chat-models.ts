@@ -3,7 +3,7 @@
 // 問い (zio): 「Lunaで、チャットもこなせない?」
 //
 // **測るのは文章の出来ではなくツール呼び出し。**#190 の実測で、小さいモデルが最初に壊れるのは
-// create_tasks で、壊れ方が「呼んでいないのに『登録しました』と報告する」という一番たちの悪い形だった。
+// create_cards で、壊れ方が「呼んでいないのに『登録しました』と報告する」という一番たちの悪い形だった。
 // 文章だけ読むと通っているように見えるので、tool_calls が出たかどうかを機械で判定する。
 //
 // Luna はツール併用時 reasoning_effort='none' になる (llm.ts の NEEDS_REASONING_NONE) =
@@ -24,9 +24,9 @@ const N = Number(arg("--n") ?? 5);
 
 /** expect: 呼ぶべきツール名。null は「呼ばないのが正解」(相談を勝手にタスク化しないか) */
 const CASES: { label: string; user: string; expect: string | null }[] = [
-  { label: "登録", user: "Chromebookで白飛びして読めない件、タスクに積んで", expect: "create_tasks" },
-  { label: "完了報告", user: "#208 終わりました", expect: "update_tasks" },
-  { label: "並べ替え", user: "#183 を todo の一番上に持ってきて", expect: "reorder_tasks" },
+  { label: "登録", user: "Chromebookで白飛びして読めない件、タスクに積んで", expect: "create_cards" },
+  { label: "完了報告", user: "#208 終わりました", expect: "update_cards" },
+  { label: "並べ替え", user: "#183 を todo の一番上に持ってきて", expect: "reorder_cards" },
   { label: "集計", user: "今月どれくらい終わった? 件数だけ知りたい", expect: "query_log" },
   { label: "相談", user: "かんばんの列って4つで足りてると思う? どう思う?", expect: null },
 ];

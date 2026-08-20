@@ -7,9 +7,9 @@ import ThinkingIndicator from "./ThinkingIndicator";
 import type { ChatEntry } from "../types";
 
 const TOOL_LABELS: Record<string, string> = {
-  create_tasks: "タスク追加",
-  update_tasks: "タスク更新",
-  delete_tasks: "タスク削除",
+  create_cards: "カード追加",
+  update_cards: "カード更新",
+  delete_cards: "カード削除",
   set_view: "ビュー切替",
   update_project_context: "前提情報更新",
   compact_archive: "ログ整頓",

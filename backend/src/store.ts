@@ -9,7 +9,7 @@ import type { CustomLane, CustomLaneKey } from "./types.js";
 // #86: プロジェクトごとにSQLiteファイルを分ける。
 //
 // なぜ project_id 列でなくファイル分離か:
-//  - タスクの #ID がプロジェクトごとに1から始まる。#IDは会話の語彙(「#7を後回し」)なので
+//  - カードの #ID がプロジェクトごとに1から始まる。#IDは会話の語彙(「#7を後回し」)なので
 //    2桁で収まることが手触りに直結する。通し番号だと #247 になり口に出せなくなる
 //  - 全クエリに WHERE project_id を書く必要がない = 絞り忘れが構造的に起きない。
 //    混ざったボード索引をLLMが読むと誤った提案をするが、人間はそれに気づけない
@@ -62,7 +62,7 @@ CREATE TABLE IF NOT EXISTS settings (
 );
 `);
   // #107: 無効フラグ。削除するほどではないが普段は見せたくないプロジェクト用。
-  // ドロップダウンから消えるだけで、設定画面には出る (実体もタスクもそのまま)
+  // ドロップダウンから消えるだけで、設定画面には出る (実体もカードもそのまま)
   const addProj = (sql: string) => {
     try {
       db.exec(sql);
@@ -194,7 +194,7 @@ CREATE TABLE IF NOT EXISTS chat_messages (
   db.exec("UPDATE tasks SET done_at = updated_at WHERE done_at IS NULL AND (status = 'done' OR archived = 1)");
   // #200: 要約カードを撤去する。Done列は「ゴミ箱に行くまでのロスタイム」であって陳列棚ではないので、
   // 畳んだものを常駐させる器が要らなくなった。畳んだ束は**メモリ上に1個だけ**持つ (archive.ts)。
-  // タスク本体は archived=1 のまま残るので、消えるのは器と、蒸留していた頃の要約文だけ
+  // カード本体は archived=1 のまま残るので、消えるのは器と、蒸留していた頃の要約文だけ
   try {
     db.exec("DROP TABLE IF EXISTS summary_cards");
     const cols = (db.prepare("PRAGMA table_info(tasks)").all() as any[]).map((c) => c.name);
@@ -208,7 +208,7 @@ CREATE TABLE IF NOT EXISTS chat_messages (
   } catch (e: any) {
     log("schema", `要約カードの撤去に失敗: ${e?.message ?? e}`);
   }
-  // #115/#116: 前提情報も全文上書きなので、タスクの経緯メモ(#112)と同じく版で守る。
+  // #115/#116: 前提情報も全文上書きなので、カードの経緯メモ(#112)と同じく版で守る。
   // こちらの方が失うものが大きい — プロジェクト全員の前提で、チャットのシステムプロンプトに常時載る
   addColumn("ALTER TABLE project_context ADD COLUMN version INTEGER NOT NULL DEFAULT 1");
   addColumn("ALTER TABLE chat_messages ADD COLUMN task_id INTEGER");
@@ -216,9 +216,9 @@ CREATE TABLE IF NOT EXISTS chat_messages (
   // 個人利用に特化して発言者という概念ごと廃止したので、追加もしないし既存も落とす
   // (下の削除マイグレーション)
 
-  // 「生きているタスク」をVIEWにする。外部エージェントからの指摘 —
+  // 「生きているカード」をVIEWにする。外部エージェントからの指摘 —
   // 「archived=0 AND trashed_at IS NULL ORDER BY COALESCE(sort,id), id を毎回コピーしている。
-  //  忘れるとゴミ箱のタスクが混ざる。ビューが1つあるだけで済む話」。
+  //  忘れるとゴミ箱のカードが混ざる。ビューが1つあるだけで済む話」。
   //
   // list_tasks を消してSQL窓口に寄せたとき(#108)、母集団の条件は説明文で教えれば足りると
   // 判断したが、毎回書かせるのは手抜きだった。「読みは教育で守る」の教育コストを、
@@ -387,7 +387,7 @@ export function customLanes(id: number = currentProjectId()): CustomLane[] {
 }
 
 /** 表示名を設定する。空文字・空白だけはNULL扱い = そのレーンを畳む。
- * **畳んでも、そこに居たタスクは消さない。**呼び出し側 (index.ts) が todo へ戻してから呼ぶ —
+ * **畳んでも、そこに居たカードは消さない。**呼び出し側 (index.ts) が todo へ戻してから呼ぶ —
  * 「消えたように見えて実在する」(TASK_STATUSES の注記) を作らないため */
 export function setCustomLabel(id: number, key: CustomLaneKey, label: string | null): void {
   const v = label?.trim() ? label.trim() : null;

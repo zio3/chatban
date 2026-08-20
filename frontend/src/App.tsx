@@ -102,8 +102,8 @@ export default function App() {
       }
       everConnected = true;
     };
-    // #72: メインチャットはリロードで新規 (会話は作業記憶。重要事項はプロジェクト前提/タスク経緯メモに
-    // 蒸留されて残り、生ログはDBに保存済みで query_log から引ける)。タスクチャットは経緯ログなので復元維持
+    // #72: メインチャットはリロードで新規 (会話は作業記憶。重要事項はプロジェクト前提/カード経緯メモに
+    // 蒸留されて残り、生ログはDBに保存済みで query_log から引ける)。カードチャットは経緯ログなので復元維持
     const onBoard = (p: { tasks: Task[]; folded?: FoldedTask[]; lanes?: CustomLane[]; llmRefused?: boolean; attachments?: boolean }) => {
       setTasks(p.tasks);
       if (p.folded) setFolded(p.folded);
@@ -165,7 +165,7 @@ export default function App() {
     });
   }, []);
 
-  // アーカイブ済みタスクの詳細表示用 (#59: 要約カードの#xxリンクから開く)
+  // アーカイブ済みカードの詳細表示用 (#59: 要約カードの#xxリンクから開く)
   const [archivedTask, setArchivedTask] = useState<Task | null>(null);
   const openTask = useCallback(
     (id: number) => {
@@ -195,7 +195,7 @@ export default function App() {
     }, 60);
   }, []);
 
-  // #197: 番号だけの発言 (`193` / `#193`) は、LLMを呼ばずにそのタスクを開く。
+  // #197: 番号だけの発言 (`193` / `#193`) は、LLMを呼ばずにそのカードを開く。
   // 「検索窓が欲しい、とくに番号でアクセスしたいケースが増えてきた」への答えだが、
   // **専用の検索窓は作らない** — チャットは常設 (#74) でどこからでも打てるし、
   // 開く仕掛け (openTask / jumpToBoard) は要約カードのリンク (#59) と依存チップ (#111) で
@@ -315,7 +315,7 @@ export default function App() {
   const VIEW_SUGGESTIONS: Partial<Record<typeof view, Suggestion[]>> = {
     context: [{ label: "📋 前提情報に追記したい", message: "前提情報に追記したいことがある。いまの内容を踏まえて相談したい" }],
     // #181: 📊コスト と 📜監査 のチップはタブごと撤去。「直近なにをしてた?」はボード側にある
-    trash: [{ label: "↩ 消したものを戻したい", message: "ゴミ箱に入れたタスクを戻したい" }],
+    trash: [{ label: "↩ 消したものを戻したい", message: "ゴミ箱に入れたカードを戻したい" }],
     settings: [{ label: "📁 プロジェクトを整理したい", message: "プロジェクトの整理について相談したい (無効化・リネーム・削除)" }],
   };
   // 新規プロジェクト(まだ何も無い)では、レポートも割り振りも中身が無い。
@@ -332,7 +332,7 @@ export default function App() {
   } else {
     suggestions.push({ label: "📋 現状をレポートして", message: "ボードの現状を簡潔にレポートして" });
     if (tasks.filter((t) => t.status === "review").length > 0) {
-      suggestions.push({ label: "👀 レビュー待ちをまとめて", message: "レビュー中のタスクの状況をまとめて" });
+      suggestions.push({ label: "👀 レビュー待ちをまとめて", message: "レビュー中のカードの状況をまとめて" });
     }
     if (tasks.filter((t) => t.status === "todo").length === 0) {
       suggestions.push({ label: "💡 次のタスク候補を挙げて", message: "次にやるべきタスクの候補を挙げて" });
@@ -343,10 +343,10 @@ export default function App() {
   // #179: 担当フィルタは撤去した。いま絞り込みは無く、ボードは常に全件を出す。
   // 作り直すなら「LLMにIDの集合を返させて、押した瞬間に確定する」形になる (CLAUDE.md の将来案) —
   // 述語で絞る方式に戻さないのは、フィルタを掛けたまま放置したときに
-  // 後から増えたタスクが埋もれるため (#41/#90 で気にしていた「隠れたものが無いことになる」)
+  // 後から増えたカードが埋もれるため (#41/#90 で気にしていた「隠れたものが無いことになる」)
   const visibleTasks = [...tasks].sort((a, b) => a.sort - b.sort || a.id - b.id);
 
-  // パネルで開いているタスクが完了→アーカイブでtasksから消えても、パネルは最後のスナップショットで
+  // パネルで開いているカードが完了→アーカイブでtasksから消えても、パネルは最後のスナップショットで
   // 開き続ける (#53: AIの「完了にしました」返答が見えないまま消えるのを防ぐ)。閉じるのは✕のみ
   const foundDetailTask = detailTaskId !== null ? tasks.find((t) => t.id === detailTaskId) : undefined;
   const lastDetailTaskRef = useRef<Task | undefined>(undefined);

@@ -148,7 +148,7 @@ io.on("connection", (socket) => {
   // #125: 指定したのに存在しないプロジェクトなら、どのroomにも入れない。
   // 以前は「指定なし」と同じ扱いにして既定プロジェクトのroomへ入れていたので、
   // /p/999999 を開くと REST は400で読み込み失敗になる一方、Socket からは既定プロジェクトの
-  // board:changed が届き、**存在しないURLの上に別プロジェクトのタスクが並んだ**
+  // board:changed が届き、**存在しないURLの上に別プロジェクトのカードが並んだ**
   // (自動レビュー指摘)。RESTが拒否するものを Socket が黙って別物にすり替えない —
   // 入口ごとに境界が違うと、利用者はどちらを信じてよいか分からない
   if (!Number.isFinite(requested) || !getProject(requested)) {
@@ -242,7 +242,7 @@ app.post("/api/tasks/:id/checked", (req, res) => {
 });
 
 /** 外から来た列名を確かめる。TypeScriptの型は実行時には消えるので、RESTの入口で必ず通す。
- * 通してしまうと「保存はされたのにボードのどの列にも出ないタスク」ができ、
+ * 通してしまうと「保存はされたのにボードのどの列にも出ないカード」ができ、
  * 詳細を開くと画面が落ちる (自動レビュー指摘) */
 function badStatus(status: unknown): string | null {
   const lanes = customLanes();
@@ -293,7 +293,7 @@ app.post("/api/tasks/approve", (req, res) => {
   });
 });
 
-// アーカイブ済み含む単一タスク取得 (#59: 要約カードの#xxリンクから詳細を開く用)
+// アーカイブ済み含む単一カード取得 (#59: 要約カードの#xxリンクから詳細を開く用)
 app.get("/api/tasks/:id", (req, res) => {
   const task = getTask(Number(req.params.id));
   if (!task) return res.status(404).json({ error: "not found" });
@@ -323,7 +323,7 @@ app.delete("/api/tasks/:id", (req, res) => {
   const cur = getTask(id);
   if (cur && !cur.trashedAt && isArchived(id))
     return res.status(409).json({
-      error: "Doneへ確定して要約カードに畳まれたタスクは削除できません (要約から辿れなくなるため)",
+      error: "Doneへ確定して要約カードに畳まれたカードは削除できません (要約から辿れなくなるため)",
     });
   const ok = trashTask(id);
   if (!ok) return res.status(404).json({ error: "not found" });
@@ -340,7 +340,7 @@ app.post("/api/tasks/:id/restore", (req, res) => {
   const task = restoreTask(id);
   // #161: restoreTask はゴミ箱に無ければ undefined を返す。**理由で応答を分ける** —
   // 「そんなIDは無い」と「実在するがゴミ箱に無い」を同じ 404 にすると、
-  // 実在するタスクを不存在と報告することになる (Codexレビュー指摘)
+  // 実在するカードを不存在と報告することになる (Codexレビュー指摘)
   if (!task) {
     if (!getTask(id)) return res.status(404).json({ error: "not found" });
     return res.status(409).json({ error: "ゴミ箱に無いので戻せません (すでにボード上にあります)" });
@@ -352,12 +352,12 @@ app.post("/api/tasks/:id/restore", (req, res) => {
 // 実体の削除。人間のUI操作からのみ通す (チャット・MCPにはこの口を出さない)
 app.delete("/api/trash/:id", (req, res) => {
   const id = Number(req.params.id);
-  // 生きているタスクを名指しされたら、消さずに理由を返す。
+  // 生きているカードを名指しされたら、消さずに理由を返す。
   // 「ゴミ箱に無い」と「そもそも存在しない」を区別する — 前者は操作ミス、後者は古い一覧
   const alive = getTask(id);
   if (alive && !alive.trashedAt)
     return res.status(409).json({
-      error: "ゴミ箱にないタスクは完全削除できません。先に削除 (ゴミ箱へ移動) してください",
+      error: "ゴミ箱にないカードは完全削除できません。先に削除 (ゴミ箱へ移動) してください",
     });
   if (!purgeTask(id)) return res.status(404).json({ error: "not found" });
   // 消えたことを開いている画面へ伝える。以前は通知しておらず、DBから消えた後も
@@ -428,7 +428,7 @@ app.get("/api/chat/log", (req, res) => {
   res.json({ messages: listChatMessages(Number(req.query.limit ?? 50), taskId) });
 });
 
-// タスク専用チャット (#24): 対象タスクの全詳細をシステムプロンプトに注入し、会話はtask_id付きで分離保存
+// カード専用チャット (#24): 対象カードの全詳細をシステムプロンプトに注入し、会話はtask_id付きで分離保存
 app.post("/api/tasks/:id/chat", async (req, res) => {
   const taskId = Number(req.params.id);
   const { message, history, attachments, view } = req.body ?? {};
@@ -559,7 +559,7 @@ app.patch("/api/projects/:id", (req, res) => {
   if (typeof name === "string" && name.trim()) renameProject(id, name.trim());
   if (typeof archived === "boolean") setProjectArchived(id, archived);
   // #19: 任意レーンの表示名。**名前を消す = レーンを畳む**なので、先に中身を todo へ戻す。
-  // 順序が逆だと、ボードが列を描かなくなった後にタスクが取り残される (evacuateLane の注記)
+  // 順序が逆だと、ボードが列を描かなくなった後にカードが取り残される (evacuateLane の注記)
   for (const [key, value] of [
     ["custom1", custom1Label],
     ["custom2", custom2Label],

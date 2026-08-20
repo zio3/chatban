@@ -89,7 +89,7 @@ export type TaskPatch = Partial<
  * DONE_GATE_RULE は、断ったときに返す説明。REST・チャット・MCPで同じ文言を使う —
  * 「なぜ動かなかったのか」を入口ごとに違う言葉で返すと、別のルールがあるように読める */
 /** 実在する列。TypeScriptの TaskStatus は実行時には消えるので、外から来た値は必ずここで確かめる。
- * "banana" のような値がそのまま保存されると、ボードは4列でしか抽出しないのでタスクが
+ * "banana" のような値がそのまま保存されると、ボードは4列でしか抽出しないのでカードが
  * どの列にも出なくなり、詳細を開くと STATUS_LABELS[status] が undefined で画面が落ちる
  * (自動レビュー指摘)。「消えた」ように見えて実在する、が一番たちが悪い */
 export const TASK_STATUSES = ["todo", "inprogress", "review", "custom1", "custom2", "done"] as const;
@@ -100,7 +100,7 @@ export function isTaskStatus(v: unknown): v is TaskStatus {
 /** #19: **そのプロジェクトで実際に置ける列か。**TASK_STATUSES は「値として在る」だけで、
  * custom1 / custom2 は表示名を付けたプロジェクトにしか存在しない。
  *
- * 有効でないレーンを通すと、ボードはそのレーンの列を描かないので**タスクがどこにも出なくなる** —
+ * 有効でないレーンを通すと、ボードはそのレーンの列を描かないので**カードがどこにも出なくなる** —
  * isTaskStatus の注記にある「消えたように見えて実在する」がそのまま起きる。
  * 契約 (ツールの enum) 側でも有効なレーンしか出さないが、**選べないことと保存できないことは別**なので
  * 書き込みの手前にも同じ判定を置く。isTaskStatus と同じで、DBもHTTPも要らない純粋関数 */
@@ -110,10 +110,10 @@ export function isUsableStatus(v: unknown, lanes: CustomLane[]): v is TaskStatus
   return true;
 }
 
-/** #19: レーンを畳むときに、そこに居たタスクを todo へ戻す。戻した件数を返す。
+/** #19: レーンを畳むときに、そこに居たカードを todo へ戻す。戻した件数を返す。
  *
  * **畳むより先に必ず呼ぶ。**表示名を消すとボードはその列を描かなくなるので、中身を置いたままだと
- * 「保存されているのにどの列にも出ない」タスクができる — isTaskStatus の注記にある
+ * 「保存されているのにどの列にも出ない」カードができる — isTaskStatus の注記にある
  * 「消えたように見えて実在する」そのもの。削除ではなく **todo へ戻す** のは、
  * どこへ行ったか分かる場所が todo だけだから (#102 と同じで、取り返しのつく側に倒す) */
 export function evacuateLane(key: "custom1" | "custom2"): number {
@@ -157,7 +157,7 @@ export function mayEnterDone(cur: Pick<Task, "status" | "checkedAt" | "trashedAt
   return cur.status === "review" && !!cur.checkedAt && !cur.trashedAt;
 }
 
-/** 複数タスクの一括更新 (#60)。完了遷移はまとめて1回だけ通知する (要約再生成のバッチ化)。
+/** 複数カードの一括更新 (#60)。完了遷移はまとめて1回だけ通知する (要約再生成のバッチ化)。
  * 単一更新もこの関数の長さ1ケースとして扱う — Doneへ入るルートはここ1本 */
 export function updateTasks(patches: { id: number; patch: TaskPatch }[]): (Task | undefined)[] {
   const completed: number[] = [];
@@ -225,7 +225,7 @@ export function updateTasks(patches: { id: number; patch: TaskPatch }[]): (Task 
  *
  * 以前は POST /api/tasks/approve が ids をそのまま done にしていて、条件の判定は
  * フロント(App.tsx の commitApproved が status==="review" && checkedAt で絞る)にしか無かった。
- * 実測で、Todo のタスクも・Review未検収も・**ゴミ箱の中のタスクまで** done になった。
+ * 実測で、Todo のカードも・Review未検収も・**ゴミ箱の中のカードまで** done になった。
  *
  * docs/security.md には「Doneへ至る経路は人間のUI操作ただ1本」と書いてあるが、
  * その1本が無条件だった。エージェントはこのAPIを持たないので「AIは通れない」は
@@ -241,7 +241,7 @@ export function approveChecked(ids: number[]): {
 } {
   const skipped: { id: number; reason: string }[] = [];
   const eligible: number[] = [];
-  // 同じIDが2回入っていたら1回として扱う。判定も更新も2度走り、updated に同じタスクが
+  // 同じIDが2回入っていたら1回として扱う。判定も更新も2度走り、updated に同じカードが
   // 2件載って「2件確定しました」に見えていた (#157)。押した数と通った数を突き合わせられる
   // ようにしてある (#120/#123) のに、その数字自体が水増しされては意味がない
   ids = [...new Set(ids)];
@@ -263,10 +263,10 @@ export function updateTask(id: number, patch: TaskPatch): Task | undefined {
 }
 
 /** #102: 削除はゴミ箱行き (論理削除)。
- * 自然言語UIでは解釈ミスが必ず起きる。「消せます?」が delete_tasks を呼んで実データが消えた事故を受け、
+ * 自然言語UIでは解釈ミスが必ず起きる。「消せます?」が delete_cards を呼んで実データが消えた事故を受け、
  * 「間違えないようにする」のではなく「間違えても取り返しがつく」形に変えた。
  * プロンプトの確認ルールは漏れるが、消えていないという事実は漏れない (#69 done封鎖と同じ考え方) */
-/** #200: **Done列の1段目 (バラバラ)。**検収した直後のタスクは `status='done'` のまま
+/** #200: **Done列の1段目 (バラバラ)。**検収した直後のカードは `status='done'` のまま
  * `archived=0` で、個別カードとして列に並ぶ。「もう一回確認したい」がここで済む。
  *
  * 次にDoneボタンを押したとき、この顔ぶれがまとめてコンテナへ入る (2段目)。
@@ -288,7 +288,7 @@ export function trashTask(id: number): boolean {
         // アーカイブ済み (Doneへ確定して要約カードに畳まれたもの) は対象外。
         // 要約カードの task_ids は更新されないので、消すとカードに存在しないIDが残り、
         // 開くと404になる — 検収済み成果の監査元が壊れる (自動レビュー指摘)。
-        // ボードから見えないタスクをチャット/MCPがIDで名指しできてしまうのが入口だった
+        // ボードから見えないカードをチャット/MCPがIDで名指しできてしまうのが入口だった
         //
         // #161: 検収の印はここでは触らない。落とすのは復元のとき (restoreTask を見る)
         "UPDATE tasks SET trashed_at = datetime('now', 'localtime') WHERE id = ? AND trashed_at IS NULL AND archived = 0"
@@ -301,7 +301,7 @@ export function trashTask(id: number): boolean {
  *
  * trashed_at を付け外しするだけだったので、「検収済み → ゴミ箱 → 復元」で
  * **古い checked_at が生き返り**、人間の確認を一度も挟まずに mayEnterDone が再び true になった。
- * delete_tasks / restore_tasks は **AIが呼べるMCPツール**なので、REST専用にしてある setChecked を
+ * delete_cards / restore_cards は **AIが呼べるMCPツール**なので、REST専用にしてある setChecked を
  * 経路として迂回できていた (「プロンプトは漏れるが、経路が無いことは漏れない」に反する)。
  * updateTasks が backToWork / leavingDone で印を消しているのと同じ理屈 —
  * 状態が変われば前の確認は根拠にならない。
@@ -315,7 +315,7 @@ export function trashTask(id: number): boolean {
  * 条件に trashed_at IS NOT NULL を付けているので、ゴミ箱に無いものを restore しても印は消えない。
  *
  * **戻すのは「実際に戻したとき」だけ。**以前は changes を見ずに必ず getTask を返していたので、
- * ゴミ箱に無い生きたタスクのIDを渡しても成功として扱われ、呼び出し側が
+ * ゴミ箱に無い生きたカードのIDを渡しても成功として扱われ、呼び出し側が
  * 「復元しました」と報告していた (Codexレビュー指摘)。**やっていないことを報告しない** —
  * 0件更新は undefined を返し、入口側 (REST 404 / restored:false) に判断させる */
 export function restoreTask(id: number): Task | undefined {
@@ -327,7 +327,7 @@ export function restoreTask(id: number): Task | undefined {
 
 /** 実体を消す。人間のUI操作からのみ通す (チャット・MCPからは呼ばない)。
  *
- * **ゴミ箱にあるものだけ。** id しか見ていなかったので、ボード上の生タスクのIDを
+ * **ゴミ箱にあるものだけ。** id しか見ていなかったので、ボード上の生カードのIDを
  * 直接投げると、ゴミ箱を経由せず実体が消えた (自動レビュー指摘)。
  * #102 で「間違えないようにするのではなく、間違えても取り返しがつく形にする」と決めたのに、
  * 取り返しのつかない口が条件なしで開いていた — 一段目(ゴミ箱)を通っていないものを
@@ -359,7 +359,7 @@ export function archiveTasks(taskIds: number[]): { id: number; title: string }[]
   )();
 }
 
-/** doneから戻したタスクを板へ返す (畳んであれば外す)。
+/** doneから戻したカードを板へ返す (畳んであれば外す)。
  *
  * **条件を付けないのは意図的。**畳む側 (archiveTasks) は「畳んでよいものか」を書く時点で
  * 確かめる必要があるが、こちらは逆で、**必ず板へ返さないといけない**。条件を付けると
@@ -385,7 +385,7 @@ export function getProjectContextRow(): { text: string; updatedAt: string | null
 }
 
 /** #115: 前提情報は全文上書き。エージェントからは版を添えないと書けない。
- * タスクの経緯メモ(#112)と同じ形だが、こちらは全員の前提でシステムプロンプトに常時載るため、
+ * カードの経緯メモ(#112)と同じ形だが、こちらは全員の前提でシステムプロンプトに常時載るため、
  * 読まずに書かれると運用ルールごと消える。人間のUI経路は version を省略して従来どおり上書きできる */
 export function setProjectContext(rawText: string, version?: number): { ok: boolean; current?: ReturnType<typeof getProjectContextRow> } {
   // 実際にここが壊れた: project 9 の前提情報が全文 \uXXXX エスケープで保存されていて、
@@ -437,7 +437,7 @@ export function saveChatMessage(
     );
 }
 
-/** taskId未指定=メインチャット(task_id IS NULL)、指定=そのタスク専用の会話 */
+/** taskId未指定=メインチャット(task_id IS NULL)、指定=そのカード専用の会話 */
 export function listChatMessages(limit = 50, taskId?: number): {
   role: "user" | "assistant";
   content: string;
@@ -497,7 +497,7 @@ export function recentActivity(limit = 15) {
 // 並びが表現できないため。ツール契約も status + ids だけで済み、スキーマの固定費が小さい。
 //
 // 代わりにLLMが列を作る以上の事故は必ず起きるので、コード側で正規化する:
-//   - 書き忘れたタスクは元の順で末尾に付ける (「並べ替えたら消えた」を作らない)
+//   - 書き忘れたカードは元の順で末尾に付ける (「並べ替えたら消えた」を作らない)
 //   - 重複は最初の1回だけ
 //   - 対象列に実在しないIDは無視する
 // 表示設定ではなく操作なので「いまソート中」という画面の隠れ状態は生まれず、あとから手で直せる。
@@ -507,7 +507,7 @@ export function reorderTasks(
 ): { ordered: number; appended: number; ignored?: number[] } {
   // 母集団はサーバー側で決める。listTasks() が archived=0 AND trashed_at IS NULL なので、
   // アーカイブ済み・ゴミ箱は最初から対象外 — query_log の説明で読み手に教えている
-  // 「生きているタスクはこの条件」と同じ母集団を、書き込み側は実装で強制する。
+  // 「生きているカードはこの条件」と同じ母集団を、書き込み側は実装で強制する。
   // 読みは教育で守り、書きは実装で守る (zio)
   const targets = listTasks().filter((t) => t.status === status);
   const byId = new Map(targets.map((t) => [t.id, t]));
@@ -543,7 +543,7 @@ export function reorderTasks(
 /** #176: **絞り込みの引数は持たない。**
  *
  * 複数語をORで引くのは表記ゆれを展開するためで、それ自体は正しい。問題は本文(経緯メモ)まで
- * 見ることで、**語がかすっただけのタスクが混ざる**こと。実例 (2026-08-15): 「記事 / スクショ /
+ * 見ることで、**語がかすっただけのカードが混ざる**こと。実例 (2026-08-15): 「記事 / スクショ /
  * Zenn / 提出」で引いたら #130(ダークモードの検討) や #103(検索機能の実装) が返った —
  * どちらも context に「提出」の2文字があっただけ。候補10件を読み直すことになった。
  *
@@ -729,7 +729,7 @@ function silentTrap(sql: string): { note?: string } {
   const notes: string[] = [];
   const s = sql.toLowerCase();
   if (/\bfrom\s+tasks\b/.test(s) && !/trashed_at|archived/.test(s)) {
-    notes.push("tasks を直に引いています。ゴミ箱行き・アーカイブ済みも含まれるので、生きているタスクだけなら live_tasks を使ってください");
+    notes.push("tasks を直に引いています。ゴミ箱行き・アーカイブ済みも含まれるので、生きているカードだけなら live_tasks を使ってください");
   }
   if (/count\s*\(|group\s+by/.test(s) && /date\s*\(\s*created_at/.test(s) && /\bfrom\s+tasks\b/.test(s)) {
     notes.push("created_at は登録日です。完了の集計なら done_at (または done_tasks.done_day) を使ってください");
@@ -766,7 +766,7 @@ export function queryLogHelp(message: string): Record<string, unknown> {
         ])
       );
       help.hint =
-        "生きているタスクは live_tasks、完了したものは done_tasks を使うと、条件を書かなくて済みます。ゴミ箱やアーカイブを見たいときだけ tasks を直に引いてください";
+        "生きているカードは live_tasks、完了したものは done_tasks を使うと、条件を書かなくて済みます。ゴミ箱やアーカイブを見たいときだけ tasks を直に引いてください";
     } else if (/no such function/i.test(message)) {
       help.dialect = {
         note: "SQLite には date_trunc / INTERVAL / NOW() / DATEADD がありません",
@@ -801,9 +801,9 @@ export function setChecked(id: number, checked: boolean): { task?: Task; error?:
   // 確定まで通せた (自動レビュー指摘)。mayEnterDone が「Review + 印」しか見ないぶん、
   // 印を付ける側で順序を守らせる必要がある。外すのはいつでもよい (印を消す方向は安全)
   if (checked) {
-    if (cur.trashedAt) return { error: "ゴミ箱にあるタスクには検収チェックを付けられません" };
+    if (cur.trashedAt) return { error: "ゴミ箱にあるカードには検収チェックを付けられません" };
     if (cur.status !== "review")
-      return { error: `検収チェックを付けられるのは Review 列のタスクだけです (いまは ${cur.status})。${DONE_GATE_RULE}` };
+      return { error: `検収チェックを付けられるのは Review 列のカードだけです (いまは ${cur.status})。${DONE_GATE_RULE}` };
   }
   db()
     .prepare("UPDATE tasks SET checked_at = ? WHERE id = ?")

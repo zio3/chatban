@@ -424,13 +424,13 @@ app.post("/api/chat", async (req, res) => {
 });
 
 app.get("/api/chat/log", (req, res) => {
-  const taskId = req.query.taskId != null ? Number(req.query.taskId) : undefined;
-  res.json({ messages: listChatMessages(Number(req.query.limit ?? 50), taskId) });
+  const cardId = req.query.cardId != null ? Number(req.query.cardId) : undefined;
+  res.json({ messages: listChatMessages(Number(req.query.limit ?? 50), cardId) });
 });
 
 // カード専用チャット (#24): 対象カードの全詳細をシステムプロンプトに注入し、会話はcard_id付きで分離保存
 app.post("/api/cards/:id/chat", async (req, res) => {
-  const taskId = Number(req.params.id);
+  const cardId = Number(req.params.id);
   const { message, history, attachments, view } = req.body ?? {};
   if (!message) return res.status(400).json({ error: "message required" });
   // #213: **入口ごとにズレると事故る。**画面の「+」を隠しても curl では通るので、ここで断る。
@@ -441,10 +441,10 @@ app.post("/api/cards/:id/chat", async (req, res) => {
   // 通常チャットに近い状態で有料の呼び出しが走り、存在しないIDの会話ログまで残っていた
   // (chat_messages.card_id に外部キーは無い。自動レビュー指摘)。
   // 削除・プロジェクト切替・古い画面から送ると踏むので、普通に起きる
-  if (!getTask(taskId)) return res.status(404).json({ error: `task #${req.params.id} not found` });
+  if (!getTask(cardId)) return res.status(404).json({ error: `カード #${req.params.id} は見つかりません` });
   const id = ++chatSeq;
   const t0 = Date.now();
-  log("chat", `#${id} TASK-CHAT(task=${taskId}) REQ "${String(message).slice(0, 120)}"`);
+  log("chat", `#${id} CARD-CHAT(card=${cardId}) REQ "${String(message).slice(0, 120)}"`);
   // #212: 断られた/直った の**変化があったときだけ**板に流す。
   // 直った側を流さないと、成功しても板が変わらない応答 (ツールを呼ばない会話) では
   // バナーが出たまま残る — 「通れば false が飛んでくる」が嘘になる
@@ -456,8 +456,8 @@ app.post("/api/cards/:id/chat", async (req, res) => {
       (kind) => {
         if (kind === "board") broadcastBoard();
           },
-      (label) => io.to(room(currentProjectId())).emit("chat:progress", { label, taskId }),
-      taskId,
+      (label) => io.to(room(currentProjectId())).emit("chat:progress", { label, cardId }),
+      cardId,
       attachments,
       view
     );
@@ -466,9 +466,9 @@ app.post("/api/cards/:id/chat", async (req, res) => {
       message + (attachments?.length ? ` [添付: ${attachments.map((a: any) => a.name).join(", ")}]` : ""),
       undefined,
       undefined,
-      taskId
+      cardId
     );
-    saveChatMessage("assistant", result.reply, result.trace, result.usage, taskId);
+    saveChatMessage("assistant", result.reply, result.trace, result.usage, cardId);
     log("chat", `#${id} OK ${Date.now() - t0}ms rounds=${result.usage.rounds} tools=[${result.trace.map((t) => t.tool).join(",")}]`);
     if (wasRefused !== upstreamRefused()) broadcastBoard();
     res.json(result);

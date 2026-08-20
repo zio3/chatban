@@ -67,11 +67,11 @@ AIは記録(カード・会話ログ・要約カード)に**自由にSQLを書�
 
 | 試したこと | 結果 |
 |---|---|
-| `DELETE FROM tasks` | `SELECT か WITH で始まる読み取りクエリだけ実行できます` |
+| `DELETE FROM cards` | `SELECT か WITH で始まる読み取りクエリだけ実行できます` |
 | `SELECT * FROM sqlite_sequence` | `sqlite_sequence は参照できません (許可リストに無い)` |
 | `SELECT name FROM sqlite_master` | `sqlite_master は参照できません` |
 | `SELECT name, pageno FROM dbstat` | `仮想テーブルは参照できません` (名前ではなく EXPLAIN の機構で判定) |
-| `SELECT id, title FROM live_tasks` | 通る |
+| `SELECT id, title FROM live_cards` | 通る |
 
 **窓口は接続中のプロジェクトDB1本だけです** (#181)。かつては管理DB側にコスト集計用の窓口
 (`scope='cost'`) もありましたが、計測系ごと撤去しました。副産物として、**管理DBにある `settings` は
@@ -135,7 +135,7 @@ context に `<img src=x onerror=...>` を入れて登録 → **すべて文字�
 
 | 試行 | 結果 |
 |---|---|
-| `UPDATE tasks SET ...` | `SELECT か WITH で始まる読み取りクエリだけ実行できます` |
+| `UPDATE cards SET ...` | `SELECT か WITH で始まる読み取りクエリだけ実行できます` |
 | `SELECT 1; UPDATE ...` (セミコロン区切り) | `複数の文は実行できません` |
 | `WITH x AS (UPDATE ... RETURNING id) SELECT * FROM x` | SQLite側で構文エラー (CTE内DML非対応) = 二重防御 |
 

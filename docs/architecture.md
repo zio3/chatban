@@ -52,7 +52,7 @@
 ```
 backend/data/
   chatban-admin.db          projects / settings
-  projects/<id>-<名前>.db   tasks / chat_messages / project_context
+  projects/<id>-<名前>.db   cards / chat_messages / project_context
   trash/                    削除したプロジェクトの退避先 (実体は消さない)
 ```
 
@@ -126,14 +126,14 @@ Socket.IOの配信もプロジェクト単位のroomへ送る。
 
 ## データモデル (プロジェクトDB)
 
-- `tasks`: title / status(todo・inprogress・review・done の固定4列 + 任意レーン custom1/custom2 #19) /
+- `cards`: title / status(todo・inprogress・review・done の固定4列 + 任意レーン custom1/custom2 #19) /
   **summary**(いまどうなっているか。カードに出る) /
   context(経緯メモ) / **context_version**(経緯メモの楽観ロック) / due / blocked_by(依存) / rejected(却下) /
   sort / archived / **trashed_at**(ゴミ箱)
-- `chat_messages`: 会話永続化 (task_id NULLがメイン、値ありがカードチャット)
+- `chat_messages`: 会話永続化 (card_id NULLがメイン、値ありがカードチャット)
 - `project_context`: そのプロジェクトの前提 (プロンプトに常駐)
 
-#179 で担当者・割り振りを廃止し (個人利用に特化)、`tasks.assignee` / `assign_reason` と
+#179 で担当者・割り振りを廃止し (個人利用に特化)、`cards.assignee` / `assign_reason` と
 `members` / `proposals` / `assignment_history` は**列・テーブルごと落とした**。
 読まないだけにして残すと、SQL窓口を広げた誰かが集計に使い、廃止したはずの軸が復活する。
 
@@ -191,7 +191,7 @@ todo → inprogress → review ←─ 完了報告も却下(rejected)もここ�
 **以前はここでLLMに経緯を読ませて要素文へ分解していた** (#46/#56/#105)。やめた理由は、
 実運用2週間で**要約が一度も読まれなかった**こと、そして同じ内容がgitのコミットとPR本文に
 差分つきで残っていたこと。非同期だったせいで派生した不具合も3件あった (#191/#195/#196)。
-`summary_cards` テーブルと `tasks.summary_card_id` は起動時のマイグレーションで撤去する。
+`summary_cards` テーブルと `cards.summary_card_id` は起動時のマイグレーションで撤去する。
 
 ## 日時の扱い (#108)
 
@@ -229,7 +229,7 @@ DateTimeOffset に相当する型が無く (TEXT/INTEGER/REAL/BLOB/NULL のみ)�
 **読み取りは `query_log` (SQL) に寄せている (#108)**。人間のWebUIは画面が決まっているので
 固定のクエリ関数を使うが、チャット/MCPは「何をどう見たいか」が毎回違うのでSQLを組ませる。
 `get_task_details` / `get_activity` / `list_*` は廃止した — 同じものが
-`SELECT ... FROM tasks WHERE id=112` や `ORDER BY updated_at DESC` で引ける。
+`SELECT ... FROM cards WHERE id=112` や `ORDER BY updated_at DESC` で引ける。
 一覧を専用ツールで返すと経緯メモが全文ついてきて重い (実測18,553字。SQLなら3,334字)
 
 **「判断はLLM、整合性はコード」** という形が繰り返し現れる:

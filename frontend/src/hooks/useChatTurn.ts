@@ -40,8 +40,8 @@ export function useChatTurn(opts: {
 
   // ツール実行の逐次フィードバック: 応答待ちの吹き出しに実行中の操作を表示
   useEffect(() => {
-    function onProgress(p: { label: string; taskId?: number }) {
-      if ((p.taskId ?? null) !== progressTaskId) return;
+    function onProgress(p: { label: string; cardId?: number }) {
+      if ((p.cardId ?? null) !== progressTaskId) return;
       setLog((prev) => prev.map((e) => (e.pending ? { ...e, content: `${p.label}中…` } : e)));
     }
     socket.on("chat:progress", onProgress);

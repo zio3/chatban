@@ -96,7 +96,7 @@ export const api = {
       body: JSON.stringify({ ids }),
     }).then((r) => json<{ ok: boolean; note?: string }>(r)),
   chatLog: (taskId?: number) =>
-    apiFetch(`/api/chat/log${taskId != null ? `?taskId=${taskId}` : ""}`).then((r) =>
+    apiFetch(`/api/chat/log${taskId != null ? `?cardId=${taskId}` : ""}`).then((r) =>
       json<{ messages: { role: "user" | "assistant"; content: string; trace?: unknown; usage?: unknown }[] }>(r)
     ),
   taskChat: (

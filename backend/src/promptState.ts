@@ -1,4 +1,5 @@
 import { getProjectContext, listTasks } from "./db.js";
+import type { Task } from "./types.js";
 import { currentProjectId, customLanes } from "./store.js";
 import { log } from "./log.js";
 
@@ -54,21 +55,39 @@ function todayLabel(): string {
   return new Date().toLocaleDateString("ja-JP", { year: "numeric", month: "2-digit", day: "2-digit", weekday: "short" });
 }
 
+/** 索引1件ぶん。**DBに触らない純粋関数**にしてあるのはテストのため
+ * (ここに何が載るかは契約そのもので、載り忘れても画面もテストも落ちない)。
+ *
+ * #221: **summary を載せていなかった。**ツール契約 (SUMMARY_DESCRIPTION) は
+ * 「カードに出るだけでなく、**ボードのチャットが常時これを読んで受け答えする**」と
+ * 約束しているのに、索引に無いのでチャットは query_log を叩かない限り現況を知らなかった。
+ * MCP側 (boardState.ts の TaskFacts) には入っていたので、**外部エージェントには見えていて
+ * ボードのチャットだけ見えていない**という非対称になっていた。
+ *
+ * 実測して載せると決めた (2026-08-21): 18枚で725字・平均40字・最長60字、
+ * JSONのキー込みで約940字 (プロンプト全体の+13%)。切り詰める仕組みは入れない —
+ * summary の契約自体が「極力短く」なので設計上暴れないし、確認先 (「(commit abc123)」) は
+ * 末尾に付くので、頭で切ると一番欲しい部分が消える。
+ *
+ * 値が空のものは載せない (due / dep / rejected と同じ扱い)。キーが増えるほど
+ * 索引は太るので、「無い」ことは書かずに黙っている */
+export function cardIndexJson(
+  t: Pick<Task, "id" | "title" | "status" | "summary" | "due" | "blockedBy" | "rejected" | "context">
+): string {
+  return JSON.stringify({
+    id: t.id,
+    title: t.title,
+    status: t.status,
+    ...(t.summary ? { summary: t.summary } : {}),
+    ...(t.due ? { due: t.due } : {}),
+    ...(t.blockedBy?.length ? { dep: t.blockedBy } : {}),
+    ...(t.rejected ? { rejected: true } : {}),
+    ...(t.context ? { hasContext: true } : {}),
+  });
+}
+
 function capture(): Snapshot {
-  const cards = new Map(
-    listTasks().map((t) => [
-      t.id,
-      JSON.stringify({
-        id: t.id,
-        title: t.title,
-        status: t.status,
-        ...(t.due ? { due: t.due } : {}),
-        ...(t.blockedBy?.length ? { dep: t.blockedBy } : {}),
-        ...(t.rejected ? { rejected: true } : {}),
-        ...(t.context ? { hasContext: true } : {}),
-      }),
-    ])
-  );
+  const cards = new Map(listTasks().map((t) => [t.id, cardIndexJson(t)]));
   return {
     cards,
     projectContext: getProjectContext() ?? "",

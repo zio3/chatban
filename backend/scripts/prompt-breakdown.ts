@@ -23,7 +23,8 @@ function row(name: string, s: string, note = "") {
 }
 
 withProject(projectId, () => {
-  const sys = buildSystemPrompt(undefined, "zio", "board", false);
+  // #180 で発言者を撤去したので引数は (taskFocus, view) の2つ。ここは板を見ている状態を測る
+  const sys = buildSystemPrompt(undefined, "board");
   const toolsJson = JSON.stringify(tools);
 
   console.log(`\n=== project ${projectId} / 1リクエストの入力内訳 ===\n`);

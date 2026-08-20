@@ -5,7 +5,7 @@ import { decodeUnicodeEscapes } from "./text.js";
 import type { CustomLane, Task, TaskStatus } from "./types.js";
 
 // #179: 担当者・割り振りは機能ごと落とした (個人利用に特化)。
-// tasks.assignee / assign_reason と members / proposals / assignment_history は
+// cards.assignee / assign_reason と members / proposals / assignment_history は
 // **列・テーブルごと削除してある** (store.ts の ensureProjectSchema)。
 // 読まないだけにして残すと、SQL窓口 (query_log) を広げた誰かが集計に使い、
 // 廃止したはずの軸が復活する — 認証 (#180) で逃げ道を残さないのと同じ判断
@@ -18,13 +18,13 @@ export function listTasks(includeArchived = false): Task[] {
   // sort未設定の既存行はid順に混ざる (COALESCEでidを暫定sortとして扱う)
   // #102: ゴミ箱(trashed_at)は常に除外。復元できる形にしただけで、見え方は削除と同じ
   const where = includeArchived ? "WHERE trashed_at IS NULL" : "WHERE archived = 0 AND trashed_at IS NULL";
-  return (db().prepare(`SELECT * FROM tasks ${where} ORDER BY COALESCE(sort, id), id`).all() as any[]).map(rowToTask);
+  return (db().prepare(`SELECT * FROM cards ${where} ORDER BY COALESCE(sort, id), id`).all() as any[]).map(rowToTask);
 }
 
 /** ゴミ箱の中身 (新しい順)。UIの復元導線とチャットの「戻して」で使う */
 export function listTrashedTasks(): Task[] {
   return (
-    db().prepare("SELECT * FROM tasks WHERE trashed_at IS NOT NULL ORDER BY trashed_at DESC, id DESC").all() as any[]
+    db().prepare("SELECT * FROM cards WHERE trashed_at IS NOT NULL ORDER BY trashed_at DESC, id DESC").all() as any[]
   ).map(rowToTask);
 }
 
@@ -59,12 +59,12 @@ export function createTask(title: string, status: TaskStatus = "todo"): Task {
     log("api", `新規作成で status=done を指定されたので review にしました: ${title}`);
     status = "review";
   }
-  const info = db().prepare("INSERT INTO tasks (title, status) VALUES (?, ?)").run(title, status);
+  const info = db().prepare("INSERT INTO cards (title, status) VALUES (?, ?)").run(title, status);
   return getTask(Number(info.lastInsertRowid))!;
 }
 
 export function getTask(id: number): Task | undefined {
-  const r = db().prepare("SELECT * FROM tasks WHERE id = ?").get(id) as any;
+  const r = db().prepare("SELECT * FROM cards WHERE id = ?").get(id) as any;
   return r ? rowToTask(r) : undefined;
 }
 
@@ -117,7 +117,7 @@ export function isUsableStatus(v: unknown, lanes: CustomLane[]): v is TaskStatus
  * 「消えたように見えて実在する」そのもの。削除ではなく **todo へ戻す** のは、
  * どこへ行ったか分かる場所が todo だけだから (#102 と同じで、取り返しのつく側に倒す) */
 export function evacuateLane(key: "custom1" | "custom2"): number {
-  return db().prepare("UPDATE tasks SET status = 'todo' WHERE status = ?").run(key).changes;
+  return db().prepare("UPDATE cards SET status = 'todo' WHERE status = ?").run(key).changes;
 }
 
 export const DONE_GATE_RULE =
@@ -149,7 +149,7 @@ export const DUE_FORMAT_RULE = "期限は YYYY-MM-DD (実在する日付) で渡
  * archived は Task 型に出していない (getTask はアーカイブ済みも返すが、UIは要約カード経由で読む)。
  * 「確定してよいか」「消してよいか」の判定は隠れている列も見る必要があるので、ここに1本だけ置く */
 export function isArchived(id: number): boolean {
-  return !!(db().prepare("SELECT archived FROM tasks WHERE id = ?").get(id) as { archived: number } | undefined)
+  return !!(db().prepare("SELECT archived FROM cards WHERE id = ?").get(id) as { archived: number } | undefined)
     ?.archived;
 }
 
@@ -195,7 +195,7 @@ export function updateTasks(patches: { id: number; patch: TaskPatch }[]): (Task 
     // 印を消せば、差し戻したものは必ずもう一度チェックを付け直すことになる
     const leavingDone = cur.status === "done" && next.status !== "done";
     db().prepare(
-      "UPDATE tasks SET title = ?, status = ?, sort = ?, context = ?, summary = ?, due = ?, blocked_by = ?, rejected = ?, context_version = context_version + ?, checked_at = ?, done_at = ?, updated_at = datetime('now', 'localtime') WHERE id = ?"
+      "UPDATE cards SET title = ?, status = ?, sort = ?, context = ?, summary = ?, due = ?, blocked_by = ?, rejected = ?, context_version = context_version + ?, checked_at = ?, done_at = ?, updated_at = datetime('now', 'localtime') WHERE id = ?"
     ).run(
       next.title,
       next.status,
@@ -276,7 +276,7 @@ export function updateTask(id: number, patch: TaskPatch): Task | undefined {
 export function listLooseDoneIds(): number[] {
   return (
     db()
-      .prepare("SELECT id FROM tasks WHERE status = 'done' AND archived = 0 AND trashed_at IS NULL ORDER BY id")
+      .prepare("SELECT id FROM cards WHERE status = 'done' AND archived = 0 AND trashed_at IS NULL ORDER BY id")
       .all() as { id: number }[]
   ).map((r) => r.id);
 }
@@ -286,12 +286,12 @@ export function trashTask(id: number): boolean {
     db()
       .prepare(
         // アーカイブ済み (Doneへ確定して要約カードに畳まれたもの) は対象外。
-        // 要約カードの task_ids は更新されないので、消すとカードに存在しないIDが残り、
+        // 要約カードの card_ids は更新されないので、消すとカードに存在しないIDが残り、
         // 開くと404になる — 検収済み成果の監査元が壊れる (自動レビュー指摘)。
         // ボードから見えないカードをチャット/MCPがIDで名指しできてしまうのが入口だった
         //
         // #161: 検収の印はここでは触らない。落とすのは復元のとき (restoreTask を見る)
-        "UPDATE tasks SET trashed_at = datetime('now', 'localtime') WHERE id = ? AND trashed_at IS NULL AND archived = 0"
+        "UPDATE cards SET trashed_at = datetime('now', 'localtime') WHERE id = ? AND trashed_at IS NULL AND archived = 0"
       )
       .run(id).changes > 0
   );
@@ -320,7 +320,7 @@ export function trashTask(id: number): boolean {
  * 0件更新は undefined を返し、入口側 (REST 404 / restored:false) に判断させる */
 export function restoreTask(id: number): Task | undefined {
   const changed = db()
-    .prepare("UPDATE tasks SET trashed_at = NULL, checked_at = NULL WHERE id = ? AND trashed_at IS NOT NULL")
+    .prepare("UPDATE cards SET trashed_at = NULL, checked_at = NULL WHERE id = ? AND trashed_at IS NOT NULL")
     .run(id).changes;
   return changed > 0 ? getTask(id) : undefined;
 }
@@ -336,7 +336,7 @@ export function restoreTask(id: number): Task | undefined {
  * 復元できる状態を必ず一度経由させる。条件はコードで持つ (UIがゴミ箱画面からしか
  * 呼ばない、に依存しない — #57/#69 と同じ形) */
 export function purgeTask(id: number): boolean {
-  return db().prepare("DELETE FROM tasks WHERE id = ? AND trashed_at IS NOT NULL").run(id).changes > 0;
+  return db().prepare("DELETE FROM cards WHERE id = ? AND trashed_at IS NOT NULL").run(id).changes > 0;
 }
 
 export interface SummaryElement {
@@ -349,9 +349,9 @@ export interface SummaryElement {
  * ゴミ箱に入れられたもの・Doneから戻されたもの・既に畳んだものが素通りしない */
 export function archiveTasks(taskIds: number[]): { id: number; title: string }[] {
   const claim = db().prepare(
-    "UPDATE tasks SET archived = 1 WHERE id = ? AND status = 'done' AND archived = 0 AND trashed_at IS NULL"
+    "UPDATE cards SET archived = 1 WHERE id = ? AND status = 'done' AND archived = 0 AND trashed_at IS NULL"
   );
-  const read = db().prepare("SELECT id, title FROM tasks WHERE id = ?");
+  const read = db().prepare("SELECT id, title FROM cards WHERE id = ?");
   return db().transaction(() =>
     taskIds
       .filter((id) => claim.run(id).changes > 0)
@@ -367,7 +367,7 @@ export function archiveTasks(taskIds: number[]): { id: number; title: string }[]
  * 安全のつもりで足して、壊れた行を復旧できなくしたのと同じ形になる。
  * 対称にすること自体は目的ではない (自動レビュー指摘への回答) */
 export function unarchiveTask(taskId: number): void {
-  db().prepare("UPDATE tasks SET archived = 0 WHERE id = ?").run(taskId);
+  db().prepare("UPDATE cards SET archived = 0 WHERE id = ?").run(taskId);
 }
 
 
@@ -427,7 +427,7 @@ export function saveChatMessage(
   // #126 → #180: 発言者 (speaker / speaker_email) も記録していたが、個人利用に特化して
   // 「誰が言ったか」が常に持ち主ひとりになったので列ごと落とした
   db()
-    .prepare("INSERT INTO chat_messages (role, content, trace, usage, task_id) VALUES (?, ?, ?, ?, ?)")
+    .prepare("INSERT INTO chat_messages (role, content, trace, usage, card_id) VALUES (?, ?, ?, ?, ?)")
     .run(
       role,
       content,
@@ -437,7 +437,7 @@ export function saveChatMessage(
     );
 }
 
-/** taskId未指定=メインチャット(task_id IS NULL)、指定=そのカード専用の会話 */
+/** taskId未指定=メインチャット(card_id IS NULL)、指定=そのカード専用の会話 */
 export function listChatMessages(limit = 50, taskId?: number): {
   role: "user" | "assistant";
   content: string;
@@ -445,7 +445,7 @@ export function listChatMessages(limit = 50, taskId?: number): {
   usage: unknown;
   createdAt: string;
 }[] {
-  const where = taskId != null ? "WHERE task_id = ?" : "WHERE task_id IS NULL";
+  const where = taskId != null ? "WHERE card_id = ?" : "WHERE card_id IS NULL";
   const params = taskId != null ? [taskId, limit] : [limit];
   const rows = db()
     .prepare(`SELECT * FROM (SELECT * FROM chat_messages ${where} ORDER BY id DESC LIMIT ?) ORDER BY id`)
@@ -477,7 +477,7 @@ export function recentActivity(limit = 15) {
   const tasks = (
     db()
       .prepare(
-        "SELECT id, title, status, rejected, updated_at FROM tasks WHERE trashed_at IS NULL ORDER BY updated_at DESC, id DESC LIMIT ?"
+        "SELECT id, title, status, rejected, updated_at FROM cards WHERE trashed_at IS NULL ORDER BY updated_at DESC, id DESC LIMIT ?"
       )
       .all(limit) as any[]
   ).map((r) => ({
@@ -528,7 +528,7 @@ export function reorderTasks(
   }
   const appended = targets.filter((t) => !seen.has(t.id)); // 指定漏れは元の順のまま末尾へ
   const final = [...ordered, ...appended];
-  const stmt = db().prepare("UPDATE tasks SET sort = ? WHERE id = ?");
+  const stmt = db().prepare("UPDATE cards SET sort = ? WHERE id = ?");
   db().transaction(() => final.forEach((t, i) => stmt.run(i + 1, t.id)))();
   return { ordered: ordered.length, appended: appended.length, ...(ignored.length ? { ignored } : {}) };
 }
@@ -563,7 +563,7 @@ export function searchTasks(terms: string[], limit = 10) {
   if (words.length === 0) return { hits: [] };
   const rows = db()
     .prepare(
-      "SELECT id, title, status, summary, context, archived FROM tasks WHERE trashed_at IS NULL"
+      "SELECT id, title, status, summary, context, archived FROM cards WHERE trashed_at IS NULL"
     )
     .all() as any[];
 
@@ -592,7 +592,7 @@ export function searchTasks(terms: string[], limit = 10) {
   // #106追補: 会話ログも同じ語で引く。UIを作らず「あんな話してたっけ?」をAIに拾わせる。
   // チャットは揮発させる方針(#72)なので常時プロンプトには載せない — 聞かれたときだけ掘る
   const chatRows = db()
-    .prepare("SELECT id, role, content, task_id, created_at FROM chat_messages ORDER BY id DESC")
+    .prepare("SELECT id, role, content, card_id, created_at FROM chat_messages ORDER BY id DESC")
     .all() as any[];
   const chatHits = chatRows
     .map((r) => {
@@ -603,7 +603,7 @@ export function searchTasks(terms: string[], limit = 10) {
       return {
         role: r.role,
         at: r.created_at,
-        ...(r.task_id ? { taskId: r.task_id } : {}),
+        ...(r.card_id ? { taskId: r.card_id } : {}),
         matched,
         snippet: String(r.content).slice(Math.max(0, at - 60), at + 140).replace(/\s+/g, " "),
       };
@@ -645,16 +645,16 @@ export function searchTasks(terms: string[], limit = 10) {
  * **ビューはテーブルと同じ扱い** (判定を type IN ('table','view') から作っている)。
  * ただし**ビューを載せることは、そのビューが中で参照しているテーブルを載せることと同じ**。
  * 名前の照合はSQLの文字列しか見ないし、EXPLAIN も展開後を見るので、定義の中身までは辿らない。
- * いまの live_tasks / done_tasks はどちらも tasks しか見ておらず、その tasks も載っているので実害はない。
+ * いまの live_cards / done_cards はどちらも cards しか見ておらず、その cards も載っているので実害はない。
  * 機密を参照するビューを「列を絞ってあるから安全」と足すと、そこから読めるようになる —
  * ここは見える名前の一覧ではなく、**到達できる範囲の宣言**として読むこと */
 // #181: scope が2つ (cost / audit) だったが、cost 側の llm_calls / model_prices を撤去したので
 // **窓口は1つになった。**接続中のプロジェクトの記録だけを引く。
-// live_tasks / done_tasks はビュー (どちらも tasks を見ている)
+// live_cards / done_cards はビュー (どちらも cards を見ている)
 export const PUBLIC_TABLES: readonly string[] = [
-  "tasks",
-  "live_tasks",
-  "done_tasks",
+  "cards",
+  "live_cards",
+  "done_cards",
   "chat_messages",
   "project_context",
 ];
@@ -723,16 +723,16 @@ function runReadonly(
  * 「エラーが出る間違いは事後注入で治る。エラーが出ない間違いは事前に教えるしかない」
  * (外部エージェントの整理)。ただし事前に教えても守られないものがあるので、
  * せめて結果と一緒に言う。実際にどちらも実データで踏まれている:
- *   - tasks 直引き → ゴミ箱・アーカイブ済みが混ざる (live_tasks を作った理由)
- *   - created_at で完了を数える → 登録日を数えてしまう (done_tasks を作った理由) */
+ *   - cards 直引き → ゴミ箱・アーカイブ済みが混ざる (live_cards を作った理由)
+ *   - created_at で完了を数える → 登録日を数えてしまう (done_cards を作った理由) */
 function silentTrap(sql: string): { note?: string } {
   const notes: string[] = [];
   const s = sql.toLowerCase();
   if (/\bfrom\s+tasks\b/.test(s) && !/trashed_at|archived/.test(s)) {
-    notes.push("tasks を直に引いています。ゴミ箱行き・アーカイブ済みも含まれるので、生きているカードだけなら live_tasks を使ってください");
+    notes.push("cards を直に引いています。ゴミ箱行き・アーカイブ済みも含まれるので、生きているカードだけなら live_cards を使ってください");
   }
   if (/count\s*\(|group\s+by/.test(s) && /date\s*\(\s*created_at/.test(s) && /\bfrom\s+tasks\b/.test(s)) {
-    notes.push("created_at は登録日です。完了の集計なら done_at (または done_tasks.done_day) を使ってください");
+    notes.push("created_at は登録日です。完了の集計なら done_at (または done_cards.done_day) を使ってください");
   }
   return notes.length > 0 ? { note: notes.join(" / ") } : {};
 }
@@ -766,7 +766,7 @@ export function queryLogHelp(message: string): Record<string, unknown> {
         ])
       );
       help.hint =
-        "生きているカードは live_tasks、完了したものは done_tasks を使うと、条件を書かなくて済みます。ゴミ箱やアーカイブを見たいときだけ tasks を直に引いてください";
+        "生きているカードは live_cards、完了したものは done_cards を使うと、条件を書かなくて済みます。ゴミ箱やアーカイブを見たいときだけ cards を直に引いてください";
     } else if (/no such function/i.test(message)) {
       help.dialect = {
         note: "SQLite には date_trunc / INTERVAL / NOW() / DATEADD がありません",
@@ -806,7 +806,7 @@ export function setChecked(id: number, checked: boolean): { task?: Task; error?:
       return { error: `検収チェックを付けられるのは Review 列のカードだけです (いまは ${cur.status})。${DONE_GATE_RULE}` };
   }
   db()
-    .prepare("UPDATE tasks SET checked_at = ? WHERE id = ?")
+    .prepare("UPDATE cards SET checked_at = ? WHERE id = ?")
     .run(checked ? new Date().toLocaleString("sv-SE") : null, id);
   return { task: getTask(id) };
 }

@@ -18,9 +18,9 @@ import type { CustomLane, CustomLaneKey } from "./types.js";
 //
 // 置き場所:
 //   data/chatban-admin.db          projects / settings
-//   data/projects/<id>-<slug>.db   tasks / chat_messages / project_context
+//   data/projects/<id>-<slug>.db   cards / chat_messages / project_context
 //
-// #179: members / proposals / assignment_history と tasks.assignee / assign_reason は
+// #179: members / proposals / assignment_history と cards.assignee / assign_reason は
 // 作るのをやめ、既存DBからも削除する (下の ensureProjectSchema 末尾)
 // #181: 管理DBにあった llm_calls (LLM呼び出しの記録) と model_prices (料金表) も同様に落とす
 // (下の ensureAdminSchema 末尾)。LLM呼び出しの記録は backend/logs/ の1行だけになった
@@ -123,11 +123,41 @@ CREATE TABLE IF NOT EXISTS settings (
 // コスト分析のSQL窓口 (query_log の scope='cost') 専用だったので、計測系の撤去で用途を失った。
 // **プロジェクト側の readonly 接続 (projectReadonly) は残る** — 安全境界そのものは変わらない
 
+/** #215: `tasks` → `cards` の改名。**スキーマ生成より先に流すこと** —
+ * 順序を逆にすると `CREATE TABLE IF NOT EXISTS cards` が空のテーブルを作ってしまい、
+ * 既存データの入った `tasks` が取り残されて、板が空になったように見える。
+ *
+ * 名前を変えるだけで、列も行もIDも動かさない (`#112` は `#112` のまま)。
+ * **外部キー制約が無い**ので RENAME が安全に効く — `chat_messages.card_id` は
+ * REFERENCES を持たない裸の INTEGER で、こちらは列名だけ別に付け替える。
+ *
+ * 両方が在る状態は起こりえないが、もし在れば `cards` を正として何もしない
+ * (人が手で作った `cards` を、古い `tasks` で上書きしないため) */
+function renameTasksToCards(db: Database.Database) {
+  const has = (name: string) =>
+    !!db.prepare("SELECT name FROM sqlite_master WHERE type IN ('table','view') AND name = ?").get(name);
+  if (has("tasks") && !has("cards")) {
+    // ビューは参照先の改名に追随しない (SQLiteはビュー本文を書き換えない)。
+    // 壊れたビューを残すと次の SELECT で初めて落ちるので、**先に落としてから**改名する。
+    // 新しい名前のビューは、このあとスキーマ生成側が作り直す
+    db.exec("DROP VIEW IF EXISTS live_tasks; DROP VIEW IF EXISTS done_tasks;");
+    db.exec("ALTER TABLE tasks RENAME TO cards");
+    log("schema", "tasks を cards へ改名しました (#215 語彙の統一)");
+  }
+  try {
+    db.exec("ALTER TABLE chat_messages RENAME COLUMN task_id TO card_id");
+    log("schema", "chat_messages.task_id を card_id へ改名しました (#215)");
+  } catch {
+    /* 改名済み、または chat_messages がまだ無い */
+  }
+}
+
 /** プロジェクトDBのスキーマ。DBを開くたびに流すので、新規作成と既存の移行が同じ経路になる
  * (EF Migration不使用の流儀: CREATE IF NOT EXISTS + ALTER の失敗は適用済みとして無視) */
 export function ensureProjectSchema(db: Database.Database) {
+  renameTasksToCards(db);
   db.exec(`
-CREATE TABLE IF NOT EXISTS tasks (
+CREATE TABLE IF NOT EXISTS cards (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   title TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'todo',
@@ -145,7 +175,7 @@ CREATE TABLE IF NOT EXISTS chat_messages (
   content TEXT NOT NULL,
   trace TEXT,
   usage TEXT,
-  task_id INTEGER,
+  card_id INTEGER,
   created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
 );
 `);
@@ -156,54 +186,54 @@ CREATE TABLE IF NOT EXISTS chat_messages (
       /* already exists */
     }
   };
-  addColumn("ALTER TABLE tasks ADD COLUMN sort REAL");
+  addColumn("ALTER TABLE cards ADD COLUMN sort REAL");
   // #107: lane (demo/later) は廃止。「今回やる/後で」は他ツールでも列(Backlog)やスプリントで
   // 表すもので、フィールドは代用でしかなかった。実データでも47件中1件しか使われず、
   // rejected と意味が近いせいで「後回しは却下ではない」という注記をプロンプトに書く羽目になっていた。
   // #91 で並べ替えをLLMに任せられるようになったので、列の下へ落とすことで表現する
-  addColumn("ALTER TABLE tasks DROP COLUMN lane");
-  addColumn("ALTER TABLE tasks ADD COLUMN archived INTEGER NOT NULL DEFAULT 0");
-  addColumn("ALTER TABLE tasks ADD COLUMN context TEXT");
-  addColumn("ALTER TABLE tasks ADD COLUMN due TEXT");
-  addColumn("ALTER TABLE tasks ADD COLUMN blocked_by TEXT");
-  addColumn("ALTER TABLE tasks ADD COLUMN rejected INTEGER NOT NULL DEFAULT 0");
+  addColumn("ALTER TABLE cards DROP COLUMN lane");
+  addColumn("ALTER TABLE cards ADD COLUMN archived INTEGER NOT NULL DEFAULT 0");
+  addColumn("ALTER TABLE cards ADD COLUMN context TEXT");
+  addColumn("ALTER TABLE cards ADD COLUMN due TEXT");
+  addColumn("ALTER TABLE cards ADD COLUMN blocked_by TEXT");
+  addColumn("ALTER TABLE cards ADD COLUMN rejected INTEGER NOT NULL DEFAULT 0");
   // #102: 削除は論理削除 (ゴミ箱)。解釈ミスが取り返しのつかない結果に直結しないようにする
-  addColumn("ALTER TABLE tasks ADD COLUMN trashed_at TEXT");
+  addColumn("ALTER TABLE cards ADD COLUMN trashed_at TEXT");
   // #92: 現況の一言 (カードに出る)。「なぜこの人か」(reason)と「いまどうなっているか」は別の情報
-  addColumn("ALTER TABLE tasks ADD COLUMN summary TEXT");
+  addColumn("ALTER TABLE cards ADD COLUMN summary TEXT");
   // #112: 楽観ロックは経緯メモ(context)にだけ効かせる。
   // エージェントは「読む→考える(数十秒)→書く」なので、その間の変更を踏み潰しうる。
   // ただし失うものが大きいのは context だけ — 全文上書きの契約なので、衝突すると
   // 他人の追記が消える。status や due のような単一値は後勝ちでも実害が小さく、
   // むしろ長いサイクル(context)と同じ番号で守ると、実害のない衝突でリトライが多発する
-  addColumn("ALTER TABLE tasks ADD COLUMN context_version INTEGER NOT NULL DEFAULT 1");
+  addColumn("ALTER TABLE cards ADD COLUMN context_version INTEGER NOT NULL DEFAULT 1");
   // #108: 検収の印。人が実物で確かめた日時が入る (nullなら未検収)。
   // status とは別物 — done は「列が動いた」、checked_at は「人が確かめた」。
   // 一塊の完了を管理する重要なフラグなので、UIの一時状態ではなくDBに持つ。
   // 書けるのは人間のUI経路(REST)だけで、エージェント(agentWrite)からは触れない
-  addColumn("ALTER TABLE tasks ADD COLUMN checked_at TEXT");
+  addColumn("ALTER TABLE cards ADD COLUMN checked_at TEXT");
   // #108: Doneへ確定した日時。「いつ終わったか」を持つ列がどこにも無く、
   // created_at(登録日) では
   // 完了の集計ができなかった。SQL窓口にしたことで露呈した穴 —
   // 固定集計のツールでは聞ける質問が決まっているので見えなかった。
-  addColumn("ALTER TABLE tasks ADD COLUMN done_at TEXT");
+  addColumn("ALTER TABLE cards ADD COLUMN done_at TEXT");
   // 列を作る前に終わったものは updated_at で埋める。完了後に触らなければ
   // 最終更新 ≒ 完了日時になるため (実データで確認: アーカイブ済み89件が14通りの時刻に散り、
   // 検収バッチの単位と一致していた)。近似値だが、null のまま「不明」にするより答えられることが増える。
   // 何度流しても既に入っている行は触らないので、DBを開くたびに走って構わない
-  db.exec("UPDATE tasks SET done_at = updated_at WHERE done_at IS NULL AND (status = 'done' OR archived = 1)");
+  db.exec("UPDATE cards SET done_at = updated_at WHERE done_at IS NULL AND (status = 'done' OR archived = 1)");
   // #200: 要約カードを撤去する。Done列は「ゴミ箱に行くまでのロスタイム」であって陳列棚ではないので、
   // 畳んだものを常駐させる器が要らなくなった。畳んだ束は**メモリ上に1個だけ**持つ (archive.ts)。
   // カード本体は archived=1 のまま残るので、消えるのは器と、蒸留していた頃の要約文だけ
   try {
     db.exec("DROP TABLE IF EXISTS summary_cards");
-    const cols = (db.prepare("PRAGMA table_info(tasks)").all() as any[]).map((c) => c.name);
+    const cols = (db.prepare("PRAGMA table_info(cards)").all() as any[]).map((c) => c.name);
     if (cols.includes("summary_card_id")) {
-      // ビューが列を参照していると DROP COLUMN が拒否される (`error in view done_tasks`)。
+      // ビューが列を参照していると DROP COLUMN が拒否される (`error in view done_cards`)。
       // 下でどちらも作り直すので、ここで落としてよい
-      db.exec("DROP VIEW IF EXISTS done_tasks; DROP VIEW IF EXISTS live_tasks;");
-      db.exec("ALTER TABLE tasks DROP COLUMN summary_card_id");
-      log("schema", "summary_cards と tasks.summary_card_id を撤去しました (#200)");
+      db.exec("DROP VIEW IF EXISTS done_tasks; DROP VIEW IF EXISTS done_cards; DROP VIEW IF EXISTS live_tasks; DROP VIEW IF EXISTS live_cards;");
+      db.exec("ALTER TABLE cards DROP COLUMN summary_card_id");
+      log("schema", "summary_cards と cards.summary_card_id を撤去しました (#200)");
     }
   } catch (e: any) {
     log("schema", `要約カードの撤去に失敗: ${e?.message ?? e}`);
@@ -211,7 +241,7 @@ CREATE TABLE IF NOT EXISTS chat_messages (
   // #115/#116: 前提情報も全文上書きなので、カードの経緯メモ(#112)と同じく版で守る。
   // こちらの方が失うものが大きい — プロジェクト全員の前提で、チャットのシステムプロンプトに常時載る
   addColumn("ALTER TABLE project_context ADD COLUMN version INTEGER NOT NULL DEFAULT 1");
-  addColumn("ALTER TABLE chat_messages ADD COLUMN task_id INTEGER");
+  addColumn("ALTER TABLE chat_messages ADD COLUMN card_id INTEGER");
   // #126 → #180: ここで speaker / speaker_email (誰の発言か) を足していた。
   // 個人利用に特化して発言者という概念ごと廃止したので、追加もしないし既存も落とす
   // (下の削除マイグレーション)
@@ -227,31 +257,35 @@ CREATE TABLE IF NOT EXISTS chat_messages (
   // 列を足したときに古い定義が残らないよう、毎回作り直す(VIEWは実体を持たないので安全)。
   // sort_key は COALESCE(sort,id) をそのまま出したもの。ORDER BY を書き忘れても
   // VIEW 側の並びで返るが、明示したいときはこの列を使える
-  // 完了したものだけを見るビュー。live_tasks の対になる (生きている / 終わった)。
+  // 完了したものだけを見るビュー。live_cards の対になる (生きている / 終わった)。
   //
   // 説明で教えて漏れた罠を構造で消す。query_log の説明に「完了の集計には done_at を使う
   // (created_at だと登録日を数えてしまう)」と書いてあるのに、実測のクエリ25本のうち1本が
-  //   SELECT date(created_at) d, COUNT(*) n FROM tasks WHERE archived=1 ...
+  //   SELECT date(created_at) d, COUNT(*) n FROM cards WHERE archived=1 ...
   // を投げていた。done_day を先に出しておけば date() すら書かなくてよく、
   // そもそも created_at を完了日と取り違える余地がなくなる。
   //
   // ビューを増やすほど「どれを使うか」の判断が増えるので、2本(生きている/終わった)で止める
+  //
+  // #215: **古い名前 (done_tasks / live_tasks) も無条件に落とす。**改名は tasks が在るときにしか
+  // 走らないので、先に改名だけ済んだDBには、中身の `FROM tasks` を解決できない壊れたビューが
+  // 取り残される (実測: プロジェクト#21)。ここで毎回落とせば、開いた時点で自然に直る
   db.exec(`
-DROP VIEW IF EXISTS done_tasks;
-CREATE VIEW done_tasks AS
+DROP VIEW IF EXISTS done_tasks; DROP VIEW IF EXISTS done_cards;
+CREATE VIEW done_cards AS
   SELECT id, title, summary, rejected, checked_at, done_at,
          date(done_at) AS done_day, archived, created_at
-    FROM tasks
+    FROM cards
    WHERE done_at IS NOT NULL
    ORDER BY done_at DESC;`);
 
   db.exec(`
-DROP VIEW IF EXISTS live_tasks;
-CREATE VIEW live_tasks AS
+DROP VIEW IF EXISTS live_tasks; DROP VIEW IF EXISTS live_cards;
+CREATE VIEW live_cards AS
   SELECT id, status, title, summary, context, context_version,
          due, blocked_by, rejected, checked_at, done_at, sort, COALESCE(sort, id) AS sort_key,
          created_at, updated_at
-    FROM tasks
+    FROM cards
    WHERE archived = 0 AND trashed_at IS NULL
    ORDER BY COALESCE(sort, id), id;`);
 
@@ -284,8 +318,8 @@ CREATE VIEW live_tasks AS
   // 異常を調べている人に「assignee は消したはずだ」と思わせるのが一番まずい (自動レビュー指摘)
   const dropped: string[] = [];
   db.transaction(() => {
-    dropColumn("tasks", "assignee", dropped);
-    dropColumn("tasks", "assign_reason", dropped);
+    dropColumn("cards", "assignee", dropped);
+    dropColumn("cards", "assign_reason", dropped);
     for (const t of ["members", "proposals", "assignment_history"]) {
       if (!db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name = ?").get(t)) continue;
       db.exec(`DROP TABLE IF EXISTS ${t}`);
@@ -575,7 +609,7 @@ export function projectSummaries(): ProjectSummary[] {
       // 条件はボードの一覧と揃える — 母集団の条件を書き分けると必ずズレる
       openTasks: (
         pdb
-          .prepare("SELECT COUNT(*) AS c FROM tasks WHERE archived = 0 AND status != 'done' AND trashed_at IS NULL")
+          .prepare("SELECT COUNT(*) AS c FROM cards WHERE archived = 0 AND status != 'done' AND trashed_at IS NULL")
           .get() as { c: number }
       ).c,
     };

@@ -92,15 +92,15 @@ export const QUERY_LOG_DESCRIPTION = [
   // #181: この行は PUBLIC_TABLES から生成する。説明に手で書くと、テーブルを増減したときに
   // 説明・コード・テストの3箇所を人間が揃える前提になり、実際にズレた (project_context の漏れ)
   `引けるもの: ${PUBLIC_TABLES.join(" / ")}`,
-  "chat_messages(id, role, content, trace, usage, task_id, created_at。role='user' が持ち主の発言、'assistant' がこのアシスタント。usage は所要時間とラウンド数だけ — トークン計測は #181 で撤去した) / project_context(id, text, version, updated_at。全文は get_project_context のほうが読みやすい)",
-  "tasks(id, title, status, summary, context, context_version, due, blocked_by, rejected, checked_at, done_at, trashed_at, sort, archived, created_at, updated_at)",
+  "chat_messages(id, role, content, trace, usage, card_id, created_at。role='user' が持ち主の発言、'assistant' がこのアシスタント。usage は所要時間とラウンド数だけ — トークン計測は #181 で撤去した) / project_context(id, text, version, updated_at。全文は get_project_context のほうが読みやすい)",
+  "cards(id, title, status, summary, context, context_version, due, blocked_by, rejected, checked_at, done_at, trashed_at, sort, archived, created_at, updated_at)",
   "checked_at = 人が実物で確かめた日時 (nullなら未検収)。status とは別物で、done は列が動いたこと・checked_at は検収が進んだこと。片方からもう片方を推測しない。この窓口は読み取り専用で、checked_at を書く手段はどこにも無い (印を付けられるのは人間だけ)",
-  "会話で「#112」と呼ぶカードは tasks.id = 112 のこと(主キー)。番号はプロジェクトごとに1から振られる。特定の1件を見るときは WHERE id=<番号> で引く",
+  "会話で「#112」と呼ぶカードは cards.id = 112 のこと(主キー)。番号はプロジェクトごとに1から振られる。特定の1件を見るときは WHERE id=<番号> で引く",
   "日付の列を取り違えない。created_at=登録日 / updated_at=最終更新(その後の編集でも動く) / done_at=Doneへ確定した日 / checked_at=人が確かめた日。完了の集計には done_at を使う(created_at だと登録日を数えてしまう)",
   "done_at のうち 2026-08-10 以前のものは、列を作る前に終わったぶんを updated_at から埋めた近似値(完了後に触っていなければ最終更新=完了日時)。日単位の集計には使えるが、分単位の議論には使わない",
-  "done_tasks ビューを使う。完了したもの(done_at が入っているもの)だけを、完了が新しい順に抜いたもの。日付は done_day 列に入っているので date() を書かなくてよい。live_tasks の対で、生きている=live_tasks / 終わった=done_tasks",
+  "done_cards ビューを使う。完了したもの(done_at が入っているもの)だけを、完了が新しい順に抜いたもの。日付は done_day 列に入っているので date() を書かなくてよい。live_cards の対で、生きている=live_cards / 終わった=done_cards",
   // #175: **どの status がどちらに入るかを書く。**「生きている / 終わった」だけだと
-  // review がどちらか分からず、実際に「live_tasks に review が出ないバグがある」と誤報した
+  // review がどちらか分からず、実際に「live_cards に review が出ないバグがある」と誤報した
   // (2026-08-15。ビューは正しく、検収済みで消えていただけ)。
   // ビューの条件は status ではなく archived / trashed_at / done_at なので、**両方に出る状態がある** —
   // そこも書かないと「重複している=おかしい」と読まれる。
@@ -110,17 +110,17 @@ export const QUERY_LOG_DESCRIPTION = [
   // (archive.ts)。**その間にプロセスが止まればジョブは失われ、起動時に
   // `status=done AND archived=0` を回収する処理は無い**ので、両方に出る状態は無期限に残る。
   // 時間で消えると書くと、エージェントは「待てば直る」と判断してしまう
-  "live_tasks に入るのは **done 以外の列すべて** (todo / inprogress / review と、そのプロジェクトで有効な任意レーン)。加えて「Doneへ確定したが、まだ畳まれていないもの」も入る。done_tasks は done_at が入っているものなので、**畳まれるまでは同じカードが両方に出る**(不整合ではない)。畳むのは**人が検収を押した瞬間だけ**で、押さなければ何も動かない — 時間が経てば消えると考えないこと。列で絞りたいなら status を書く: WHERE status='review'",
-  "例(いつ何件終わったか): SELECT done_day, COUNT(*) n FROM done_tasks GROUP BY 1 ORDER BY 1 DESC",
-  "例(直近1週間に終わったもの): SELECT done_day, title FROM done_tasks WHERE done_day >= date('now','localtime','-7 days')",
+  "live_cards に入るのは **done 以外の列すべて** (todo / inprogress / review と、そのプロジェクトで有効な任意レーン)。加えて「Doneへ確定したが、まだ畳まれていないもの」も入る。done_cards は done_at が入っているものなので、**畳まれるまでは同じカードが両方に出る**(不整合ではない)。畳むのは**人が検収を押した瞬間だけ**で、押さなければ何も動かない — 時間が経てば消えると考えないこと。列で絞りたいなら status を書く: WHERE status='review'",
+  "例(いつ何件終わったか): SELECT done_day, COUNT(*) n FROM done_cards GROUP BY 1 ORDER BY 1 DESC",
+  "例(直近1週間に終わったもの): SELECT done_day, title FROM done_cards WHERE done_day >= date('now','localtime','-7 days')",
   "SELECT * は使わない。必要な列だけ挙げる。context(経緯メモ)は1件1,000字を超えるので、一覧では length(context) か substr(context,1,120) にし、全文が要るカードだけ id で絞って引き直す",
-  "live_tasks ビューを使う。tasks から「生きているもの」(ゴミ箱でもアーカイブ済みでもないもの)だけを、ボードと同じ並びで抜いたもの。条件と並びを毎回書かなくてよく、書き忘れてゴミ箱のカードが混ざることもない。列は tasks と同じ + sort_key(=COALESCE(sort,id))。ゴミ箱やアーカイブを見たいときだけ tasks を直に引く",
-  "例(ボードの一覧): SELECT id, status, title, due, checked_at, length(context) ctx FROM live_tasks",
-  "例(1件の詳細。経緯メモの全文と版): SELECT title, status, summary, context, context_version, blocked_by FROM tasks WHERE id=112",
-  "例(直近の動き。「なにやってたっけ」): SELECT id, status, title, summary, updated_at FROM live_tasks ORDER BY updated_at DESC LIMIT 15",
-  "例(ゴミ箱の中身): SELECT id, title, trashed_at FROM tasks WHERE trashed_at IS NOT NULL ORDER BY trashed_at DESC",
-  "例(検収待ちで、まだ人が確かめていないもの): SELECT id, title, summary FROM live_tasks WHERE status='review' AND checked_at IS NULL",
-  "例(1件の経緯メモ全文): SELECT context, context_version FROM tasks WHERE id=112",
+  "live_cards ビューを使う。cards から「生きているもの」(ゴミ箱でもアーカイブ済みでもないもの)だけを、ボードと同じ並びで抜いたもの。条件と並びを毎回書かなくてよく、書き忘れてゴミ箱のカードが混ざることもない。列は cards と同じ + sort_key(=COALESCE(sort,id))。ゴミ箱やアーカイブを見たいときだけ cards を直に引く",
+  "例(ボードの一覧): SELECT id, status, title, due, checked_at, length(context) ctx FROM live_cards",
+  "例(1件の詳細。経緯メモの全文と版): SELECT title, status, summary, context, context_version, blocked_by FROM cards WHERE id=112",
+  "例(直近の動き。「なにやってたっけ」): SELECT id, status, title, summary, updated_at FROM live_cards ORDER BY updated_at DESC LIMIT 15",
+  "例(ゴミ箱の中身): SELECT id, title, trashed_at FROM cards WHERE trashed_at IS NOT NULL ORDER BY trashed_at DESC",
+  "例(検収待ちで、まだ人が確かめていないもの): SELECT id, title, summary FROM live_cards WHERE status='review' AND checked_at IS NULL",
+  "例(1件の経緯メモ全文): SELECT context, context_version FROM cards WHERE id=112",
   "例(いつ何を言われたか): SELECT created_at, substr(content,1,120) c FROM chat_messages WHERE role='user' ORDER BY id DESC LIMIT 30",
   "例: SELECT created_at, role, substr(content,1,120) FROM chat_messages WHERE date(created_at)='2026-08-09' ORDER BY id LIMIT 30",
   "例: SELECT substr(created_at,1,13) h, COUNT(*) n FROM chat_messages GROUP BY 1 ORDER BY 1",
@@ -200,8 +200,8 @@ export const DUE_DESCRIPTION =
 export const SEARCH_DESCRIPTION = [
   "カードの本文(タイトル・現況・経緯メモ)を横断検索する。アーカイブ済みも対象。表記ゆれや言い換えは自分で展開して複数語を渡す(OR検索・当たった語が matched で返る)。",
   "**候補が広すぎたら、この道具で絞ろうとせず query_log でSQLを書く。**本文にその語が1度出てくるだけで当たるので、絞り込みはSQLのほうが素直に書ける:",
-  "例(タイトルだけを見る): SELECT id, title FROM live_tasks WHERE title LIKE '%記事%'",
-  "例(条件を重ねる): SELECT id, title, due FROM live_tasks WHERE status='review' AND due IS NOT NULL ORDER BY due",
+  "例(タイトルだけを見る): SELECT id, title FROM live_cards WHERE title LIKE '%記事%'",
+  "例(条件を重ねる): SELECT id, title, due FROM live_cards WHERE status='review' AND due IS NOT NULL ORDER BY due",
   "この道具は「表記ゆれを展開して当たりを見つける」まで、query_log は「条件で絞る」— 使い分ける。",
 ].join("\n");
 
@@ -265,7 +265,7 @@ export function buildTools(lanes: CustomLane[]): OpenAI.Chat.Completions.ChatCom
             items: {
               type: "object",
               properties: {
-                id: { type: "integer", description: "カードID。会話で「#112」と呼ばれるものと同じで、tasks テーブルの主キー(id)。プロジェクトごとに1から振られるので、別プロジェクトの#112とは別物" },
+                id: { type: "integer", description: "カードID。会話で「#112」と呼ばれるものと同じで、cards テーブルの主キー(id)。プロジェクトごとに1から振られるので、別プロジェクトの#112とは別物" },
                 title: { type: "string" },
                 status: { type: "string", enum: STATUS_VALUES, description: STATUS_DESC },
                 summary: { type: "string", description: SUMMARY_DESCRIPTION },
@@ -316,7 +316,7 @@ export function buildTools(lanes: CustomLane[]): OpenAI.Chat.Completions.ChatCom
       parameters: {
         type: "object",
         properties: {
-          id: { type: "integer", description: "カードID。会話で「#112」と呼ばれるものと同じで、tasks テーブルの主キー(id)。プロジェクトごとに1から振られるので、別プロジェクトの#112とは別物" },
+          id: { type: "integer", description: "カードID。会話で「#112」と呼ばれるものと同じで、cards テーブルの主キー(id)。プロジェクトごとに1から振られるので、別プロジェクトの#112とは別物" },
           text: { type: "string", description: "新しいcontext全文 (append=true のときは追記する文だけ)" },
           append: { type: "boolean", description: `trueなら追記。${CONTEXT_APPEND_DESCRIPTION}` },
           context_version: {
@@ -470,7 +470,7 @@ async function execTool(name: string, args: any, uiActions: UiAction[], events: 
       return {
         ...r,
         ...(r.hits.length > 0
-          ? { note: "snippetは当たった箇所の周辺のみ。理由や判断を答えるときは query_log で経緯メモの全文を読むこと (SELECT context FROM tasks WHERE id=...)" }
+          ? { note: "snippetは当たった箇所の周辺のみ。理由や判断を答えるときは query_log で経緯メモの全文を読むこと (SELECT context FROM cards WHERE id=...)" }
           : {}),
       };
     }
@@ -529,7 +529,7 @@ export function buildSystemPrompt(taskFocus?: ReturnType<typeof getTask>, view?:
     "- 「消して」がカードそのものを指すのか、タイトルや文言の一部の修正を指すのか曖昧なときは、操作せず確認する (実例:「#95だけ発言者の話が入っていて不自然なので消せますか?」はタイトルの修正依頼だったが、カードごと削除してしまった)。",
     "- ボードから退場するもの(完了・却下)は必ずReviewを通り、人間の検収チェックで確定する。チャットからdoneへ直行する経路は存在しない。",
     "- 着手したが前提が足りず進められないときは、勝手に却下にも完了にもしない。summary に「前提不足で保留 (◯◯が必要)」と現況を書き、必要な情報を人に尋ねる。status をどこに置くかはプロジェクトの前提情報の定義に従う (列の意味はプロジェクトごとに違う)。",
-    "- 検収の印(checked_at)は人が実物で確かめた記録で、AIには書く手段が無い。「確認しておきました」と自分で付けることはできないし、付いたことにして話さない。誰が何を確かめたかを聞かれたら query_log で tasks.checked_at を読む。",
+    "- 検収の印(checked_at)は人が実物で確かめた記録で、AIには書く手段が無い。「確認しておきました」と自分で付けることはできないし、付いたことにして話さない。誰が何を確かめたかを聞かれたら query_log で cards.checked_at を読む。",
     "- 「後回し」「今はやらない」は却下ではない。status は変えず (done にするとアーカイブに吸い込まれる)、reorder_cards でその列の下へ落とす。「今やりたい」は逆に上へ。",
     "- 「金曜まで」「明日まで」等の期限表現は今日の日付から YYYY-MM-DD に解決して due に入れる。期限が近い/過ぎたカードはレポートで優先的に言及する。",
     "- 画像やPDFが添付されたら内容を読み取って会話・操作に活かす。重要な情報(バグの症状、決定事項、資料の要点)はカードの context や前提情報に文字で蒸留して記録する。ファイル原本はどこにも保存されないため、後から参照が必要な内容は必ず文字にして残す。",

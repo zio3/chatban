@@ -12,7 +12,7 @@ const TTL_MS = 5 * 60 * 1000; // これを超えて間が空いたら再ベー�
 const MAX_EVENTS = 40; // イベントが溜まりすぎたら再ベースライン (差分適用の負担が基準の鮮度を上回る前に畳む)
 
 interface Snapshot {
-  tasks: Map<number, string>; // id -> 索引JSON
+  cards: Map<number, string>; // id -> 索引JSON
   projectContext: string;
   // #19: 任意レーンの表示名。**基準スナップショットの一部**にしてある —
   // 名前を変えたら索引の説明文も変わるので、変えた瞬間に再ベースラインが要る
@@ -55,7 +55,7 @@ function todayLabel(): string {
 }
 
 function capture(): Snapshot {
-  const tasks = new Map(
+  const cards = new Map(
     listTasks().map((t) => [
       t.id,
       JSON.stringify({
@@ -70,7 +70,7 @@ function capture(): Snapshot {
     ])
   );
   return {
-    tasks,
+    cards,
     projectContext: getProjectContext() ?? "",
     date: todayLabel(),
     lanes: customLanes()
@@ -89,9 +89,9 @@ function buildBaselineText(s: Snapshot): string {
           .map((x) => x.replace("=", "=「") + "」")
           .join(", ")}`
       : ""}, done=完了)`,
-    "タイトルは要約品質。詳細(経緯メモ)が必要なら query_log で取る (SELECT context FROM tasks WHERE id=...)。完了カードは自動アーカイブされここには載らない。",
+    "タイトルは要約品質。詳細(経緯メモ)が必要なら query_log で取る (SELECT context FROM cards WHERE id=...)。完了カードは自動アーカイブされここには載らない。",
     "後続に「変更イベント」がある場合、この索引にそれを適用した状態が現在のボードである。",
-    `[${[...s.tasks.values()].join(",")}]`,
+    `[${[...s.cards.values()].join(",")}]`,
     "",
   ]
     .filter(Boolean)
@@ -116,7 +116,7 @@ export function getBoardPromptSection(): string {
     st.lastSeen = capture();
     st.baselineText = buildBaselineText(st.lastSeen);
     st.events = [];
-    log("prompt", `rebaseline (project #${currentProjectId()}): tasks=${st.lastSeen.tasks.size}`);
+    log("prompt", `rebaseline (project #${currentProjectId()}): tasks=${st.lastSeen.cards.size}`);
     return st.baselineText;
   }
 
@@ -124,13 +124,13 @@ export function getBoardPromptSection(): string {
   const seen = st.lastSeen!; // needRebase=false の分岐なので非null
   const cur = capture();
   const fresh: string[] = [];
-  for (const [id, json] of cur.tasks) {
-    const prev = seen.tasks.get(id);
+  for (const [id, json] of cur.cards) {
+    const prev = seen.cards.get(id);
     if (prev === undefined) fresh.push(`+ ${json}`);
     else if (prev !== json) fresh.push(`~ ${json}`);
   }
-  for (const id of seen.tasks.keys()) {
-    if (!cur.tasks.has(id)) fresh.push(`- #${id} (完了アーカイブまたは削除)`);
+  for (const id of seen.cards.keys()) {
+    if (!cur.cards.has(id)) fresh.push(`- #${id} (完了アーカイブまたは削除)`);
   }
   if (cur.projectContext !== seen.projectContext) {
     fresh.push(`前提情報の全文更新: ${cur.projectContext}`);

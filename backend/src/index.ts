@@ -428,7 +428,7 @@ app.get("/api/chat/log", (req, res) => {
   res.json({ messages: listChatMessages(Number(req.query.limit ?? 50), taskId) });
 });
 
-// カード専用チャット (#24): 対象カードの全詳細をシステムプロンプトに注入し、会話はtask_id付きで分離保存
+// カード専用チャット (#24): 対象カードの全詳細をシステムプロンプトに注入し、会話はcard_id付きで分離保存
 app.post("/api/tasks/:id/chat", async (req, res) => {
   const taskId = Number(req.params.id);
   const { message, history, attachments, view } = req.body ?? {};
@@ -439,7 +439,7 @@ app.post("/api/tasks/:id/chat", async (req, res) => {
     return res.status(400).json({ error: "このデモでは添付を受け付けていません" });
   // 対象が居ないなら、LLMを呼ぶ前に断る。以前は存在確認が無く、taskFocus が undefined のまま
   // 通常チャットに近い状態で有料の呼び出しが走り、存在しないIDの会話ログまで残っていた
-  // (chat_messages.task_id に外部キーは無い。自動レビュー指摘)。
+  // (chat_messages.card_id に外部キーは無い。自動レビュー指摘)。
   // 削除・プロジェクト切替・古い画面から送ると踏むので、普通に起きる
   if (!getTask(taskId)) return res.status(404).json({ error: `task #${req.params.id} not found` });
   const id = ++chatSeq;

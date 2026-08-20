@@ -96,7 +96,7 @@ function acceptableDue(due: string | null | undefined): { due?: string | null; b
   return isDueDate(due) ? { due, bad: false } : { bad: true };
 }
 
-export function createTasksAsAgent(tasks: AgentTaskInput[]): {
+export function createTasksAsAgent(cards: AgentTaskInput[]): {
   created: unknown[];
   note?: string;
   /** 期限の形が違って捨てたもの (タイトルで返す。作成時点ではIDを知らせても意味が薄い) */
@@ -104,7 +104,7 @@ export function createTasksAsAgent(tasks: AgentTaskInput[]): {
 } {
   let anyCoerced = false;
   const badDue: string[] = [];
-  const created = tasks.map((t) => {
+  const created = cards.map((t) => {
     const { status, coerced } = coerceStatus(t.status);
     if (coerced) anyCoerced = true;
     const title = cleanAgentText(t.title);

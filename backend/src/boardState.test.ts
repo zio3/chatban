@@ -28,8 +28,8 @@ function card(title: string, elements: string[]): string {
   return JSON.stringify([title, elements]);
 }
 
-function board(tasks: [number, TaskFacts][] = [], cards: [number, string][] = [], projectContextVersion = 1) {
-  return { tasks: new Map(tasks), cards: new Map(cards), projectContextVersion };
+function board(cards: [number, TaskFacts][] = [], projectContextVersion = 1) {
+  return { cards: new Map(cards), projectContextVersion };
 }
 
 test("何も変わっていなければ差分は空", () => {
@@ -288,7 +288,7 @@ test("並べ替えが status の変化を埋もれさせない", () => {
 test("前提情報の更新は版だけで知らせる (本文は持っていない)", () => {
   // #187: スナップショットが持つのは版だけ。本文を持つと 3,000字級のものが
   // 保持数ぶん (最大32枚) メモリに乗り、差分にも載せたくなる
-  const changes = diffBoards(board([], [], 6), board([], [], 7));
+  const changes = diffBoards(board([], 6), board([], 7));
   assert.deepEqual(changes, ["プロジェクトの前提情報が更新された (v7)"]);
 });
 

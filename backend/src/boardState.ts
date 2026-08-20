@@ -6,7 +6,7 @@ import { log } from "./log.js";
 // #150/#187: MCP経由のエージェント向けに「ボードの写し + 同期トークン」を配る。
 //
 // 直したい事故はこれ: エージェントは自分が最後に読んだ一覧を現在の状態だと思い込み、
-// 食い違うとボードのほうを疑う。実際 2026-08-15 に「live_tasks に review が出ないバグがある」と
+// 食い違うとボードのほうを疑う。実際 2026-08-15 に「live_cards に review が出ないバグがある」と
 // 誤報告した (人間が9件を検収して done+archived にしていただけで、ビューは正しかった)。
 // 人間はUIで視覚的に上書きされるが、**LLMのコンテキストは追記型で上書きが無い**。
 //
@@ -56,7 +56,7 @@ export interface TaskFacts {
 export interface BoardSnapshot {
   syncToken: string;
   takenAt: number;
-  tasks: Map<number, TaskFacts>;
+  cards: Map<number, TaskFacts>;
   /** 前提情報は**本文を持たない (#187)**。応答に載せるのも版だけで、
    * 中身が要るなら get_project_context を呼ばせる。
    * 3,000字級の本文がボードを取るたびに乗るのを止めるのが目的 (#186 と同じ問題) */
@@ -100,7 +100,7 @@ const snapshots = new Map<number, BoardSnapshot[]>();
 
 /** いまのボードを写し取る。DBに触るのはここだけで、差分計算(diffBoards)は純粋関数にしてある */
 export function captureBoard(): Omit<BoardSnapshot, "syncToken" | "takenAt"> {
-  const tasks = new Map<number, TaskFacts>(
+  const cards = new Map<number, TaskFacts>(
     listTasks().map((t) => [
       t.id,
       {
@@ -116,16 +116,16 @@ export function captureBoard(): Omit<BoardSnapshot, "syncToken" | "takenAt"> {
       },
     ])
   );
-  return { tasks, projectContextVersion: getProjectContextRow().version };
+  return { cards, projectContextVersion: getProjectContextRow().version };
 }
 
 /** 列ごとの「並んでいるIDの列」。sort の数値ではなくこの並びを比べる。
  * only を渡すと、そこに含まれるIDだけで並びを作る (追加・消滅による見かけの変化を除くため)。
  * sort が同値のときは id で決める — 実データは listTasks の ORDER BY sort, id 順で入るので、
  * 比較関数にも同じ規則を書いておく (暗黙の安定性に寄りかからない) */
-function columnLists(tasks: Map<number, TaskFacts>, only?: Set<number>): Map<string, number[]> {
+function columnLists(cards: Map<number, TaskFacts>, only?: Set<number>): Map<string, number[]> {
   const byStatus = new Map<string, { id: number; sort: number }[]>();
-  for (const [id, t] of tasks) {
+  for (const [id, t] of cards) {
     if (only && !only.has(id)) continue;
     const list = byStatus.get(t.status) ?? [];
     list.push({ id, sort: t.sort });
@@ -141,9 +141,9 @@ function columnLists(tasks: Map<number, TaskFacts>, only?: Set<number>): Map<str
   return out;
 }
 
-function columnOrders(tasks: Map<number, TaskFacts>, only?: Set<number>): Map<string, string> {
+function columnOrders(cards: Map<number, TaskFacts>, only?: Set<number>): Map<string, string> {
   const out = new Map<string, string>();
-  for (const [status, ids] of columnLists(tasks, only)) out.set(status, ids.map((id) => `#${id}`).join(","));
+  for (const [status, ids] of columnLists(cards, only)) out.set(status, ids.map((id) => `#${id}`).join(","));
   return out;
 }
 
@@ -189,14 +189,14 @@ function fieldChanges(prev: TaskFacts, cur: TaskFacts): string[] {
  * 古い一覧が残ったまま差分を渡されると自力でマージを迫られる。IDだけを指す差分にしない。
  */
 export function diffBoards(
-  prev: Pick<BoardSnapshot, "tasks" | "projectContextVersion">,
-  cur: Pick<BoardSnapshot, "tasks" | "projectContextVersion">
+  prev: Pick<BoardSnapshot, "cards" | "projectContextVersion">,
+  cur: Pick<BoardSnapshot, "cards" | "projectContextVersion">
 ): string[] {
   const changes: string[] = [];
-  const curLists = columnLists(cur.tasks);
+  const curLists = columnLists(cur.cards);
 
-  for (const [id, t] of cur.tasks) {
-    const before = prev.tasks.get(id);
+  for (const [id, t] of cur.cards) {
+    const before = prev.cards.get(id);
     if (!before) {
       // 追加はIDだけでは何か分からないので内容ごと載せる。
       // **検収済みかどうかもここに要る** — 検収済みのカードが「追加」として現れる経路があり
@@ -216,8 +216,8 @@ export function diffBoards(
     if (fields.length > 0) changes.push(`~ #${id}「${t.title}」 ${fields.join(" / ")}`);
   }
 
-  for (const [id, t] of prev.tasks) {
-    if (!cur.tasks.has(id)) {
+  for (const [id, t] of prev.cards) {
+    if (!cur.cards.has(id)) {
       // 完了アーカイブ・要約への畳み込み・削除はどれもここに落ちる。
       // どれだったかはボードから消えた事実ほど重要ではないので、まとめて1つの表現にする
       changes.push(`- #${id}「${t.title}」がボードから消えた (完了アーカイブ・要約への統合・削除のいずれか)`);
@@ -235,19 +235,19 @@ export function diffBoards(
   // ただし列を移ってきたものは、**どこに入ったか**が status の行では分からないので、
   // 並びが2件以上ある列に限って現在順を出す
   const stayed = new Set(
-    [...cur.tasks.entries()].filter(([id, t]) => prev.tasks.get(id)?.status === t.status).map(([id]) => id)
+    [...cur.cards.entries()].filter(([id, t]) => prev.cards.get(id)?.status === t.status).map(([id]) => id)
   );
-  const prevOrder = columnOrders(prev.tasks, stayed);
-  const curOrder = columnOrders(cur.tasks, stayed);
+  const prevOrder = columnOrders(prev.cards, stayed);
+  const curOrder = columnOrders(cur.cards, stayed);
   const arrived = new Set(
-    [...cur.tasks.entries()]
+    [...cur.cards.entries()]
       .filter(([id, t]) => {
-        const p = prev.tasks.get(id);
+        const p = prev.cards.get(id);
         return p !== undefined && p.status !== t.status;
       })
       .map(([, t]) => t.status)
   );
-  const shown = columnOrders(cur.tasks);
+  const shown = columnOrders(cur.cards);
   const countIn = (status: string) => (shown.get(status) ? shown.get(status)!.split(",").length : 0);
   const movedColumns = [...new Set([...prevOrder.keys(), ...curOrder.keys(), ...arrived])].filter((status) =>
     prevOrder.get(status) !== curOrder.get(status) ? true : arrived.has(status) && countIn(status) > 1

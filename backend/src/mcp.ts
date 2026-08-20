@@ -153,7 +153,7 @@ export function buildMcpServer(onEvent: (kind: "board" | "proposals") => void): 
       inputSchema: {
         updates: z.array(
           z.object({
-            id: z.number().int().describe("カードID。会話で「#112」と呼ばれるものと同じで、tasks テーブルの主キー(id)。プロジェクトごとに1から振られるので、別プロジェクトの#112とは別物"),
+            id: z.number().int().describe("カードID。会話で「#112」と呼ばれるものと同じで、cards テーブルの主キー(id)。プロジェクトごとに1から振られるので、別プロジェクトの#112とは別物"),
             title: z.string().optional(),
             status: STATUS.optional().describe(STATUS_DESC),
             summary: z.string().optional().describe(SUMMARY_DESCRIPTION),

@@ -1,4 +1,5 @@
 import { getProjectContext, listTasks } from "./db.js";
+import type { Task } from "./types.js";
 import { currentProjectId, customLanes } from "./store.js";
 import { log } from "./log.js";
 
@@ -54,21 +55,58 @@ function todayLabel(): string {
   return new Date().toLocaleDateString("ja-JP", { year: "numeric", month: "2-digit", day: "2-digit", weekday: "short" });
 }
 
+/** 索引に載せる summary の上限。**書き込み側には制限が無い**ので、ここで持つ (Codexレビュー指摘)。
+ *
+ * 守っているのは「プロンプトが無制限に太らないこと」であって、データの妥当性ではない。
+ * 長い summary をDBに持つこと自体は害ではない (画面には全文が出るし、query_log でも読める) —
+ * 困るのは**それが毎リクエストのプロンプトに入り、変更のたびに `~` イベントにも載る**こと。
+ * だから境界はプロンプト側に置く。書き込みで拒否すると、既に長い summary を持つDBが
+ * 更新できなくなり移行が要る (守りたいものに対して代償が大きい)。
+ *
+ * 120字の根拠: 実測 (2026-08-21) で18枚の最長が60字、平均40字。**通常運用では発火しない**大きさに置き、
+ * 異常な入力だけを止める。切ったことは「…」で分かるようにする — 索引の説明が
+ * 「詳細が必要なら query_log で取る」と案内しているので、全文が要るなら取りに行ける */
+const SUMMARY_MAX = 120;
+export function clampSummary(s: string): string {
+  return s.length <= SUMMARY_MAX ? s : `${s.slice(0, SUMMARY_MAX)}…`;
+}
+
+/** 索引1件ぶん。**DBに触らない純粋関数**にしてあるのはテストのため
+ * (ここに何が載るかは契約そのもので、載り忘れても画面もテストも落ちない)。
+ *
+ * #221: **summary を載せていなかった。**ツール契約 (SUMMARY_DESCRIPTION) は
+ * 「カードに出るだけでなく、**ボードのチャットが常時これを読んで受け答えする**」と
+ * 約束しているのに、索引に無いのでチャットは query_log を叩かない限り現況を知らなかった。
+ * MCP側 (boardState.ts の TaskFacts) には入っていたので、**外部エージェントには見えていて
+ * ボードのチャットだけ見えていない**という非対称になっていた。
+ *
+ * 実測して載せると決めた (2026-08-21): 18枚で725字・平均40字・最長60字、
+ * JSONのキー込みで約940字 (プロンプト全体の+13%)。
+ *
+ * **上限は clampSummary で持つ (先頭120字 + 「…」)。**当初は「契約が『極力短く』なので
+ * 設計上暴れない」と考えて上限を置かなかったが、**書き込み側に長さ制限が無い**ので
+ * それは保証にならなかった (Codexレビュー指摘)。切られた場合、確認先 (「(commit abc123)」) は
+ * 末尾なので失われる — その分は経緯メモと query_log 側で取る前提にしてある。
+ *
+ * 値が空のものは載せない (due / dep / rejected と同じ扱い)。キーが増えるほど
+ * 索引は太るので、「無い」ことは書かずに黙っている */
+export function cardIndexJson(
+  t: Pick<Task, "id" | "title" | "status" | "summary" | "due" | "blockedBy" | "rejected" | "context">
+): string {
+  return JSON.stringify({
+    id: t.id,
+    title: t.title,
+    status: t.status,
+    ...(t.summary ? { summary: clampSummary(t.summary) } : {}),
+    ...(t.due ? { due: t.due } : {}),
+    ...(t.blockedBy?.length ? { dep: t.blockedBy } : {}),
+    ...(t.rejected ? { rejected: true } : {}),
+    ...(t.context ? { hasContext: true } : {}),
+  });
+}
+
 function capture(): Snapshot {
-  const cards = new Map(
-    listTasks().map((t) => [
-      t.id,
-      JSON.stringify({
-        id: t.id,
-        title: t.title,
-        status: t.status,
-        ...(t.due ? { due: t.due } : {}),
-        ...(t.blockedBy?.length ? { dep: t.blockedBy } : {}),
-        ...(t.rejected ? { rejected: true } : {}),
-        ...(t.context ? { hasContext: true } : {}),
-      }),
-    ])
-  );
+  const cards = new Map(listTasks().map((t) => [t.id, cardIndexJson(t)]));
   return {
     cards,
     projectContext: getProjectContext() ?? "",

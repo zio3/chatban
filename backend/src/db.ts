@@ -459,9 +459,11 @@ export function listChatMessages(limit = 50, taskId?: number): {
 // 会話ログ (chat_messages) は残っているので、「いつ何を頼んだか」は query_log で引ける
 
 // #225: #93 の recentActivity (「直近なにしてた?」用) はここに置かない。
-// **役目を終えている** — SQL窓口 (#108) の例文に同じ問い合わせがあり、
+// **役目を終えている** — SQL窓口 (#108) に、欲しい形を毎回書ける窓口がある。
 // query_log で `SELECT id, status, title, summary, updated_at FROM live_cards
-// ORDER BY updated_at DESC LIMIT 15` と書けば同じものが引ける。
+// ORDER BY updated_at DESC LIMIT 15` と書けば近い一覧が引ける (アーカイブ済みも見たいなら
+// live_cards ではなく cards を、却下も分けたいなら rejected を足す — 旧関数は
+// アーカイブ込み・rejected 付きで固定だった)。**固定の形を関数で持たない**のがSQL窓口の趣旨で、
 // 専用の関数が別に残っていると、次に「直近」を出すときにどちらで書くかが分かれる
 
 // #91: 並べ替えはLLMが決めた順番(ID列)をそのまま受け取る。

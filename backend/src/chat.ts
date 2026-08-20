@@ -208,6 +208,35 @@ export const SEARCH_DESCRIPTION = [
   "この道具は「表記ゆれを展開して当たりを見つける」まで、query_log は「条件で絞る」— 使い分ける。",
 ].join("\n");
 
+/** 検索・並べ替えの応答。**注意書きは道具の契約の一部**なので、説明文 (SEARCH_DESCRIPTION /
+ * REORDER_DESCRIPTION) と同じくチャットとMCPで共有する。
+ *
+ * #227: 以前は組み立てがチャット側にしか無く、MCPは生の結果をそのまま返していた。
+ * 説明文は共通化してあったのに応答は分かれていたので、**外部エージェントだけが注意書きを
+ * 受け取れない**状態になっていた (板の文脈を持たない分、むしろ必要としている側)。
+ * DBに触らない純粋関数にしてあるのはテストのため。 */
+export function searchResult<T extends { hits: unknown[] }>(r: T) {
+  // スニペットは「当たった箇所の周辺」でしかないので、判断の核心が範囲外にあることが多い。
+  // 検索は「どのカードか」を絞るまでの道具と位置づけ、中身は query_log で読ませる
+  return {
+    ...r,
+    ...(r.hits.length > 0
+      ? {
+          note: "snippetは当たった箇所の周辺のみ。理由や判断を答えるときは query_log で経緯メモの全文を読むこと (SELECT context FROM cards WHERE id=...)",
+        }
+      : {}),
+  };
+}
+
+export function reorderResult<T extends { appended: number }>(r: T) {
+  // 指定漏れがあったことはLLMに伝える (黙って末尾に置くと「並べたつもり」とズレる)
+  return {
+    ok: true as const,
+    ...r,
+    ...(r.appended > 0 ? { note: `${r.appended}件は順番の指定に含まれていなかったので末尾に置きました` } : {}),
+  };
+}
+
 /** 依存の契約。「順番に着手したい」を依存にしてしまう失敗が実際に起きた
  * (「DateTimeOffset化はデモの後」を blocked_by で表現していた)。
  * 依存は着手可能性の話で、優先順位は sort(並び順)で表す。
@@ -459,23 +488,11 @@ async function execTool(name: string, args: any, uiActions: UiAction[], events: 
     case "reorder_cards": {
       const r = reorderTasks(args.ids ?? [], args.status);
       events.add("board");
-      // 指定漏れがあったことはLLMに伝える (黙って末尾に置くと「並べたつもり」とズレる)
-      return {
-        ok: true,
-        ...r,
-        ...(r.appended > 0 ? { note: `${r.appended}件は順番の指定に含まれていなかったので末尾に置きました` } : {}),
-      };
+      return reorderResult(r);
     }
     case "search_cards": {
       const r = searchTasks(args.terms ?? []);
-      // スニペットは「当たった箇所の周辺」でしかないので、判断の核心が範囲外にあることが多い。
-      // 検索は「どのカードか」を絞るまでの道具と位置づけ、中身は query_log で読ませる
-      return {
-        ...r,
-        ...(r.hits.length > 0
-          ? { note: "snippetは当たった箇所の周辺のみ。理由や判断を答えるときは query_log で経緯メモの全文を読むこと (SELECT context FROM cards WHERE id=...)" }
-          : {}),
-      };
+      return searchResult(r);
     }
     case "query_log": {
       // #181: scope は廃止 (cost 側の llm_calls を撤去したので窓口が1つになった)

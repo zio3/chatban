@@ -54,7 +54,7 @@ export const api = {
   updateProject: (
     id: number,
     // #19: custom1Label / custom2Label は**空文字を送るとそのレーンを畳む**
-    // (サーバー側でそこに居たタスクを todo へ戻してから畳む)。undefined は「触らない」
+    // (サーバー側でそこに居たカードを todo へ戻してから畳む)。undefined は「触らない」
     patch: { name?: string; archived?: boolean; custom1Label?: string; custom2Label?: string }
   ) =>
     apiFetch(`/api/projects/${id}`, {
@@ -65,38 +65,38 @@ export const api = {
   deleteProject: (id: number) =>
     apiFetch(`/api/projects/${id}`, { method: "DELETE" }).then((r) => json<{ projects: Project[] }>(r)),
   // #102: 削除はゴミ箱行き。実体を消せるのはゴミ箱からの purge だけ (人間のUI操作)
-  trash: () => apiFetch("/api/trash").then((r) => json<{ tasks: Task[] }>(r)),
-  restoreTask: (id: number) => apiFetch(`/api/tasks/${id}/restore`, { method: "POST" }).then((r) => json<Task>(r)),
+  trash: () => apiFetch("/api/trash").then((r) => json<{ cards: Task[] }>(r)),
+  restoreTask: (id: number) => apiFetch(`/api/cards/${id}/restore`, { method: "POST" }).then((r) => json<Task>(r)),
   purgeTask: (id: number) => apiFetch(`/api/trash/${id}`, { method: "DELETE" }).then((r) => json<{ ok: boolean }>(r)),
   board: () =>
     apiFetch("/api/board").then((r) =>
-      json<{ tasks: Task[]; folded: FoldedTask[]; lanes: CustomLane[]; llmRefused?: boolean; attachments?: boolean }>(r)
+      json<{ cards: Task[]; folded: FoldedTask[]; lanes: CustomLane[]; llmRefused?: boolean; attachments?: boolean }>(r)
     ),
   updateTask: (id: number, patch: Partial<Pick<Task, "title" | "summary" | "sort">> & { status?: TaskStatus }) =>
-    apiFetch(`/api/tasks/${id}`, {
+    apiFetch(`/api/cards/${id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(patch),
     }).then((r) => json<Task>(r)),
-  getTask: (id: number) => apiFetch(`/api/tasks/${id}`).then((r) => json<Task>(r)),
+  getTask: (id: number) => apiFetch(`/api/cards/${id}`).then((r) => json<Task>(r)),
   // #108: 検収の印。この口はRESTにしか無い (エージェントは読めるが書けない)
   // fetch はHTTPエラーでは reject しないので、json() を通さないと呼び出し側の
   // .catch (楽観更新のロールバック) が永久に発火しない。サーバーが409で断っても
   // 画面はチェック済みのまま、という食い違いになる
   setChecked: (id: number, checked: boolean) =>
-    apiFetch(`/api/tasks/${id}/checked`, {
+    apiFetch(`/api/cards/${id}/checked`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ checked }),
     }).then((r) => json<Task>(r)),
   approveTasks: (ids: number[]) =>
-    apiFetch("/api/tasks/approve", {
+    apiFetch("/api/cards/approve", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ ids }),
     }).then((r) => json<{ ok: boolean; note?: string }>(r)),
   chatLog: (taskId?: number) =>
-    apiFetch(`/api/chat/log${taskId != null ? `?taskId=${taskId}` : ""}`).then((r) =>
+    apiFetch(`/api/chat/log${taskId != null ? `?cardId=${taskId}` : ""}`).then((r) =>
       json<{ messages: { role: "user" | "assistant"; content: string; trace?: unknown; usage?: unknown }[] }>(r)
     ),
   taskChat: (
@@ -106,7 +106,7 @@ export const api = {
     signal?: AbortSignal,
     attachments?: { kind: "image" | "pdf"; name: string; dataUrl: string }[]
   ) =>
-    apiFetch(`/api/tasks/${taskId}/chat`, {
+    apiFetch(`/api/cards/${taskId}/chat`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ message, history, attachments }),

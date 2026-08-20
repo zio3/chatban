@@ -21,7 +21,7 @@ export default function TaskDetailPanel({
   lanes = [],
 }: {
   task: Task;
-  /** true: タスクは完了→アーカイブ済み (表示は最後のスナップショット) */
+  /** true: カードは完了→アーカイブ済み (表示は最後のスナップショット) */
   archived?: boolean;
   onClose: () => void;
   onJumpToBoard: (id: number) => void;
@@ -34,8 +34,8 @@ export default function TaskDetailPanel({
   lanes?: CustomLane[];
 }) {
   const status = statusLabel(task.status, lanes);
-  // #111: このタスクを待っている側 (被依存)。データは blocked_by にあるので逆引きで足りる。
-  // 索引に載るのは未完了タスクだけだが、完了したものはもう待っていないので実用上それでよい
+  // #111: このカードを待っている側 (被依存)。データは blocked_by にあるので逆引きで足りる。
+  // 索引に載るのは未完了カードだけだが、完了したものはもう待っていないので実用上それでよい
   const dependents = [...(taskById?.values() ?? [])].filter((t) => t.blockedBy?.includes(task.id));
   const [width, setWidth] = useState(() => {
     const saved = Number(localStorage.getItem("chatban.panelWidth"));
@@ -50,7 +50,7 @@ export default function TaskDetailPanel({
     return () => mq.removeEventListener("change", onChange);
   }, []);
 
-  // タスク専用チャット (#24)。ライフサイクルは共有フック (#23/#28/#29/#30)
+  // カード専用チャット (#24)。ライフサイクルは共有フック (#23/#28/#29/#30)
   const chat = useChatTurn({
     request: (m, h, signal, attachments) => api.taskChat(task.id, m, h, signal, attachments),
     progressTaskId: task.id,
@@ -133,11 +133,11 @@ export default function TaskDetailPanel({
       </header>
 
       <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-4 py-3">
-        {/* #102: ゴミ箱にあるタスク。チャットの返答の #xx リンクからここに辿り着けるので、
+        {/* #102: ゴミ箱にあるカード。チャットの返答の #xx リンクからここに辿り着けるので、
             「元に戻せます」を毎回文章で説明する必要がない (くどくなる) */}
         {task.trashedAt && (
           <div className="flex flex-wrap items-center gap-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800">
-            <span>🗑 このタスクはゴミ箱にあります ({task.trashedAt})</span>
+            <span>🗑 このカードはゴミ箱にあります ({task.trashedAt})</span>
             <button
               data-testid="restore-from-panel"
               onClick={() => api.restoreTask(task.id).then(() => onRestored?.())}
@@ -150,8 +150,8 @@ export default function TaskDetailPanel({
         {archived && !task.trashedAt && (
           <div className="rounded-lg bg-emerald-50 px-3 py-2 text-xs text-emerald-700">
             {task.rejected
-              ? "🚫 このタスクは却下として確定し、アーカイブ済みです (理由は下の割り振り理由・経緯メモ参照)"
-              : "✅ このタスクは完了し、Doneの要約カードにアーカイブされました"}
+              ? "🚫 このカードは却下として確定し、アーカイブ済みです (理由は下の割り振り理由・経緯メモ参照)"
+              : "✅ このカードは完了し、Doneの要約カードにアーカイブされました"}
           </div>
         )}
         <div className="flex flex-wrap items-center gap-2 text-sm">
@@ -163,7 +163,7 @@ export default function TaskDetailPanel({
             <span className="rounded bg-amber-50 px-1.5 py-0.5 text-[10px] text-amber-700">⏰ 期限 {task.due}</span>
           )}
           {task.blockedBy && task.blockedBy.length > 0 && (
-            <span className="text-[10px] text-slate-500" title="このタスクが待っている先">
+            <span className="text-[10px] text-slate-500" title="このカードが待っている先">
               ⛓ 待ち{" "}
               {task.blockedBy.map((id) => (
                 <DepChip
@@ -180,7 +180,7 @@ export default function TaskDetailPanel({
           {/* #111: 逆方向。依存は片方向にしか辿れないと行き止まりになる。
               「これを終わらせると何が動き出すか」は優先順位の判断材料そのもの */}
           {dependents.length > 0 && (
-            <span className="text-[10px] text-slate-500" title="このタスクの完了を待っているタスク">
+            <span className="text-[10px] text-slate-500" title="このカードの完了を待っているカード">
               🔓 これ待ち{" "}
               {dependents.map((d) => (
                 <DepChip key={d.id} id={d.id} dep={d} unresolved tone="waiting" onOpen={onOpenTask} lanes={lanes} />
@@ -216,9 +216,9 @@ export default function TaskDetailPanel({
         <p className="text-xs text-slate-500">作成 {task.createdAt} / 更新 {task.updatedAt}</p>
       </div>
 
-      {/* タスク専用チャット (#24) */}
+      {/* カード専用チャット (#24) */}
       <section className="flex h-1/2 shrink-0 flex-col border-t border-slate-200 bg-slate-50/50">
-        <p className="px-4 pt-2 text-xs font-bold text-slate-500">💬 このタスクのチャット</p>
+        <p className="px-4 pt-2 text-xs font-bold text-slate-500">💬 このカードのチャット</p>
         <div ref={logRef} className="min-h-0 flex-1 space-y-2 overflow-y-auto px-3 py-2">
           {chat.log.length === 0 && (
             <p className="text-xs text-slate-500">

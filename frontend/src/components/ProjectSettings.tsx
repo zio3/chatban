@@ -5,7 +5,7 @@ import { gotoProject, projectIdFromUrl } from "../project";
 
 // #86: プロジェクト管理。プロジェクト = SQLiteファイル1つ。
 // 切り替えるとボード・チャット・前提情報がまとめて入れ替わる。
-// タスクの#IDはプロジェクトごとに1から始まる (#IDは会話の語彙なので短いほうがいい)。
+// カードの#IDはプロジェクトごとに1から始まる (#IDは会話の語彙なので短いほうがいい)。
 export default function ProjectSettings() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -79,7 +79,7 @@ export default function ProjectSettings() {
         <h2 className="text-base font-bold">プロジェクト</h2>
         <p className="mt-1 text-xs text-slate-500">
           プロジェクトごとにSQLiteファイルが分かれています。切り替えると<strong>ボード・チャット・前提情報</strong>
-          がまとめて入れ替わり、タスクの番号は各プロジェクトで <span className="font-mono">#1</span> から始まります。
+          がまとめて入れ替わり、カードの番号は各プロジェクトで <span className="font-mono">#1</span> から始まります。
           コストの記録は全プロジェクト共通です。
         </p>
       </div>
@@ -106,7 +106,7 @@ export default function ProjectSettings() {
                     Review と Done の間に最大2本まで足せます。<b>名前を付けた列だけが現れます。</b>
                     Todo・In Progress と同じ扱いで、ここからDoneへは直接行けません。
                     <br />
-                    名前を消すと列は畳まれ、<b>そこにあったタスクは Todo へ戻ります</b> (消えません)。
+                    名前を消すと列は畳まれ、<b>そこにあったカードは Todo へ戻ります</b> (消えません)。
                   </p>
                   {[0, 1].map((i) => (
                     <input
@@ -178,7 +178,7 @@ export default function ProjectSettings() {
                     </button>
                   )}
                   {/* #107: 削除するほどではないが普段は見せたくないプロジェクト用。
-                      ドロップダウンから消えるだけで実体もタスクも残る */}
+                      ドロップダウンから消えるだけで実体もカードも残る */}
                   {p.id !== projectIdFromUrl() && (
                     <button
                       disabled={busy}

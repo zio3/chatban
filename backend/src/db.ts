@@ -5,7 +5,7 @@ import { decodeUnicodeEscapes } from "./text.js";
 import type { CustomLane, Task, TaskStatus } from "./types.js";
 
 // #179: 担当者・割り振りは機能ごと落とした (個人利用に特化)。
-// tasks.assignee / assign_reason と members / proposals / assignment_history は
+// cards.assignee / assign_reason と members / proposals / assignment_history は
 // **列・テーブルごと削除してある** (store.ts の ensureProjectSchema)。
 // 読まないだけにして残すと、SQL窓口 (query_log) を広げた誰かが集計に使い、
 // 廃止したはずの軸が復活する — 認証 (#180) で逃げ道を残さないのと同じ判断
@@ -18,13 +18,13 @@ export function listTasks(includeArchived = false): Task[] {
   // sort未設定の既存行はid順に混ざる (COALESCEでidを暫定sortとして扱う)
   // #102: ゴミ箱(trashed_at)は常に除外。復元できる形にしただけで、見え方は削除と同じ
   const where = includeArchived ? "WHERE trashed_at IS NULL" : "WHERE archived = 0 AND trashed_at IS NULL";
-  return (db().prepare(`SELECT * FROM tasks ${where} ORDER BY COALESCE(sort, id), id`).all() as any[]).map(rowToTask);
+  return (db().prepare(`SELECT * FROM cards ${where} ORDER BY COALESCE(sort, id), id`).all() as any[]).map(rowToTask);
 }
 
 /** ゴミ箱の中身 (新しい順)。UIの復元導線とチャットの「戻して」で使う */
 export function listTrashedTasks(): Task[] {
   return (
-    db().prepare("SELECT * FROM tasks WHERE trashed_at IS NOT NULL ORDER BY trashed_at DESC, id DESC").all() as any[]
+    db().prepare("SELECT * FROM cards WHERE trashed_at IS NOT NULL ORDER BY trashed_at DESC, id DESC").all() as any[]
   ).map(rowToTask);
 }
 
@@ -59,12 +59,12 @@ export function createTask(title: string, status: TaskStatus = "todo"): Task {
     log("api", `新規作成で status=done を指定されたので review にしました: ${title}`);
     status = "review";
   }
-  const info = db().prepare("INSERT INTO tasks (title, status) VALUES (?, ?)").run(title, status);
+  const info = db().prepare("INSERT INTO cards (title, status) VALUES (?, ?)").run(title, status);
   return getTask(Number(info.lastInsertRowid))!;
 }
 
 export function getTask(id: number): Task | undefined {
-  const r = db().prepare("SELECT * FROM tasks WHERE id = ?").get(id) as any;
+  const r = db().prepare("SELECT * FROM cards WHERE id = ?").get(id) as any;
   return r ? rowToTask(r) : undefined;
 }
 
@@ -75,13 +75,13 @@ export type TaskPatch = Partial<
 /** Doneへ入ってよい状態か。approveChecked が通す条件そのもの。
  *
  * PR #1 で「検収APIはサーバー側で条件を確かめる」ようにしたが、条件を持っていたのは
- * approveChecked だけで、PATCH /api/tasks/:id に status:"done" を投げれば素通りしていた
+ * approveChecked だけで、PATCH /api/cards/:id に status:"done" を投げれば素通りしていた
  * (自動レビュー指摘)。フロントは Board.tsx の handleDragEnd で Done列へのD&Dを禁止しているが、
  * **その禁止がクライアント側にしか無い** — PR #1 で塞いだのとまったく同じ形の穴。
  *
  * そこで「検収APIだけが厳しい」のをやめ、**Doneに入れる条件そのもの**を updateTasks の
  * 不変条件にする。approveChecked が通すものはこの条件を満たすので、迂回フラグは要らない。
- * checked_at を立てられるのは REST /api/tasks/:id/checked だけ (=人間のUI操作) なので、
+ * checked_at を立てられるのは REST /api/cards/:id/checked だけ (=人間のUI操作) なので、
  * 入口がRESTでもMCPでもチャットでも「人間が検収したものしかDoneに無い」が成立する。
  *
  * 「プロンプトは漏れるが、経路が無いことは漏れない」— 契約の文言ではなくコードで持つ。
@@ -89,7 +89,7 @@ export type TaskPatch = Partial<
  * DONE_GATE_RULE は、断ったときに返す説明。REST・チャット・MCPで同じ文言を使う —
  * 「なぜ動かなかったのか」を入口ごとに違う言葉で返すと、別のルールがあるように読める */
 /** 実在する列。TypeScriptの TaskStatus は実行時には消えるので、外から来た値は必ずここで確かめる。
- * "banana" のような値がそのまま保存されると、ボードは4列でしか抽出しないのでタスクが
+ * "banana" のような値がそのまま保存されると、ボードは4列でしか抽出しないのでカードが
  * どの列にも出なくなり、詳細を開くと STATUS_LABELS[status] が undefined で画面が落ちる
  * (自動レビュー指摘)。「消えた」ように見えて実在する、が一番たちが悪い */
 export const TASK_STATUSES = ["todo", "inprogress", "review", "custom1", "custom2", "done"] as const;
@@ -100,7 +100,7 @@ export function isTaskStatus(v: unknown): v is TaskStatus {
 /** #19: **そのプロジェクトで実際に置ける列か。**TASK_STATUSES は「値として在る」だけで、
  * custom1 / custom2 は表示名を付けたプロジェクトにしか存在しない。
  *
- * 有効でないレーンを通すと、ボードはそのレーンの列を描かないので**タスクがどこにも出なくなる** —
+ * 有効でないレーンを通すと、ボードはそのレーンの列を描かないので**カードがどこにも出なくなる** —
  * isTaskStatus の注記にある「消えたように見えて実在する」がそのまま起きる。
  * 契約 (ツールの enum) 側でも有効なレーンしか出さないが、**選べないことと保存できないことは別**なので
  * 書き込みの手前にも同じ判定を置く。isTaskStatus と同じで、DBもHTTPも要らない純粋関数 */
@@ -110,14 +110,14 @@ export function isUsableStatus(v: unknown, lanes: CustomLane[]): v is TaskStatus
   return true;
 }
 
-/** #19: レーンを畳むときに、そこに居たタスクを todo へ戻す。戻した件数を返す。
+/** #19: レーンを畳むときに、そこに居たカードを todo へ戻す。戻した件数を返す。
  *
  * **畳むより先に必ず呼ぶ。**表示名を消すとボードはその列を描かなくなるので、中身を置いたままだと
- * 「保存されているのにどの列にも出ない」タスクができる — isTaskStatus の注記にある
+ * 「保存されているのにどの列にも出ない」カードができる — isTaskStatus の注記にある
  * 「消えたように見えて実在する」そのもの。削除ではなく **todo へ戻す** のは、
  * どこへ行ったか分かる場所が todo だけだから (#102 と同じで、取り返しのつく側に倒す) */
 export function evacuateLane(key: "custom1" | "custom2"): number {
-  return db().prepare("UPDATE tasks SET status = 'todo' WHERE status = ?").run(key).changes;
+  return db().prepare("UPDATE cards SET status = 'todo' WHERE status = ?").run(key).changes;
 }
 
 export const DONE_GATE_RULE =
@@ -149,7 +149,7 @@ export const DUE_FORMAT_RULE = "期限は YYYY-MM-DD (実在する日付) で渡
  * archived は Task 型に出していない (getTask はアーカイブ済みも返すが、UIは要約カード経由で読む)。
  * 「確定してよいか」「消してよいか」の判定は隠れている列も見る必要があるので、ここに1本だけ置く */
 export function isArchived(id: number): boolean {
-  return !!(db().prepare("SELECT archived FROM tasks WHERE id = ?").get(id) as { archived: number } | undefined)
+  return !!(db().prepare("SELECT archived FROM cards WHERE id = ?").get(id) as { archived: number } | undefined)
     ?.archived;
 }
 
@@ -157,7 +157,7 @@ export function mayEnterDone(cur: Pick<Task, "status" | "checkedAt" | "trashedAt
   return cur.status === "review" && !!cur.checkedAt && !cur.trashedAt;
 }
 
-/** 複数タスクの一括更新 (#60)。完了遷移はまとめて1回だけ通知する (要約再生成のバッチ化)。
+/** 複数カードの一括更新 (#60)。完了遷移はまとめて1回だけ通知する (要約再生成のバッチ化)。
  * 単一更新もこの関数の長さ1ケースとして扱う — Doneへ入るルートはここ1本 */
 export function updateTasks(patches: { id: number; patch: TaskPatch }[]): (Task | undefined)[] {
   const completed: number[] = [];
@@ -195,7 +195,7 @@ export function updateTasks(patches: { id: number; patch: TaskPatch }[]): (Task 
     // 印を消せば、差し戻したものは必ずもう一度チェックを付け直すことになる
     const leavingDone = cur.status === "done" && next.status !== "done";
     db().prepare(
-      "UPDATE tasks SET title = ?, status = ?, sort = ?, context = ?, summary = ?, due = ?, blocked_by = ?, rejected = ?, context_version = context_version + ?, checked_at = ?, done_at = ?, updated_at = datetime('now', 'localtime') WHERE id = ?"
+      "UPDATE cards SET title = ?, status = ?, sort = ?, context = ?, summary = ?, due = ?, blocked_by = ?, rejected = ?, context_version = context_version + ?, checked_at = ?, done_at = ?, updated_at = datetime('now', 'localtime') WHERE id = ?"
     ).run(
       next.title,
       next.status,
@@ -223,9 +223,9 @@ export function updateTasks(patches: { id: number; patch: TaskPatch }[]): (Task 
 
 /** 検収の確定 (Review + 検収済み → Done)。Doneへ至る唯一の扉なので、条件はサーバーが持つ。
  *
- * 以前は POST /api/tasks/approve が ids をそのまま done にしていて、条件の判定は
+ * 以前は POST /api/cards/approve が ids をそのまま done にしていて、条件の判定は
  * フロント(App.tsx の commitApproved が status==="review" && checkedAt で絞る)にしか無かった。
- * 実測で、Todo のタスクも・Review未検収も・**ゴミ箱の中のタスクまで** done になった。
+ * 実測で、Todo のカードも・Review未検収も・**ゴミ箱の中のカードまで** done になった。
  *
  * docs/security.md には「Doneへ至る経路は人間のUI操作ただ1本」と書いてあるが、
  * その1本が無条件だった。エージェントはこのAPIを持たないので「AIは通れない」は
@@ -241,7 +241,7 @@ export function approveChecked(ids: number[]): {
 } {
   const skipped: { id: number; reason: string }[] = [];
   const eligible: number[] = [];
-  // 同じIDが2回入っていたら1回として扱う。判定も更新も2度走り、updated に同じタスクが
+  // 同じIDが2回入っていたら1回として扱う。判定も更新も2度走り、updated に同じカードが
   // 2件載って「2件確定しました」に見えていた (#157)。押した数と通った数を突き合わせられる
   // ようにしてある (#120/#123) のに、その数字自体が水増しされては意味がない
   ids = [...new Set(ids)];
@@ -263,10 +263,10 @@ export function updateTask(id: number, patch: TaskPatch): Task | undefined {
 }
 
 /** #102: 削除はゴミ箱行き (論理削除)。
- * 自然言語UIでは解釈ミスが必ず起きる。「消せます?」が delete_tasks を呼んで実データが消えた事故を受け、
+ * 自然言語UIでは解釈ミスが必ず起きる。「消せます?」が delete_cards を呼んで実データが消えた事故を受け、
  * 「間違えないようにする」のではなく「間違えても取り返しがつく」形に変えた。
  * プロンプトの確認ルールは漏れるが、消えていないという事実は漏れない (#69 done封鎖と同じ考え方) */
-/** #200: **Done列の1段目 (バラバラ)。**検収した直後のタスクは `status='done'` のまま
+/** #200: **Done列の1段目 (バラバラ)。**検収した直後のカードは `status='done'` のまま
  * `archived=0` で、個別カードとして列に並ぶ。「もう一回確認したい」がここで済む。
  *
  * 次にDoneボタンを押したとき、この顔ぶれがまとめてコンテナへ入る (2段目)。
@@ -276,7 +276,7 @@ export function updateTask(id: number, patch: TaskPatch): Task | undefined {
 export function listLooseDoneIds(): number[] {
   return (
     db()
-      .prepare("SELECT id FROM tasks WHERE status = 'done' AND archived = 0 AND trashed_at IS NULL ORDER BY id")
+      .prepare("SELECT id FROM cards WHERE status = 'done' AND archived = 0 AND trashed_at IS NULL ORDER BY id")
       .all() as { id: number }[]
   ).map((r) => r.id);
 }
@@ -286,12 +286,12 @@ export function trashTask(id: number): boolean {
     db()
       .prepare(
         // アーカイブ済み (Doneへ確定して要約カードに畳まれたもの) は対象外。
-        // 要約カードの task_ids は更新されないので、消すとカードに存在しないIDが残り、
+        // 要約カードの card_ids は更新されないので、消すとカードに存在しないIDが残り、
         // 開くと404になる — 検収済み成果の監査元が壊れる (自動レビュー指摘)。
-        // ボードから見えないタスクをチャット/MCPがIDで名指しできてしまうのが入口だった
+        // ボードから見えないカードをチャット/MCPがIDで名指しできてしまうのが入口だった
         //
         // #161: 検収の印はここでは触らない。落とすのは復元のとき (restoreTask を見る)
-        "UPDATE tasks SET trashed_at = datetime('now', 'localtime') WHERE id = ? AND trashed_at IS NULL AND archived = 0"
+        "UPDATE cards SET trashed_at = datetime('now', 'localtime') WHERE id = ? AND trashed_at IS NULL AND archived = 0"
       )
       .run(id).changes > 0
   );
@@ -301,7 +301,7 @@ export function trashTask(id: number): boolean {
  *
  * trashed_at を付け外しするだけだったので、「検収済み → ゴミ箱 → 復元」で
  * **古い checked_at が生き返り**、人間の確認を一度も挟まずに mayEnterDone が再び true になった。
- * delete_tasks / restore_tasks は **AIが呼べるMCPツール**なので、REST専用にしてある setChecked を
+ * delete_cards / restore_cards は **AIが呼べるMCPツール**なので、REST専用にしてある setChecked を
  * 経路として迂回できていた (「プロンプトは漏れるが、経路が無いことは漏れない」に反する)。
  * updateTasks が backToWork / leavingDone で印を消しているのと同じ理屈 —
  * 状態が変われば前の確認は根拠にならない。
@@ -315,19 +315,19 @@ export function trashTask(id: number): boolean {
  * 条件に trashed_at IS NOT NULL を付けているので、ゴミ箱に無いものを restore しても印は消えない。
  *
  * **戻すのは「実際に戻したとき」だけ。**以前は changes を見ずに必ず getTask を返していたので、
- * ゴミ箱に無い生きたタスクのIDを渡しても成功として扱われ、呼び出し側が
+ * ゴミ箱に無い生きたカードのIDを渡しても成功として扱われ、呼び出し側が
  * 「復元しました」と報告していた (Codexレビュー指摘)。**やっていないことを報告しない** —
  * 0件更新は undefined を返し、入口側 (REST 404 / restored:false) に判断させる */
 export function restoreTask(id: number): Task | undefined {
   const changed = db()
-    .prepare("UPDATE tasks SET trashed_at = NULL, checked_at = NULL WHERE id = ? AND trashed_at IS NOT NULL")
+    .prepare("UPDATE cards SET trashed_at = NULL, checked_at = NULL WHERE id = ? AND trashed_at IS NOT NULL")
     .run(id).changes;
   return changed > 0 ? getTask(id) : undefined;
 }
 
 /** 実体を消す。人間のUI操作からのみ通す (チャット・MCPからは呼ばない)。
  *
- * **ゴミ箱にあるものだけ。** id しか見ていなかったので、ボード上の生タスクのIDを
+ * **ゴミ箱にあるものだけ。** id しか見ていなかったので、ボード上の生カードのIDを
  * 直接投げると、ゴミ箱を経由せず実体が消えた (自動レビュー指摘)。
  * #102 で「間違えないようにするのではなく、間違えても取り返しがつく形にする」と決めたのに、
  * 取り返しのつかない口が条件なしで開いていた — 一段目(ゴミ箱)を通っていないものを
@@ -336,7 +336,7 @@ export function restoreTask(id: number): Task | undefined {
  * 復元できる状態を必ず一度経由させる。条件はコードで持つ (UIがゴミ箱画面からしか
  * 呼ばない、に依存しない — #57/#69 と同じ形) */
 export function purgeTask(id: number): boolean {
-  return db().prepare("DELETE FROM tasks WHERE id = ? AND trashed_at IS NOT NULL").run(id).changes > 0;
+  return db().prepare("DELETE FROM cards WHERE id = ? AND trashed_at IS NOT NULL").run(id).changes > 0;
 }
 
 export interface SummaryElement {
@@ -349,9 +349,9 @@ export interface SummaryElement {
  * ゴミ箱に入れられたもの・Doneから戻されたもの・既に畳んだものが素通りしない */
 export function archiveTasks(taskIds: number[]): { id: number; title: string }[] {
   const claim = db().prepare(
-    "UPDATE tasks SET archived = 1 WHERE id = ? AND status = 'done' AND archived = 0 AND trashed_at IS NULL"
+    "UPDATE cards SET archived = 1 WHERE id = ? AND status = 'done' AND archived = 0 AND trashed_at IS NULL"
   );
-  const read = db().prepare("SELECT id, title FROM tasks WHERE id = ?");
+  const read = db().prepare("SELECT id, title FROM cards WHERE id = ?");
   return db().transaction(() =>
     taskIds
       .filter((id) => claim.run(id).changes > 0)
@@ -359,7 +359,7 @@ export function archiveTasks(taskIds: number[]): { id: number; title: string }[]
   )();
 }
 
-/** doneから戻したタスクを板へ返す (畳んであれば外す)。
+/** doneから戻したカードを板へ返す (畳んであれば外す)。
  *
  * **条件を付けないのは意図的。**畳む側 (archiveTasks) は「畳んでよいものか」を書く時点で
  * 確かめる必要があるが、こちらは逆で、**必ず板へ返さないといけない**。条件を付けると
@@ -367,7 +367,7 @@ export function archiveTasks(taskIds: number[]): { id: number; title: string }[]
  * 安全のつもりで足して、壊れた行を復旧できなくしたのと同じ形になる。
  * 対称にすること自体は目的ではない (自動レビュー指摘への回答) */
 export function unarchiveTask(taskId: number): void {
-  db().prepare("UPDATE tasks SET archived = 0 WHERE id = ?").run(taskId);
+  db().prepare("UPDATE cards SET archived = 0 WHERE id = ?").run(taskId);
 }
 
 
@@ -385,7 +385,7 @@ export function getProjectContextRow(): { text: string; updatedAt: string | null
 }
 
 /** #115: 前提情報は全文上書き。エージェントからは版を添えないと書けない。
- * タスクの経緯メモ(#112)と同じ形だが、こちらは全員の前提でシステムプロンプトに常時載るため、
+ * カードの経緯メモ(#112)と同じ形だが、こちらは全員の前提でシステムプロンプトに常時載るため、
  * 読まずに書かれると運用ルールごと消える。人間のUI経路は version を省略して従来どおり上書きできる */
 export function setProjectContext(rawText: string, version?: number): { ok: boolean; current?: ReturnType<typeof getProjectContextRow> } {
   // 実際にここが壊れた: project 9 の前提情報が全文 \uXXXX エスケープで保存されていて、
@@ -427,7 +427,7 @@ export function saveChatMessage(
   // #126 → #180: 発言者 (speaker / speaker_email) も記録していたが、個人利用に特化して
   // 「誰が言ったか」が常に持ち主ひとりになったので列ごと落とした
   db()
-    .prepare("INSERT INTO chat_messages (role, content, trace, usage, task_id) VALUES (?, ?, ?, ?, ?)")
+    .prepare("INSERT INTO chat_messages (role, content, trace, usage, card_id) VALUES (?, ?, ?, ?, ?)")
     .run(
       role,
       content,
@@ -437,7 +437,7 @@ export function saveChatMessage(
     );
 }
 
-/** taskId未指定=メインチャット(task_id IS NULL)、指定=そのタスク専用の会話 */
+/** taskId未指定=メインチャット(card_id IS NULL)、指定=そのカード専用の会話 */
 export function listChatMessages(limit = 50, taskId?: number): {
   role: "user" | "assistant";
   content: string;
@@ -445,7 +445,7 @@ export function listChatMessages(limit = 50, taskId?: number): {
   usage: unknown;
   createdAt: string;
 }[] {
-  const where = taskId != null ? "WHERE task_id = ?" : "WHERE task_id IS NULL";
+  const where = taskId != null ? "WHERE card_id = ?" : "WHERE card_id IS NULL";
   const params = taskId != null ? [taskId, limit] : [limit];
   const rows = db()
     .prepare(`SELECT * FROM (SELECT * FROM chat_messages ${where} ORDER BY id DESC LIMIT ?) ORDER BY id`)
@@ -477,7 +477,7 @@ export function recentActivity(limit = 15) {
   const tasks = (
     db()
       .prepare(
-        "SELECT id, title, status, rejected, updated_at FROM tasks WHERE trashed_at IS NULL ORDER BY updated_at DESC, id DESC LIMIT ?"
+        "SELECT id, title, status, rejected, updated_at FROM cards WHERE trashed_at IS NULL ORDER BY updated_at DESC, id DESC LIMIT ?"
       )
       .all(limit) as any[]
   ).map((r) => ({
@@ -497,7 +497,7 @@ export function recentActivity(limit = 15) {
 // 並びが表現できないため。ツール契約も status + ids だけで済み、スキーマの固定費が小さい。
 //
 // 代わりにLLMが列を作る以上の事故は必ず起きるので、コード側で正規化する:
-//   - 書き忘れたタスクは元の順で末尾に付ける (「並べ替えたら消えた」を作らない)
+//   - 書き忘れたカードは元の順で末尾に付ける (「並べ替えたら消えた」を作らない)
 //   - 重複は最初の1回だけ
 //   - 対象列に実在しないIDは無視する
 // 表示設定ではなく操作なので「いまソート中」という画面の隠れ状態は生まれず、あとから手で直せる。
@@ -507,7 +507,7 @@ export function reorderTasks(
 ): { ordered: number; appended: number; ignored?: number[] } {
   // 母集団はサーバー側で決める。listTasks() が archived=0 AND trashed_at IS NULL なので、
   // アーカイブ済み・ゴミ箱は最初から対象外 — query_log の説明で読み手に教えている
-  // 「生きているタスクはこの条件」と同じ母集団を、書き込み側は実装で強制する。
+  // 「生きているカードはこの条件」と同じ母集団を、書き込み側は実装で強制する。
   // 読みは教育で守り、書きは実装で守る (zio)
   const targets = listTasks().filter((t) => t.status === status);
   const byId = new Map(targets.map((t) => [t.id, t]));
@@ -528,7 +528,7 @@ export function reorderTasks(
   }
   const appended = targets.filter((t) => !seen.has(t.id)); // 指定漏れは元の順のまま末尾へ
   const final = [...ordered, ...appended];
-  const stmt = db().prepare("UPDATE tasks SET sort = ? WHERE id = ?");
+  const stmt = db().prepare("UPDATE cards SET sort = ? WHERE id = ?");
   db().transaction(() => final.forEach((t, i) => stmt.run(i + 1, t.id)))();
   return { ordered: ordered.length, appended: appended.length, ...(ignored.length ? { ignored } : {}) };
 }
@@ -543,7 +543,7 @@ export function reorderTasks(
 /** #176: **絞り込みの引数は持たない。**
  *
  * 複数語をORで引くのは表記ゆれを展開するためで、それ自体は正しい。問題は本文(経緯メモ)まで
- * 見ることで、**語がかすっただけのタスクが混ざる**こと。実例 (2026-08-15): 「記事 / スクショ /
+ * 見ることで、**語がかすっただけのカードが混ざる**こと。実例 (2026-08-15): 「記事 / スクショ /
  * Zenn / 提出」で引いたら #130(ダークモードの検討) や #103(検索機能の実装) が返った —
  * どちらも context に「提出」の2文字があっただけ。候補10件を読み直すことになった。
  *
@@ -563,7 +563,7 @@ export function searchTasks(terms: string[], limit = 10) {
   if (words.length === 0) return { hits: [] };
   const rows = db()
     .prepare(
-      "SELECT id, title, status, summary, context, archived FROM tasks WHERE trashed_at IS NULL"
+      "SELECT id, title, status, summary, context, archived FROM cards WHERE trashed_at IS NULL"
     )
     .all() as any[];
 
@@ -592,7 +592,7 @@ export function searchTasks(terms: string[], limit = 10) {
   // #106追補: 会話ログも同じ語で引く。UIを作らず「あんな話してたっけ?」をAIに拾わせる。
   // チャットは揮発させる方針(#72)なので常時プロンプトには載せない — 聞かれたときだけ掘る
   const chatRows = db()
-    .prepare("SELECT id, role, content, task_id, created_at FROM chat_messages ORDER BY id DESC")
+    .prepare("SELECT id, role, content, card_id, created_at FROM chat_messages ORDER BY id DESC")
     .all() as any[];
   const chatHits = chatRows
     .map((r) => {
@@ -603,7 +603,7 @@ export function searchTasks(terms: string[], limit = 10) {
       return {
         role: r.role,
         at: r.created_at,
-        ...(r.task_id ? { taskId: r.task_id } : {}),
+        ...(r.card_id ? { taskId: r.card_id } : {}),
         matched,
         snippet: String(r.content).slice(Math.max(0, at - 60), at + 140).replace(/\s+/g, " "),
       };
@@ -645,16 +645,16 @@ export function searchTasks(terms: string[], limit = 10) {
  * **ビューはテーブルと同じ扱い** (判定を type IN ('table','view') から作っている)。
  * ただし**ビューを載せることは、そのビューが中で参照しているテーブルを載せることと同じ**。
  * 名前の照合はSQLの文字列しか見ないし、EXPLAIN も展開後を見るので、定義の中身までは辿らない。
- * いまの live_tasks / done_tasks はどちらも tasks しか見ておらず、その tasks も載っているので実害はない。
+ * いまの live_cards / done_cards はどちらも cards しか見ておらず、その cards も載っているので実害はない。
  * 機密を参照するビューを「列を絞ってあるから安全」と足すと、そこから読めるようになる —
  * ここは見える名前の一覧ではなく、**到達できる範囲の宣言**として読むこと */
 // #181: scope が2つ (cost / audit) だったが、cost 側の llm_calls / model_prices を撤去したので
 // **窓口は1つになった。**接続中のプロジェクトの記録だけを引く。
-// live_tasks / done_tasks はビュー (どちらも tasks を見ている)
+// live_cards / done_cards はビュー (どちらも cards を見ている)
 export const PUBLIC_TABLES: readonly string[] = [
-  "tasks",
-  "live_tasks",
-  "done_tasks",
+  "cards",
+  "live_cards",
+  "done_cards",
   "chat_messages",
   "project_context",
 ];
@@ -723,16 +723,16 @@ function runReadonly(
  * 「エラーが出る間違いは事後注入で治る。エラーが出ない間違いは事前に教えるしかない」
  * (外部エージェントの整理)。ただし事前に教えても守られないものがあるので、
  * せめて結果と一緒に言う。実際にどちらも実データで踏まれている:
- *   - tasks 直引き → ゴミ箱・アーカイブ済みが混ざる (live_tasks を作った理由)
- *   - created_at で完了を数える → 登録日を数えてしまう (done_tasks を作った理由) */
-function silentTrap(sql: string): { note?: string } {
+ *   - cards 直引き → ゴミ箱・アーカイブ済みが混ざる (live_cards を作った理由)
+ *   - created_at で完了を数える → 登録日を数えてしまう (done_cards を作った理由) */
+export function silentTrap(sql: string): { note?: string } {
   const notes: string[] = [];
   const s = sql.toLowerCase();
-  if (/\bfrom\s+tasks\b/.test(s) && !/trashed_at|archived/.test(s)) {
-    notes.push("tasks を直に引いています。ゴミ箱行き・アーカイブ済みも含まれるので、生きているタスクだけなら live_tasks を使ってください");
+  if (/\bfrom\s+cards\b/.test(s) && !/trashed_at|archived/.test(s)) {
+    notes.push("cards を直に引いています。ゴミ箱行き・アーカイブ済みも含まれるので、生きているカードだけなら live_cards を使ってください");
   }
-  if (/count\s*\(|group\s+by/.test(s) && /date\s*\(\s*created_at/.test(s) && /\bfrom\s+tasks\b/.test(s)) {
-    notes.push("created_at は登録日です。完了の集計なら done_at (または done_tasks.done_day) を使ってください");
+  if (/count\s*\(|group\s+by/.test(s) && /date\s*\(\s*created_at/.test(s) && /\bfrom\s+cards\b/.test(s)) {
+    notes.push("created_at は登録日です。完了の集計なら done_at (または done_cards.done_day) を使ってください");
   }
   return notes.length > 0 ? { note: notes.join(" / ") } : {};
 }
@@ -766,7 +766,7 @@ export function queryLogHelp(message: string): Record<string, unknown> {
         ])
       );
       help.hint =
-        "生きているタスクは live_tasks、完了したものは done_tasks を使うと、条件を書かなくて済みます。ゴミ箱やアーカイブを見たいときだけ tasks を直に引いてください";
+        "生きているカードは live_cards、完了したものは done_cards を使うと、条件を書かなくて済みます。ゴミ箱やアーカイブを見たいときだけ cards を直に引いてください";
     } else if (/no such function/i.test(message)) {
       help.dialect = {
         note: "SQLite には date_trunc / INTERVAL / NOW() / DATEADD がありません",
@@ -801,12 +801,12 @@ export function setChecked(id: number, checked: boolean): { task?: Task; error?:
   // 確定まで通せた (自動レビュー指摘)。mayEnterDone が「Review + 印」しか見ないぶん、
   // 印を付ける側で順序を守らせる必要がある。外すのはいつでもよい (印を消す方向は安全)
   if (checked) {
-    if (cur.trashedAt) return { error: "ゴミ箱にあるタスクには検収チェックを付けられません" };
+    if (cur.trashedAt) return { error: "ゴミ箱にあるカードには検収チェックを付けられません" };
     if (cur.status !== "review")
-      return { error: `検収チェックを付けられるのは Review 列のタスクだけです (いまは ${cur.status})。${DONE_GATE_RULE}` };
+      return { error: `検収チェックを付けられるのは Review 列のカードだけです (いまは ${cur.status})。${DONE_GATE_RULE}` };
   }
   db()
-    .prepare("UPDATE tasks SET checked_at = ? WHERE id = ?")
+    .prepare("UPDATE cards SET checked_at = ? WHERE id = ?")
     .run(checked ? new Date().toLocaleString("sv-SE") : null, id);
   return { task: getTask(id) };
 }

@@ -12,12 +12,12 @@ import {
 import { cleanAgentText } from "./text.js";
 import type { TaskStatus } from "./types.js";
 
-// #114: エージェント(内蔵チャット / MCP越しの外部エージェント)からのタスク書き込みは、
+// #114: エージェント(内蔵チャット / MCP越しの外部エージェント)からのカード書き込みは、
 // 必ずこのモジュールを通す。
 //
 // なぜ集約したか: ガードをチャット側にだけ書いていたため、MCP経由では素通りしていた。
 // 実際に「AIが自主的にDoneへ移動した」事故が起きている(#114)。同じズレは3回起きた —
-// #92(MCPのreasonに説明が無く進捗を書き込んで汚した) / #108(create_tasksにdueが無く2回叩いた) /
+// #92(MCPのreasonに説明が無く進捗を書き込んで汚した) / #108(create_cardsにdueが無く2回叩いた) /
 // #114(done封鎖が無くDoneへ直行できた)。個別に直すのではなく入口を1本にする。
 //
 // 「ルートは共通で強制、判断基準だけプロジェクト依存」(zio方針):
@@ -96,7 +96,7 @@ function acceptableDue(due: string | null | undefined): { due?: string | null; b
   return isDueDate(due) ? { due, bad: false } : { bad: true };
 }
 
-export function createTasksAsAgent(tasks: AgentTaskInput[]): {
+export function createTasksAsAgent(cards: AgentTaskInput[]): {
   created: unknown[];
   note?: string;
   /** 期限の形が違って捨てたもの (タイトルで返す。作成時点ではIDを知らせても意味が薄い) */
@@ -104,7 +104,7 @@ export function createTasksAsAgent(tasks: AgentTaskInput[]): {
 } {
   let anyCoerced = false;
   const badDue: string[] = [];
-  const created = tasks.map((t) => {
+  const created = cards.map((t) => {
     const { status, coerced } = coerceStatus(t.status);
     if (coerced) anyCoerced = true;
     const title = cleanAgentText(t.title);
@@ -173,9 +173,9 @@ export function restoreTasksAsAgent(ids: number[]): {
 
 /** 復元したときに必ず言うこと。ツールの説明 (RESTORE_DESCRIPTION) と応答の両方で使う */
 export const RESTORE_CHECKED_NOTE =
-  "戻したタスクの検収の印は外れています (ゴミ箱を通る間に人間の確認は挟まっていないため)。Doneへ確定するには、人間がもう一度ボードで検収チェックを付ける必要があります";
+  "戻したカードの検収の印は外れています (ゴミ箱を通る間に人間の確認は挟まっていないため)。Doneへ確定するには、人間がもう一度ボードで検収チェックを付ける必要があります";
 
-export const RESTORE_DESCRIPTION = `ゴミ箱に入れたタスクを元に戻す(複数可)。**戻すと検収の印は外れる** — ${DONE_GATE_RULE}。戻せなかったIDは notRestored で名指しで返る`;
+export const RESTORE_DESCRIPTION = `ゴミ箱に入れたカードを元に戻す(複数可)。**戻すと検収の印は外れる** — ${DONE_GATE_RULE}。戻せなかったIDは notRestored で名指しで返る`;
 
 export function updateTasksAsAgent(updates: AgentTaskUpdate[]): {
   ok: boolean;
@@ -186,7 +186,7 @@ export function updateTasksAsAgent(updates: AgentTaskUpdate[]): {
   coerced: number[];
   conflicts?: ContextConflict[];
   notFound?: number[];
-  /** #153: 期限の形が違って、その指定だけ捨てたタスクID */
+  /** #153: 期限の形が違って、その指定だけ捨てたカードID */
   badDue?: number[];
   note?: string;
 } {

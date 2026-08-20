@@ -73,7 +73,7 @@ export function DepChip({
   /** #19: 依存先が任意レーンに居るとき、吹き出しに表示名を出すため。
    * 省略すると `custom1` という生の値が出る (落ちはしないが人に見せる値ではない) */
   lanes?: CustomLane[];
-  /** blocking=このタスクが待っている先 / waiting=このタスクを待っている側 (#111) */
+  /** blocking=このカードが待っている先 / waiting=このカードを待っている側 (#111) */
   tone?: "blocking" | "waiting";
 }) {
   const label = dep
@@ -119,7 +119,7 @@ function TaskCard({
   /** Review列のみ: 検収OKマーク状態 (#57)。Doneへの確定は列ヘッダーの一括ボタンで行う */
   approved?: boolean;
   onToggleApproved?: (id: number) => void;
-  /** 未完了タスクIDの集合 (#41: 依存バッジの未解決判定用) */
+  /** 未完了カードIDの集合 (#41: 依存バッジの未解決判定用) */
   openIds?: Set<number>;
   /** 依存先の中身を引くための索引 (#111)。アーカイブ済みは載らない */
   taskById?: Map<number, Task>;
@@ -238,7 +238,7 @@ function SortableCard({
   );
 }
 
-/** 要約要素内の #NN をクリック可能にする (#59: アーカイブ済みタスクの詳細も開ける) */
+/** 要約要素内の #NN をクリック可能にする (#59: アーカイブ済みカードの詳細も開ける) */
 function renderRefs(text: string, onOpen: (id: number) => void) {
   return text.split(/(#\d+)/g).map((p, i) => {
     const m = p.match(/^#(\d+)$/);
@@ -255,7 +255,7 @@ function renderRefs(text: string, onOpen: (id: number) => void) {
   });
 }
 
-// #200: Done列の2段目。直近24時間に畳んだタスクをまとめた**1個だけ**の箱。
+// #200: Done列の2段目。直近24時間に畳んだカードをまとめた**1個だけ**の箱。
 // サーバーのメモリ上にしか無いので、再起動すると消える (中身は archived=1 でDBに残り、検索で引ける)
 function FoldedBox({ folded, onOpenTask }: { folded: FoldedTask[]; onOpenTask: (id: number) => void }) {
   const [open, setOpen] = useState(false);
@@ -306,7 +306,7 @@ function Column({
   approvedIds?: Set<number>;
   onToggleApproved?: (id: number) => void;
   onCommitApproved?: () => void;
-  /** 未完了タスクIDの集合 (#41: 依存バッジの未解決判定用) */
+  /** 未完了カードIDの集合 (#41: 依存バッジの未解決判定用) */
   openIds?: Set<number>;
   /** 依存先の中身を引くための索引 (#111)。アーカイブ済みは載らない */
   taskById?: Map<number, Task>;
@@ -322,7 +322,7 @@ function Column({
       title={col.key === "done" ? "Doneへは検収ボタンかチャットの承認からのみ移動できます" : undefined}
       className={`flex min-h-40 flex-col gap-2 rounded-xl border-t-4 ${col.accent} bg-slate-50 p-2 ${isOver ? "ring-2 ring-indigo-400" : ""}`}
     >
-      {/* #71: Done列は生タスクが常駐しない(検収→即アーカイブ)ので、バッジは蒸留済み総数を出す */}
+      {/* #71: Done列は生カードが常駐しない(検収→即アーカイブ)ので、バッジは蒸留済み総数を出す */}
       <div className="flex items-center justify-between px-1">
         <h2 className="text-xs font-bold uppercase tracking-wide text-slate-500">{col.label}</h2>
         <span className="flex items-center gap-1.5">
@@ -364,7 +364,7 @@ function Column({
         )}
         {tasks.length === 0 && !(folded && folded.length > 0) && (
           <p className="rounded-lg border border-dashed border-slate-200 py-4 text-center text-xs text-slate-500">
-            タスクなし
+            カードなし
           </p>
         )}
       </SortableContext>
@@ -405,7 +405,7 @@ export default function Board({
   // #111: 依存先の中身をチップから引くための索引 (アーカイブ済みは載らない。クリックで取りに行く)。
   //
   // **描画はフィルタ後、依存の判定は全件**。同じ配列から両方作っていたので、
-  // 別担当の未完了タスクに依存しているとき、担当フィルタでそれが隠れた瞬間に
+  // 別担当の未完了カードに依存しているとき、担当フィルタでそれが隠れた瞬間に
   // 「待ち」表示まで消え、依存関係が実態と逆に見えた (自動レビュー指摘)。
   // フィルタは見せ方の話であって、待ちかどうかの事実は変わらない
   const openIds = new Set(allTasks.filter((t) => t.status !== "done").map((t) => t.id));

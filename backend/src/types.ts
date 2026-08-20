@@ -1,6 +1,6 @@
 /** #19: custom1 / custom2 は**プロジェクトが表示名を付けたときだけ存在する**任意レーン。
  * 値そのものは固定 (静的な enum) で、意味は表示名と前提情報が与える。
- * 位置は Review と Done の間。Todo/Inprogress と同じ緩い箱で、live_tasks にも入る。
+ * 位置は Review と Done の間。Todo/Inprogress と同じ緩い箱で、live_cards にも入る。
  * **Done へは行けない** — 退場は review を通る規則のまま (mayEnterDone は変えていない) */
 export type TaskStatus = "todo" | "inprogress" | "review" | "custom1" | "custom2" | "done";
 export type CustomLaneKey = "custom1" | "custom2";
@@ -18,14 +18,14 @@ export interface Task {
   context: string | null;
   /** 期限 YYYY-MM-DD (#44)。相対表現はチャットが今日の日付から解決して格納する */
   due: string | null;
-  /** 依存先タスクID (#41)。「#AはBが終わってから」という**関係の覚え書き**で、
+  /** 依存先カードID (#41)。「#AはBが終わってから」という**関係の覚え書き**で、
    * コードは何も止めない (#152: mayEnterDone は依存を見ない。相互・循環も矛盾ではない) */
   blockedBy: number[] | null;
   /** 却下=やらない決定 (#65)。reason に却下理由を持ち、要約でも【却下】として蒸留される */
   /** #92: 現況の一言。カードに出る。Reviewでは検収の要点を書く (詳細はcontextへ) */
   summary?: string | null;
   rejected: boolean;
-  /** #102: ゴミ箱に入れた日時。nullなら通常のタスク */
+  /** #102: ゴミ箱に入れた日時。nullなら通常のカード */
   trashedAt?: string | null;
   /** #108: Doneへ確定した日時。nullなら未完了、またはこの列より前に終わったもの */
   doneAt?: string | null;

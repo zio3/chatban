@@ -88,19 +88,19 @@ export const REORDERABLE_STATUSES = ["todo", "inprogress", "review"] as const;
 export const QUERY_LOG_DESCRIPTION = [
   "記録にSQLで問い合わせる(読み取り専用)。集計軸・期間・条件は自由に決めてよい。",
   "DBは SQLite。方言はSQLiteに合わせる — 日付は date()/datetime()/strftime() と修飾子('start of month', '-2 months' など)を使い、date_trunc/INTERVAL/NOW() のような他DBの関数は無い。真偽値は 0/1。文字列連結は || 。日時はISO 8601風の文字列で入っている",
-  "見えるのは**接続中のプロジェクトの記録だけ**。別プロジェクトのタスクや会話は見えない",
+  "見えるのは**接続中のプロジェクトの記録だけ**。別プロジェクトのカードや会話は見えない",
   // #181: この行は PUBLIC_TABLES から生成する。説明に手で書くと、テーブルを増減したときに
   // 説明・コード・テストの3箇所を人間が揃える前提になり、実際にズレた (project_context の漏れ)
   `引けるもの: ${PUBLIC_TABLES.join(" / ")}`,
-  "chat_messages(id, role, content, trace, usage, task_id, created_at。role='user' が持ち主の発言、'assistant' がこのアシスタント。usage は所要時間とラウンド数だけ — トークン計測は #181 で撤去した) / project_context(id, text, version, updated_at。全文は get_project_context のほうが読みやすい)",
-  "tasks(id, title, status, summary, context, context_version, due, blocked_by, rejected, checked_at, done_at, trashed_at, sort, archived, created_at, updated_at)",
+  "chat_messages(id, role, content, trace, usage, card_id, created_at。role='user' が持ち主の発言、'assistant' がこのアシスタント。usage は所要時間とラウンド数だけ — トークン計測は #181 で撤去した) / project_context(id, text, version, updated_at。全文は get_project_context のほうが読みやすい)",
+  "cards(id, title, status, summary, context, context_version, due, blocked_by, rejected, checked_at, done_at, trashed_at, sort, archived, created_at, updated_at)",
   "checked_at = 人が実物で確かめた日時 (nullなら未検収)。status とは別物で、done は列が動いたこと・checked_at は検収が進んだこと。片方からもう片方を推測しない。この窓口は読み取り専用で、checked_at を書く手段はどこにも無い (印を付けられるのは人間だけ)",
-  "会話で「#112」と呼ぶタスクは tasks.id = 112 のこと(主キー)。番号はプロジェクトごとに1から振られる。特定の1件を見るときは WHERE id=<番号> で引く",
+  "会話で「#112」と呼ぶカードは cards.id = 112 のこと(主キー)。番号はプロジェクトごとに1から振られる。特定の1件を見るときは WHERE id=<番号> で引く",
   "日付の列を取り違えない。created_at=登録日 / updated_at=最終更新(その後の編集でも動く) / done_at=Doneへ確定した日 / checked_at=人が確かめた日。完了の集計には done_at を使う(created_at だと登録日を数えてしまう)",
   "done_at のうち 2026-08-10 以前のものは、列を作る前に終わったぶんを updated_at から埋めた近似値(完了後に触っていなければ最終更新=完了日時)。日単位の集計には使えるが、分単位の議論には使わない",
-  "done_tasks ビューを使う。完了したもの(done_at が入っているもの)だけを、完了が新しい順に抜いたもの。日付は done_day 列に入っているので date() を書かなくてよい。live_tasks の対で、生きている=live_tasks / 終わった=done_tasks",
+  "done_cards ビューを使う。完了したもの(done_at が入っているもの)だけを、完了が新しい順に抜いたもの。日付は done_day 列に入っているので date() を書かなくてよい。live_cards の対で、生きている=live_cards / 終わった=done_cards",
   // #175: **どの status がどちらに入るかを書く。**「生きている / 終わった」だけだと
-  // review がどちらか分からず、実際に「live_tasks に review が出ないバグがある」と誤報した
+  // review がどちらか分からず、実際に「live_cards に review が出ないバグがある」と誤報した
   // (2026-08-15。ビューは正しく、検収済みで消えていただけ)。
   // ビューの条件は status ではなく archived / trashed_at / done_at なので、**両方に出る状態がある** —
   // そこも書かないと「重複している=おかしい」と読まれる。
@@ -110,17 +110,17 @@ export const QUERY_LOG_DESCRIPTION = [
   // (archive.ts)。**その間にプロセスが止まればジョブは失われ、起動時に
   // `status=done AND archived=0` を回収する処理は無い**ので、両方に出る状態は無期限に残る。
   // 時間で消えると書くと、エージェントは「待てば直る」と判断してしまう
-  "live_tasks に入るのは **done 以外の列すべて** (todo / inprogress / review と、そのプロジェクトで有効な任意レーン)。加えて「Doneへ確定したが、まだ畳まれていないもの」も入る。done_tasks は done_at が入っているものなので、**畳まれるまでは同じタスクが両方に出る**(不整合ではない)。畳むのは**人が検収を押した瞬間だけ**で、押さなければ何も動かない — 時間が経てば消えると考えないこと。列で絞りたいなら status を書く: WHERE status='review'",
-  "例(いつ何件終わったか): SELECT done_day, COUNT(*) n FROM done_tasks GROUP BY 1 ORDER BY 1 DESC",
-  "例(直近1週間に終わったもの): SELECT done_day, title FROM done_tasks WHERE done_day >= date('now','localtime','-7 days')",
-  "SELECT * は使わない。必要な列だけ挙げる。context(経緯メモ)は1件1,000字を超えるので、一覧では length(context) か substr(context,1,120) にし、全文が要るタスクだけ id で絞って引き直す",
-  "live_tasks ビューを使う。tasks から「生きているもの」(ゴミ箱でもアーカイブ済みでもないもの)だけを、ボードと同じ並びで抜いたもの。条件と並びを毎回書かなくてよく、書き忘れてゴミ箱のタスクが混ざることもない。列は tasks と同じ + sort_key(=COALESCE(sort,id))。ゴミ箱やアーカイブを見たいときだけ tasks を直に引く",
-  "例(ボードの一覧): SELECT id, status, title, due, checked_at, length(context) ctx FROM live_tasks",
-  "例(1件の詳細。経緯メモの全文と版): SELECT title, status, summary, context, context_version, blocked_by FROM tasks WHERE id=112",
-  "例(直近の動き。「なにやってたっけ」): SELECT id, status, title, summary, updated_at FROM live_tasks ORDER BY updated_at DESC LIMIT 15",
-  "例(ゴミ箱の中身): SELECT id, title, trashed_at FROM tasks WHERE trashed_at IS NOT NULL ORDER BY trashed_at DESC",
-  "例(検収待ちで、まだ人が確かめていないもの): SELECT id, title, summary FROM live_tasks WHERE status='review' AND checked_at IS NULL",
-  "例(1件の経緯メモ全文): SELECT context, context_version FROM tasks WHERE id=112",
+  "live_cards に入るのは **done 以外の列すべて** (todo / inprogress / review と、そのプロジェクトで有効な任意レーン)。加えて「Doneへ確定したが、まだ畳まれていないもの」も入る。done_cards は done_at が入っているものなので、**畳まれるまでは同じカードが両方に出る**(不整合ではない)。畳むのは**人が検収を押した瞬間だけ**で、押さなければ何も動かない — 時間が経てば消えると考えないこと。列で絞りたいなら status を書く: WHERE status='review'",
+  "例(いつ何件終わったか): SELECT done_day, COUNT(*) n FROM done_cards GROUP BY 1 ORDER BY 1 DESC",
+  "例(直近1週間に終わったもの): SELECT done_day, title FROM done_cards WHERE done_day >= date('now','localtime','-7 days')",
+  "SELECT * は使わない。必要な列だけ挙げる。context(経緯メモ)は1件1,000字を超えるので、一覧では length(context) か substr(context,1,120) にし、全文が要るカードだけ id で絞って引き直す",
+  "live_cards ビューを使う。cards から「生きているもの」(ゴミ箱でもアーカイブ済みでもないもの)だけを、ボードと同じ並びで抜いたもの。条件と並びを毎回書かなくてよく、書き忘れてゴミ箱のカードが混ざることもない。列は cards と同じ + sort_key(=COALESCE(sort,id))。ゴミ箱やアーカイブを見たいときだけ cards を直に引く",
+  "例(ボードの一覧): SELECT id, status, title, due, checked_at, length(context) ctx FROM live_cards",
+  "例(1件の詳細。経緯メモの全文と版): SELECT title, status, summary, context, context_version, blocked_by FROM cards WHERE id=112",
+  "例(直近の動き。「なにやってたっけ」): SELECT id, status, title, summary, updated_at FROM live_cards ORDER BY updated_at DESC LIMIT 15",
+  "例(ゴミ箱の中身): SELECT id, title, trashed_at FROM cards WHERE trashed_at IS NOT NULL ORDER BY trashed_at DESC",
+  "例(検収待ちで、まだ人が確かめていないもの): SELECT id, title, summary FROM live_cards WHERE status='review' AND checked_at IS NULL",
+  "例(1件の経緯メモ全文): SELECT context, context_version FROM cards WHERE id=112",
   "例(いつ何を言われたか): SELECT created_at, substr(content,1,120) c FROM chat_messages WHERE role='user' ORDER BY id DESC LIMIT 30",
   "例: SELECT created_at, role, substr(content,1,120) FROM chat_messages WHERE date(created_at)='2026-08-09' ORDER BY id LIMIT 30",
   "例: SELECT substr(created_at,1,13) h, COUNT(*) n FROM chat_messages GROUP BY 1 ORDER BY 1",
@@ -143,17 +143,17 @@ export const PROJECT_CONTEXT_WRITE_DESCRIPTION =
  * 「省略で全列」を残すと1本の通し順位だと期待されるので、対象の列を必須にした。
  * 実際に全体順位のつもりで全列分のIDを渡された事例がある (zio) */
 export const REORDER_DESCRIPTION = [
-  "1つの列の中で並び順を付け替える。その列のタスクを並べたい順に渡す(「番号の降順」だけでなく「重要そうな順」など意味のある並びも可)。",
+  "1つの列の中で並び順を付け替える。その列のカードを並べたい順に渡す(「番号の降順」だけでなく「重要そうな順」など意味のある並びも可)。",
   "表示設定ではなく並び順そのものを書き換える操作で、あとから手で並べ直せる。「後回し」は列の下へ、「今やりたい」は上へ。",
-  "対象の列は必ず指定する。列をまたぐ順序は status そのものなので、複数列を1本の通し順位にはできない(列をまたいで動かしたいなら update_tasks で status を変える)。",
-  "対象は生きているタスクだけ。指定しなかったタスクは元の順のまま末尾に残るので消えない。他の列・アーカイブ済み・存在しないIDは無視して ignored で返す(全体は失敗しない)。",
+  "対象の列は必ず指定する。列をまたぐ順序は status そのものなので、複数列を1本の通し順位にはできない(列をまたいで動かしたいなら update_cards で status を変える)。",
+  "対象は生きているカードだけ。指定しなかったカードは元の順のまま末尾に残るので消えない。他の列・アーカイブ済み・存在しないIDは無視して ignored で返す(全体は失敗しない)。",
 ].join("\n");
 
-/** update_tasks の見出し。「状態・担当・タイトル・理由」と書いていたが実際より狭く、
+/** update_cards の見出し。「状態・担当・タイトル・理由」と書いていたが実際より狭く、
  * summary / context / context_append / due / blocked_by も更新できる。
  * 特に context_append は一覧しか見ないクライアントからは存在が読み取れなかった (指摘) */
 export const UPDATE_TASKS_DESCRIPTION =
-  "タスクの状態と内容を更新する(複数可)。状態・タイトルのほか、summary(現況の1行)・経緯メモ・期限・依存も変えられる。経緯メモに1行足すだけなら context_append を使う(既存を読む必要も版も要らない)";
+  "カードの状態と内容を更新する(複数可)。状態・タイトルのほか、summary(現況の1行)・経緯メモ・期限・依存も変えられる。経緯メモに1行足すだけなら context_append を使う(既存を読む必要も版も要らない)";
 
 /** rejected の説明。以前は「reasonに根拠を書く」としていたが、reason というパラメータは無い。
  * additionalProperties:false なので、存在しない reason を渡すと確実にエラーになる (指摘) */
@@ -198,10 +198,10 @@ export const DUE_DESCRIPTION =
  * SQL窓口 (query_log) へ渡すよう契約側で案内する。#91 でソートキーを渡す方式を捨てたのと同じ判断。
  * チャットとMCPで同じ文言を使う (入口ごとに書き分けると必ずズレる) */
 export const SEARCH_DESCRIPTION = [
-  "タスクの本文(タイトル・現況・経緯メモ)を横断検索する。アーカイブ済みも対象。表記ゆれや言い換えは自分で展開して複数語を渡す(OR検索・当たった語が matched で返る)。",
+  "カードの本文(タイトル・現況・経緯メモ)を横断検索する。アーカイブ済みも対象。表記ゆれや言い換えは自分で展開して複数語を渡す(OR検索・当たった語が matched で返る)。",
   "**候補が広すぎたら、この道具で絞ろうとせず query_log でSQLを書く。**本文にその語が1度出てくるだけで当たるので、絞り込みはSQLのほうが素直に書ける:",
-  "例(タイトルだけを見る): SELECT id, title FROM live_tasks WHERE title LIKE '%記事%'",
-  "例(条件を重ねる): SELECT id, title, due FROM live_tasks WHERE status='review' AND due IS NOT NULL ORDER BY due",
+  "例(タイトルだけを見る): SELECT id, title FROM live_cards WHERE title LIKE '%記事%'",
+  "例(条件を重ねる): SELECT id, title, due FROM live_cards WHERE status='review' AND due IS NOT NULL ORDER BY due",
   "この道具は「表記ゆれを展開して当たりを見つける」まで、query_log は「条件で絞る」— 使い分ける。",
 ].join("\n");
 
@@ -218,7 +218,7 @@ export const SEARCH_DESCRIPTION = [
  * こちらは説明が実装と違った。ツール契約のdescriptionはエージェントにとってのUIラベルなので、
  * 実装が課していない制約をそこに書くと、エージェントはそれを守ろうとして詰まる */
 export const BLOCKED_BY_DESCRIPTION =
-  "依存先タスクID。「#AはBが終わってから」という関係の覚え書きで、コードは何も止めない(依存先が残っていても着手・Review・Doneはできる)。相互に張り合っていても、循環していても矛盾ではない — 事実としてそう書いてあるだけ。未完了の依存先があれば「#N待ち」と添え、やるかどうかは人間に決めてもらう。あとでやりたいだけ・順番を表したいだけなら張らず、reorder_tasks で列の下へ落とす(依存は関係の記述、優先順位は並び順)";
+  "依存先カードID。「#AはBが終わってから」という関係の覚え書きで、コードは何も止めない(依存先が残っていても着手・Review・Doneはできる)。相互に張り合っていても、循環していても矛盾ではない — 事実としてそう書いてあるだけ。未完了の依存先があれば「#N待ち」と添え、やるかどうかは人間に決めてもらう。あとでやりたいだけ・順番を表したいだけなら張らず、reorder_cards で列の下へ落とす(依存は関係の記述、優先順位は並び順)";
 
 // 計測スクリプト(scripts/prompt-breakdown.ts)から実物を測れるように公開する。
 // 「何が入力トークンを食っているか」はソースを眺めても分からず、実物を数えるしかない
@@ -229,12 +229,12 @@ export function buildTools(lanes: CustomLane[]): OpenAI.Chat.Completions.ChatCom
   {
     type: "function",
     function: {
-      name: "create_tasks",
-      description: "タスクをボードに追加する(複数可)",
+      name: "create_cards",
+      description: "カードをボードに追加する(複数可)",
       parameters: {
         type: "object",
         properties: {
-          tasks: {
+          cards: {
             type: "array",
             items: {
               type: "object",
@@ -248,14 +248,14 @@ export function buildTools(lanes: CustomLane[]): OpenAI.Chat.Completions.ChatCom
             },
           },
         },
-        required: ["tasks"],
+        required: ["cards"],
       },
     },
   },
   {
     type: "function",
     function: {
-      name: "update_tasks",
+      name: "update_cards",
       description: UPDATE_TASKS_DESCRIPTION,
       parameters: {
         type: "object",
@@ -265,7 +265,7 @@ export function buildTools(lanes: CustomLane[]): OpenAI.Chat.Completions.ChatCom
             items: {
               type: "object",
               properties: {
-                id: { type: "integer", description: "タスクID。会話で「#112」と呼ばれるものと同じで、tasks テーブルの主キー(id)。プロジェクトごとに1から振られるので、別プロジェクトの#112とは別物" },
+                id: { type: "integer", description: "カードID。会話で「#112」と呼ばれるものと同じで、cards テーブルの主キー(id)。プロジェクトごとに1から振られるので、別プロジェクトの#112とは別物" },
                 title: { type: "string" },
                 status: { type: "string", enum: STATUS_VALUES, description: STATUS_DESC },
                 summary: { type: "string", description: SUMMARY_DESCRIPTION },
@@ -287,8 +287,8 @@ export function buildTools(lanes: CustomLane[]): OpenAI.Chat.Completions.ChatCom
   {
     type: "function",
     function: {
-      name: "delete_tasks",
-      description: "タスクをゴミ箱に入れる(複数可)。実データは残り restore_tasks や画面から復元できる",
+      name: "delete_cards",
+      description: "カードをゴミ箱に入れる(複数可)。実データは残り restore_cards や画面から復元できる",
       parameters: {
         type: "object",
         properties: { ids: { type: "array", items: { type: "integer" } } },
@@ -299,7 +299,7 @@ export function buildTools(lanes: CustomLane[]): OpenAI.Chat.Completions.ChatCom
   {
     type: "function",
     function: {
-      name: "restore_tasks",
+      name: "restore_cards",
       description: RESTORE_DESCRIPTION,
       parameters: {
         type: "object",
@@ -312,11 +312,11 @@ export function buildTools(lanes: CustomLane[]): OpenAI.Chat.Completions.ChatCom
     type: "function",
     function: {
       name: "update_task_context",
-      description: "タスクの経緯メモを更新する。既定は全文上書き(既存を query_log で読みマージした全文を渡す)。append=true なら末尾に追記する",
+      description: "カードの経緯メモを更新する。既定は全文上書き(既存を query_log で読みマージした全文を渡す)。append=true なら末尾に追記する",
       parameters: {
         type: "object",
         properties: {
-          id: { type: "integer", description: "タスクID。会話で「#112」と呼ばれるものと同じで、tasks テーブルの主キー(id)。プロジェクトごとに1から振られるので、別プロジェクトの#112とは別物" },
+          id: { type: "integer", description: "カードID。会話で「#112」と呼ばれるものと同じで、cards テーブルの主キー(id)。プロジェクトごとに1から振られるので、別プロジェクトの#112とは別物" },
           text: { type: "string", description: "新しいcontext全文 (append=true のときは追記する文だけ)" },
           append: { type: "boolean", description: `trueなら追記。${CONTEXT_APPEND_DESCRIPTION}` },
           context_version: {
@@ -331,13 +331,13 @@ export function buildTools(lanes: CustomLane[]): OpenAI.Chat.Completions.ChatCom
   {
     type: "function",
     function: {
-      name: "reorder_tasks",
+      name: "reorder_cards",
       description: REORDER_DESCRIPTION,
       parameters: {
         type: "object",
         properties: {
           status: { type: "string", enum: reorderableStatuses(lanes), description: "対象の列" },
-          ids: { type: "array", items: { type: "integer" }, description: "その列のタスクを並べたい順に" },
+          ids: { type: "array", items: { type: "integer" }, description: "その列のカードを並べたい順に" },
         },
         required: ["status", "ids"],
       },
@@ -346,7 +346,7 @@ export function buildTools(lanes: CustomLane[]): OpenAI.Chat.Completions.ChatCom
   {
     type: "function",
     function: {
-      name: "search_tasks",
+      name: "search_cards",
       // 共通の説明 + チャット側だけの補足 (会話ログも引く)。
       // 絞り込みをSQLへ寄せる案内は共通側に入っている (#176)
       description: `${SEARCH_DESCRIPTION}\n会話ログも同じ語で引き、新しい順に最大6件返る(「あんな話してたっけ?」用)。例: 「なんでDB分けたんだっけ」→ terms:["DB","データベース","ファイル分離","分割","プロジェクト"]`,
@@ -399,13 +399,13 @@ export function buildTools(lanes: CustomLane[]): OpenAI.Chat.Completions.ChatCom
 
 async function execTool(name: string, args: any, uiActions: UiAction[], events: Set<string>): Promise<unknown> {
   switch (name) {
-    case "create_tasks": {
+    case "create_cards": {
       // #114: 書き込みは agentWrite に集約 (チャットとMCPで同じガードを通す)
-      const r = createTasksAsAgent(args.tasks ?? []);
+      const r = createTasksAsAgent(args.cards ?? []);
       events.add("board");
       return { ok: true, ...r };
     }
-    case "update_tasks": {
+    case "update_cards": {
       const { ok, status, updated, note, conflicts, notFound, badDue } = updateTasksAsAgent(args.updates ?? []);
       events.add("board");
       // #112: 版が合わなかった経緯メモは適用していない。現在の全文を返すのでマージして再実行する
@@ -421,14 +421,14 @@ async function execTool(name: string, args: any, uiActions: UiAction[], events: 
         ...(note ? { note } : {}),
       };
     }
-    case "delete_tasks": {
+    case "delete_cards": {
       // #102: 実データは消さずゴミ箱へ。誤解釈で消えても取り返しがつくようにする
       const results = (args.ids as number[]).map((id) => ({ id, trashed: trashTask(id) }));
       // 復元できることは毎回文章で説明しない (くどい)。#xx リンクから詳細パネルを開けば「戻す」がある
       events.add("board");
       return { ok: true, results };
     }
-    case "restore_tasks": {
+    case "restore_cards": {
       // ツール定義とゴミ箱画面のプロンプトには公開してあるのに、ここに分岐が無く
       // unknown tool を返していた (自動レビュー指摘)。画面が「チャットで戻せる」と
       // 案内しているのに成立しない状態。MCP側には実装があり、**入口ごとに機能が違っていた**
@@ -453,7 +453,7 @@ async function execTool(name: string, args: any, uiActions: UiAction[], events: 
       events.add("board");
       return { ok: true, id: updated.id };
     }
-    case "reorder_tasks": {
+    case "reorder_cards": {
       const r = reorderTasks(args.ids ?? [], args.status);
       events.add("board");
       // 指定漏れがあったことはLLMに伝える (黙って末尾に置くと「並べたつもり」とズレる)
@@ -463,14 +463,14 @@ async function execTool(name: string, args: any, uiActions: UiAction[], events: 
         ...(r.appended > 0 ? { note: `${r.appended}件は順番の指定に含まれていなかったので末尾に置きました` } : {}),
       };
     }
-    case "search_tasks": {
+    case "search_cards": {
       const r = searchTasks(args.terms ?? []);
       // スニペットは「当たった箇所の周辺」でしかないので、判断の核心が範囲外にあることが多い。
-      // 検索は「どのタスクか」を絞るまでの道具と位置づけ、中身は query_log で読ませる
+      // 検索は「どのカードか」を絞るまでの道具と位置づけ、中身は query_log で読ませる
       return {
         ...r,
         ...(r.hits.length > 0
-          ? { note: "snippetは当たった箇所の周辺のみ。理由や判断を答えるときは query_log で経緯メモの全文を読むこと (SELECT context FROM tasks WHERE id=...)" }
+          ? { note: "snippetは当たった箇所の周辺のみ。理由や判断を答えるときは query_log で経緯メモの全文を読むこと (SELECT context FROM cards WHERE id=...)" }
           : {}),
       };
     }
@@ -506,37 +506,41 @@ export function buildSystemPrompt(taskFocus?: ReturnType<typeof getTask>, view?:
     "あなたはチームのタスク管理ボード「ChatBan」のアシスタント。日本語で簡潔に応答する。",
     "",
     "## 行動ルール",
-    "- まず依頼か相談かを判別する。明確なアクション依頼(「〜を追加して」「〜やらないと」「タスク: 〜」「〜に対応したい」)だけを、確認を挟まず即 create_tasks で登録する。テンポ優先はこの依頼に限る。",
+    // #215: 板の上のものの名前は「カード」に統一したが、**ユーザーに言い換えを強いない**。
+    // ユーザーは「タスク」と呼ぶことが多く、そこを訂正すると会話のテンポが落ちるだけで何も得しない。
+    // 内部(画面・ツール名・この指示)がカードで揃っていれば、探すときも指すときも迷わない
+    "- 「タスク」「カード」「チケット」「項目」はすべて同じもの(ボードに並ぶ1件)を指す。ユーザーが使った語をそのまま使って応答し、言い換えたり訂正したりしない。",
+    "- まず依頼か相談かを判別する。明確なアクション依頼(「〜を追加して」「〜やらないと」「カード: 〜」「〜に対応したい」)だけを、確認を挟まず即 create_cards で登録する。テンポ優先はこの依頼に限る。",
     // 定型文に記法を織り込んでおく。別の節に「返事は [[ ]] で囲む」と書いてあっても、
     // 定型文が具体的に指定されていると そのまま出力されて記法が付かない (実測2/2)。
     // 判断を挟ませず、コピーすれば記法が付いてくる形にする
-    "- 質問・意見募集・感想(「どう思う?」「いいのかな?」「なんで〜?」、画像やPDFを見せての問いかけ等)は相談。タスク化せず、内容に踏み込んで会話で応える。タスクにする価値がありそうなら会話の末尾に「タスクに積みますか?  [[積んで]] [[いまはいい]]」と一言添えるだけにし、登録は次のユーザー発言を待つ。",
+    "- 質問・意見募集・感想(「どう思う?」「いいのかな?」「なんで〜?」、画像やPDFを見せての問いかけ等)は相談。カードにせず、内容に踏み込んで会話で応える。カードにする価値がありそうなら会話の末尾に「積んでおきますか?  [[積んで]] [[いまはいい]]」と一言添えるだけにし、登録は次のユーザー発言を待つ。",
     "- 依頼か相談か迷ったら相談として扱う (誤登録の削除コストより会話で受ける方が安い)。",
-    "- create_tasks / update_tasks の報告では、必ず割り当てられたタスクID を「#12として登録しました」の形式で明記する (ユーザーは以後この番号で参照する)。",
-    "- 相談・議論の流れからタスクを登録するときは、create_tasks の context に登録に至った経緯を要約して入れる。経緯のない単発の明確な依頼では省略可。",
+    "- create_cards / update_cards の報告では、必ず割り当てられたカードID を「#12として登録しました」の形式で明記する (ユーザーは以後この番号で参照する)。",
+    "- 相談・議論の流れからカードを登録するときは、create_cards の context に登録に至った経緯を要約して入れる。経緯のない単発の明確な依頼では省略可。",
     "- ただし判断材料が足りないときや、影響が大きいと感じたときは、実行する前にチャットで案を出して聞く。どちらにするかは文脈で決めてよい。",
     "- 「終わりました」等の完了報告は status=review に置き、「Reviewに置いたので確認OKなら承認を」と一言返す。勝手に done にしない (doneは検収済みの意味で、即アーカイブされる)。",
     "- あなたは done に変更できない (ツールが受け付けず review に置き換わる)。完了・却下・承認はすべて status=review に置き、done への確定はボードのReview列の検収チェック(人間の操作)だけが行う。「doneにして」「まとめて承認」と言われたら review に置いた上で「確定はReview列の検収チェックからお願いします」と案内する。",
     "- 共通の前提・決まりごと(締切、方針、用語など)を伝えられたら update_project_context で前提情報に反映する。",
-    "- 特定タスクの経緯・決定事項・補足(「#22は◯◯方式でいくことにした」等)は update_task_context でそのタスクの経緯メモに記録する。",
+    "- 特定カードの経緯・決定事項・補足(「#22は◯◯方式でいくことにした」等)は update_task_context でそのカードの経緯メモに記録する。",
     "- summary は「いまどうなっているか」。進捗・完了報告は summary に一言で書き、詳細な根拠は経緯メモ(context)に書く。",
-    "- 過去の判断や経緯・過去の会話を聞かれたら(「なんで◯◯にしたんだっけ」「あんな話してたっけ」)、索引のタイトルだけで答えず search_tasks で本文と会話ログを引く。言い換え・英日表記を自分で並べて渡し、空振りしたら語を変えて引き直す。検索結果のsnippetは断片なので、理由を答える前に query_log で経緯メモの全文を読む。時期や条件で絞りたいとき(「8/9の午前に何を話していたか」等)は query_log を使う。",
-    "- 削除と却下は文脈で使い分ける: 誤登録・重複・ダミー(「消して」「間違えた」)は delete_tasks (ゴミ箱行きで復元可。返答で復元方法を説明する必要はない)。やらない決定(「見送り」「却下」「やらないことにした」)は削除せず update_tasks で status=review + rejected=true にし、reason に却下の根拠を書いて「却下としてReviewに置きました。検収で確定します」と返す (検収後、決定としてDone列に残る)。",
-    "- 「消して」がタスクそのものを指すのか、タイトルや文言の一部の修正を指すのか曖昧なときは、操作せず確認する (実例:「#95だけ発言者の話が入っていて不自然なので消せますか?」はタイトルの修正依頼だったが、タスクごと削除してしまった)。",
+    "- 過去の判断や経緯・過去の会話を聞かれたら(「なんで◯◯にしたんだっけ」「あんな話してたっけ」)、索引のタイトルだけで答えず search_cards で本文と会話ログを引く。言い換え・英日表記を自分で並べて渡し、空振りしたら語を変えて引き直す。検索結果のsnippetは断片なので、理由を答える前に query_log で経緯メモの全文を読む。時期や条件で絞りたいとき(「8/9の午前に何を話していたか」等)は query_log を使う。",
+    "- 削除と却下は文脈で使い分ける: 誤登録・重複・ダミー(「消して」「間違えた」)は delete_cards (ゴミ箱行きで復元可。返答で復元方法を説明する必要はない)。やらない決定(「見送り」「却下」「やらないことにした」)は削除せず update_cards で status=review + rejected=true にし、なぜやらないと決めたかを summary に一言・詳しい経緯を経緯メモ(context / context_append)に書いて「却下としてReviewに置きました。検収で確定します」と返す (検収後、決定としてDone列に残る)。",
+    "- 「消して」がカードそのものを指すのか、タイトルや文言の一部の修正を指すのか曖昧なときは、操作せず確認する (実例:「#95だけ発言者の話が入っていて不自然なので消せますか?」はタイトルの修正依頼だったが、カードごと削除してしまった)。",
     "- ボードから退場するもの(完了・却下)は必ずReviewを通り、人間の検収チェックで確定する。チャットからdoneへ直行する経路は存在しない。",
     "- 着手したが前提が足りず進められないときは、勝手に却下にも完了にもしない。summary に「前提不足で保留 (◯◯が必要)」と現況を書き、必要な情報を人に尋ねる。status をどこに置くかはプロジェクトの前提情報の定義に従う (列の意味はプロジェクトごとに違う)。",
-    "- 検収の印(checked_at)は人が実物で確かめた記録で、AIには書く手段が無い。「確認しておきました」と自分で付けることはできないし、付いたことにして話さない。誰が何を確かめたかを聞かれたら query_log で tasks.checked_at を読む。",
-    "- 「後回し」「今はやらない」は却下ではない。status は変えず (done にするとアーカイブに吸い込まれる)、reorder_tasks でその列の下へ落とす。「今やりたい」は逆に上へ。",
-    "- 「金曜まで」「明日まで」等の期限表現は今日の日付から YYYY-MM-DD に解決して due に入れる。期限が近い/過ぎたタスクはレポートで優先的に言及する。",
-    "- 画像やPDFが添付されたら内容を読み取って会話・操作に活かす。重要な情報(バグの症状、決定事項、資料の要点)はタスクの context や前提情報に文字で蒸留して記録する。ファイル原本はどこにも保存されないため、後から参照が必要な内容は必ず文字にして残す。",
-    "- 「#AはB待ち」「Bが終わってから」等の依存表現は blocked_by に依存先IDを登録する(複数可)。索引の dep がそれ。依存先が未完了のタスクは、レポートで「#N待ち」と添える。これは関係の覚え書きで着手を止めるものではないので、相互や循環になっていても直すべき不整合として扱わない。",
+    "- 検収の印(checked_at)は人が実物で確かめた記録で、AIには書く手段が無い。「確認しておきました」と自分で付けることはできないし、付いたことにして話さない。誰が何を確かめたかを聞かれたら query_log で cards.checked_at を読む。",
+    "- 「後回し」「今はやらない」は却下ではない。status は変えず (done にするとアーカイブに吸い込まれる)、reorder_cards でその列の下へ落とす。「今やりたい」は逆に上へ。",
+    "- 「金曜まで」「明日まで」等の期限表現は今日の日付から YYYY-MM-DD に解決して due に入れる。期限が近い/過ぎたカードはレポートで優先的に言及する。",
+    "- 画像やPDFが添付されたら内容を読み取って会話・操作に活かす。重要な情報(バグの症状、決定事項、資料の要点)はカードの context や前提情報に文字で蒸留して記録する。ファイル原本はどこにも保存されないため、後から参照が必要な内容は必ず文字にして残す。",
+    "- 「#AはB待ち」「Bが終わってから」等の依存表現は blocked_by に依存先IDを登録する(複数可)。索引の dep がそれ。依存先が未完了のカードは、レポートで「#N待ち」と添える。これは関係の覚え書きで着手を止めるものではないので、相互や循環になっていても直すべき不整合として扱わない。",
     "- 操作後は結果を一言で報告する。長い説明はしない。",
     "",
     "## ユーザーの返事を先回りして置く",
     "こちらから聞き返して次の発言を待つときは、ユーザーが返しそうな短い返事を [[ ]] で囲んで置く。",
     "これは押せるボタンになり、押すとその文字列がユーザーの発言として送られる。「OK」と打つだけの手間を省くためのもの。",
     "",
-    "例1: 「タスクに積みますか?  [[積んで]] [[いまはいい]]」",
+    "例1: 「積んでおきますか?  [[積んで]] [[いまはいい]]」",
     "例2: 「#8はやらない方針ということで、却下にしますか?  [[却下でOK]] [[まだ決めない]]」",
     "例3: 「先に依存を外したほうが早そうです。そちらから見ますか?  [[それでOK]] [[このまま進める]]」",
     "例4: 「どれから着手しますか。  [[#4から]] [[#5から]] [[#6から]]」",
@@ -549,8 +553,8 @@ export function buildSystemPrompt(taskFocus?: ReturnType<typeof getTask>, view?:
     "## 設計思想 (構造カスタマイズの要望が来たときの応対)",
     "ChatBanは「会話が構造の代わりをする」ツール。優先度フィールド・タグ・サブタスク階層の追加要望には応じない。列は Todo/Inprogress/Review/Done の4本が固定だが、**任意レーンを最大2本まで足せる** (#19。⚙設定でその列に名前を付けると現れ、Review と Done の間に並ぶ)。列がほしいと言われたらこれを案内する。それ以上は増やさない。",
     "代わりに以下へ誘導する (どれが適切かはニーズを聞いて判断):",
-    "- 状態を細かく刻みたい (「検証待ち」等) → その情報はタスクのタイトルや理由欄に書く。または「検証」を独立タスクに分割する",
-    "- 分類したい → タイトルの付け方か、reorder_tasks の並び順で表現する",
+    "- 状態を細かく刻みたい (「検証待ち」等) → その情報はカードのタイトルや理由欄に書く。または「検証」を独立カードに分割する",
+    "- 分類したい → タイトルの付け方か、reorder_cards の並び順で表現する",
     "- 優先したい → 並び順 (「これ上にして」) で表現する",
     "断るときは設計理由 (語彙が固定だから一言が正確に通じる) を一言添える。",
     "",
@@ -568,9 +572,9 @@ export function buildSystemPrompt(taskFocus?: ReturnType<typeof getTask>, view?:
     taskFocus
       ? [
           "",
-          `## いま注目しているタスク (このチャットは #${taskFocus.id} 専用)`,
+          `## いま注目しているカード (このチャットは #${taskFocus.id} 専用)`,
           JSON.stringify(taskFocus),
-          `- 「これ」「このタスク」等の指示語は #${taskFocus.id} を指す。`,
+          `- 「これ」「このカード」等の指示語は #${taskFocus.id} を指す。`,
           `- この会話で決まったこと・分かったことは update_task_context で #${taskFocus.id} の経緯メモに反映する (既存contextを読んでマージ)。`,
         ].join("\n")
       : "",
@@ -592,7 +596,7 @@ const VIEW_HINTS: Record<string, string> = {
   trash: [
     "",
     "## いま見ている画面: 🗑ゴミ箱",
-    "削除したタスクを見ている。「#xxを戻して」は restore_tasks で復元する。",
+    "削除したカードを見ている。「#xxを戻して」は restore_cards で復元する。",
   ].join("\n"),
   settings: [
     "",
@@ -602,14 +606,14 @@ const VIEW_HINTS: Record<string, string> = {
 };
 
 const TOOL_LABELS: Record<string, string> = {
-  create_tasks: "タスクを追加",
-  update_tasks: "タスクを更新",
-  delete_tasks: "ゴミ箱へ移動",
-  restore_tasks: "ゴミ箱から復元",
+  create_cards: "カードを追加",
+  update_cards: "カードを更新",
+  delete_cards: "ゴミ箱へ移動",
+  restore_cards: "ゴミ箱から復元",
   set_view: "ビューを切替",
   update_project_context: "前提情報を更新",
-  reorder_tasks: "並び順を変更",
-  search_tasks: "経緯を検索",
+  reorder_cards: "並び順を変更",
+  search_cards: "経緯を検索",
   query_log: "記録を集計",
   update_task_context: "経緯メモを更新",
 };
@@ -727,14 +731,14 @@ export async function generateSuggestions(): Promise<{ label: string; message: s
     sinceBootMs: Date.now() - BOOTED_AT,
     chatBusy: isChatBusy(currentProjectId()),
     // #200: 畳んだ箱も見る。**入口ごとにズレると事故る** — 画面側 (App.tsx の isEmptyBoard) は
-    // 箱を見ているので、ここだけタスクしか見ないと「板には箱が出ているのに提案だけ空」になる
+    // 箱を見ているので、ここだけカードしか見ないと「板には箱が出ているのに提案だけ空」になる
     emptyBoard: listTasks().length === 0 && (foldedContainer(currentProjectId()) ?? []).length === 0,
   });
   if (skip) return [];
   const projectId = currentProjectId();
   const cached = suggestCache.get(projectId);
   // #209: **ボードの中身では判定しない。**以前はキーが systemPrompt の全文で、索引が1バイト違えば
-  // 作り直していた (タイトルを直す・列を動かす・タスクが1件増える、のたびにミス)。
+  // 作り直していた (タイトルを直す・列を動かす・カードが1件増える、のたびにミス)。
   // 提案はあれば助かる程度のもので、数分古くても困らない。**「提案は5分間そのまま」**で言い切る
   if (cached && Date.now() - cached.at < SUGGEST_TTL_MS) return cached.value;
   // 同時到着 (StrictModeの二重実行はほぼ同時に来る) は1本にまとめる。
@@ -855,7 +859,7 @@ async function runChatTurnInner(
   // #68: 添付はそのままコンテンツパートでLLMへ (画像=vision / PDF=file直投げ)。原本は保存しない
   const fileParts = attachments && attachments.length > 0 ? buildAttachmentParts(attachments) : [];
   // #14: 発言者の記名。「終わりました」等の曖昧参照を解決するためのメタ情報であって発言内容ではない。
-  // 以前は本文の先頭に [発言者: xxx] を足していたが、LLMがそれをタスクのタイトルや経緯メモへ
+  // 以前は本文の先頭に [発言者: xxx] を足していたが、LLMがそれをカードのタイトルや経緯メモへ
   // そのまま書き写す事故が起きた (#95のタイトルに混入)。メタ情報は本文に混ぜず、
   // システムプロンプト側に「書き写すな」と添えて置く
   const baseText =

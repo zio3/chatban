@@ -8,7 +8,7 @@
 ```
 ┌─ ブラウザ (React SPA) ─────────────────────────────────────┐
 │  /p/<projectId> が表示中のプロジェクトを持つ (#97)          │
-│  Board(かんばん4列) / Chat(常設) / TaskDetailPanel(タスクチャット) │
+│  Board(かんばん4列) / Chat(常設) / TaskDetailPanel(カードチャット) │
 │  📋前提 / 🗑ゴミ箱 / ⚙設定                                   │
 └──────┬────────────────────────────┬────────────────────────┘
        │ /api (REST)                │ /socket.io
@@ -24,7 +24,7 @@
 └──────┬────────────────────────────┬────────────────────────┘
        │ OpenAI SDK / Messages形式    │ MCP (Claude Code等の外部エージェント)
 ┌──────▼──────────────┐  「横断的な検討・実装はBYO Agent」
-│ LLM (config.json で選ぶ) │  ドッグフーディング: ChatBan自体の改修タスクを
+│ LLM (config.json で選ぶ) │  ドッグフーディング: ChatBan自体の改修カードを
 │ OpenAI直/Anthropic直/    │  ChatBanのボードでMCP経由管理
 │ OrcaRouter/ローカルLLM   │
 └─────────────────────┘
@@ -52,13 +52,13 @@
 ```
 backend/data/
   chatban-admin.db          projects / settings
-  projects/<id>-<名前>.db   tasks / chat_messages / project_context
+  projects/<id>-<名前>.db   cards / chat_messages / project_context
   trash/                    削除したプロジェクトの退避先 (実体は消さない)
 ```
 
 理由:
 
-- **タスクの #ID がプロジェクトごとに1から始まる**。#IDは会話の語彙(「#7を後回し」)なので、
+- **カードの #ID がプロジェクトごとに1から始まる**。#IDは会話の語彙(「#7を後回し」)なので、
   2桁で収まることが手触りに直結する。通し番号だと #247 になり口に出せなくなる
 - 全クエリに `WHERE project_id` を書く必要がない = **絞り忘れが構造的に起きない**。
   混ざったボード索引をLLMが読むと誤った提案をするが、人間はそれに気づけない
@@ -80,7 +80,7 @@ backend/data/
 
 サーバー側は `AsyncLocalStorage` で処理単位のスコープを持つ (`withProject(id, fn)` / `currentProjectId()`)。
 **非同期フックはリクエスト終了後に走る**ので、呼ばれた時点のIDを捕まえて中で入り直す —
-これをやらないと「プロジェクト3のタスクを完了 → プロジェクト1の要約カードに合流」という静かな事故が起きる。
+これをやらないと「プロジェクト3のカードを完了 → プロジェクト1の要約カードに合流」という静かな事故が起きる。
 Socket.IOの配信もプロジェクト単位のroomへ送る。
 
 ## LLMモデル戦略
@@ -118,22 +118,22 @@ Socket.IOの配信もプロジェクト単位のroomへ送る。
 - **静的前置・動的後置**: 人格/行動ルール/設計思想を先頭固定 (キャッシュはプレフィックス一致)
 - **イベントログ型 (#50)**: ボード状態=基準スナップショット(バイト不変)+差分イベント追記。
   TTL5分/40件/日付変化で再ベースライン
-- **索引+遅延詳細**: 常駐はタスク索引のみ。詳細は `query_log` で必要な列だけ取得
+- **索引+遅延詳細**: 常駐はカード索引のみ。詳細は `query_log` で必要な列だけ取得
 - **メタ情報は動的末尾に置く**: 発言者(#95)・いま見ている画面(#93)。
-  本文に混ぜるとLLMがタスクのタイトルへ書き写す事故が起きたため、「書き写すな」と添えて末尾に置く。
+  本文に混ぜるとLLMがカードのタイトルへ書き写す事故が起きたため、「書き写すな」と添えて末尾に置く。
   末尾ならキャッシュのプレフィックスを崩さない
 - 結果: 1ターン0.2〜0.3円 / 0.9〜1.5秒
 
 ## データモデル (プロジェクトDB)
 
-- `tasks`: title / status(todo・inprogress・review・done の固定4列 + 任意レーン custom1/custom2 #19) /
+- `cards`: title / status(todo・inprogress・review・done の固定4列 + 任意レーン custom1/custom2 #19) /
   **summary**(いまどうなっているか。カードに出る) /
   context(経緯メモ) / **context_version**(経緯メモの楽観ロック) / due / blocked_by(依存) / rejected(却下) /
   sort / archived / **trashed_at**(ゴミ箱)
-- `chat_messages`: 会話永続化 (task_id NULLがメイン、値ありがタスクチャット)
+- `chat_messages`: 会話永続化 (card_id NULLがメイン、値ありがカードチャット)
 - `project_context`: そのプロジェクトの前提 (プロンプトに常駐)
 
-#179 で担当者・割り振りを廃止し (個人利用に特化)、`tasks.assignee` / `assign_reason` と
+#179 で担当者・割り振りを廃止し (個人利用に特化)、`cards.assignee` / `assign_reason` と
 `members` / `proposals` / `assignment_history` は**列・テーブルごと落とした**。
 読まないだけにして残すと、SQL窓口を広げた誰かが集計に使い、廃止したはずの軸が復活する。
 
@@ -159,13 +159,13 @@ todo → inprogress → review ←─ 完了報告も却下(rejected)もここ�
 - **任意レーン (#19)**: プロジェクトが表示名を付けたときだけ現れる列を、Review と Done の間に最大2本。
   値は `custom1`/`custom2` の固定 enum で、意味は表示名と前提情報が与える (リネームしても値は動かない)。
   **既定は0本**で、ふつうのボードは4列のまま。Todo/Inprogress と同じ緩い箱で、Doneへは直接行けない。
-  表示名を消すと列は畳まれ、そこに居たタスクは todo へ戻る (`evacuateLane`)。
+  表示名を消すと列は畳まれ、そこに居たカードは todo へ戻る (`evacuateLane`)。
   動機: 「版があるもの」(制作物の素材) は ChatBan が唯一の索引なので、Doneへ退場させると索引が消える。
 - **4列は同じ重みではない**: Todo/Inprogressは「人間がステータスを気にしたいときに振り分ける箱」程度。
   Reviewは退場ゲート、Doneは人間の検収のみ (チャットからdoneへ直行する経路はコードで塞いである)
 - **DoneへのD&Dは禁止、Doneからの持ち出しも禁止**。検収後アーカイブ完了まで15〜30秒あり、
-  その間に持ち出すと「todoなのにボードから消える」幽霊タスクができるため
-- **削除は論理削除**。自然言語UIでは解釈ミスが必ず起きる(「消せますか?」がタスク削除と解釈された)ので、
+  その間に持ち出すと「todoなのにボードから消える」幽霊カードができるため
+- **削除は論理削除**。自然言語UIでは解釈ミスが必ず起きる(「消せますか?」がカード削除と解釈された)ので、
   間違えないようにするのではなく**間違えても取り返しがつく**形にした
 
 ## Done列の3段 (#200)
@@ -181,17 +181,17 @@ todo → inprogress → review ←─ 完了報告も却下(rejected)もここ�
 - **同期のSQLだけで完結する。**待ちが無いので中間状態が存在せず、
   「畳んだのに索引に無い」「要約待ちのまま固まる」といった回収対象が生まれない
 - **箱はDBに持たない** (`archive.ts` のメモリ上に、プロジェクトごとに1個)。
-  中身は「直近24時間に畳んだタスク」でしかなく、器としての寿命がセッションより短い。
-  再起動すれば消えるが、消えて困るものは入っていない — タスク本体は `archived=1` でDBに残る
+  中身は「直近24時間に畳んだカード」でしかなく、器としての寿命がセッションより短い。
+  再起動すれば消えるが、消えて困るものは入っていない — カード本体は `archived=1` でDBに残る
 - 24時間は**畳んだ時刻からの相対**。カレンダー日で切ると、0時をまたいだ直後に押したときに
   数分前の検収バッチが「昨日の分」として消える
-- 3段目で消えるのは器のほうで、タスクは `archived=1` のまま残る。引くのは一覧ではなく
-  `search_tasks` と番地 (「#10がやりたい」で指させる)
+- 3段目で消えるのは器のほうで、カードは `archived=1` のまま残る。引くのは一覧ではなく
+  `search_cards` と番地 (「#10がやりたい」で指させる)
 
 **以前はここでLLMに経緯を読ませて要素文へ分解していた** (#46/#56/#105)。やめた理由は、
 実運用2週間で**要約が一度も読まれなかった**こと、そして同じ内容がgitのコミットとPR本文に
 差分つきで残っていたこと。非同期だったせいで派生した不具合も3件あった (#191/#195/#196)。
-`summary_cards` テーブルと `tasks.summary_card_id` は起動時のマイグレーションで撤去する。
+`summary_cards` テーブルと `cards.summary_card_id` は起動時のマイグレーションで撤去する。
 
 ## 日時の扱い (#108)
 
@@ -222,26 +222,26 @@ DateTimeOffset に相当する型が無く (TEXT/INTEGER/REAL/BLOB/NULL のみ)�
 
 ## チャットのツール (9)
 
-`create_tasks` / `update_tasks` / `delete_tasks`(ゴミ箱行き) / `restore_tasks` /
-`update_task_context` / `reorder_tasks` /
-`search_tasks` / `query_log` / `update_project_context`
+`create_cards` / `update_cards` / `delete_cards`(ゴミ箱行き) / `restore_cards` /
+`update_task_context` / `reorder_cards` /
+`search_cards` / `query_log` / `update_project_context`
 
 **読み取りは `query_log` (SQL) に寄せている (#108)**。人間のWebUIは画面が決まっているので
 固定のクエリ関数を使うが、チャット/MCPは「何をどう見たいか」が毎回違うのでSQLを組ませる。
 `get_task_details` / `get_activity` / `list_*` は廃止した — 同じものが
-`SELECT ... FROM tasks WHERE id=112` や `ORDER BY updated_at DESC` で引ける。
+`SELECT ... FROM cards WHERE id=112` や `ORDER BY updated_at DESC` で引ける。
 一覧を専用ツールで返すと経緯メモが全文ついてきて重い (実測18,553字。SQLなら3,334字)
 
 **「判断はLLM、整合性はコード」** という形が繰り返し現れる:
 
-- `reorder_tasks` は**LLMが決めた順番(ID列)** を受け取る。ソートキーを渡す方式では
+- `reorder_cards` は**LLMが決めた順番(ID列)** を受け取る。ソートキーを渡す方式では
   「重要そうな順」「軽そうな順」が表現できないため。書き忘れ/重複/他列のIDはコードが正規化する
-- `search_tasks` は**LLMが表記ゆれを展開した複数語** を受け取ってOR検索する。
+- `search_cards` は**LLMが表記ゆれを展開した複数語** を受け取ってOR検索する。
   「DBを分ける」と「ファイル分離」が近いことを知っているのはLLMなので、
   埋め込みインデックスを外に持つ必要がない
 
 安全装置はプロンプトでなくツール契約に書く:
-`update_tasks` は done 指定を review へ強制変換し、実際に値が変わったフィールドだけを通す
+`update_cards` は done 指定を review へ強制変換し、実際に値が変わったフィールドだけを通す
 (全フィールドをエコーバックするモデルだと既存値が壊れるため)。
 
 ## インフラ / 開発運用
@@ -254,7 +254,7 @@ DateTimeOffset に相当する型が無く (TEXT/INTEGER/REAL/BLOB/NULL のみ)�
 - **バックアップはSQLiteのオンラインバックアップAPI経由** (`backend/scripts/backup-data.mjs`)。
   WALモードではファイルコピーだと直近の書き込みが落ちる
 - E2E: `cd frontend; npm run test:e2e` (8799/5199, `e2e-data/`, AUTO_ARCHIVE=0)。
-  実行前に `e2e/clean-db.mjs` がデータを消す (残すとタスクが積み上がりD&Dの座標がずれる)
+  実行前に `e2e/clean-db.mjs` がデータを消す (残すとカードが積み上がりD&Dの座標がずれる)
 - ログ: `backend/logs/chatban-YYYY-MM-DD.log` (リクエスト/LLM往復/ツール実行/切断/再ベースライン)
 - コスト分析スクリプト (`cost-estimate` / `cost-report` / `before-after` / `billing-probe` /
   `backfill-costs` / `list-models`) は #181 で削除した。`llm_calls` とカタログAPIに依存していたので、
@@ -271,8 +271,8 @@ DateTimeOffset に相当する型が無く (TEXT/INTEGER/REAL/BLOB/NULL のみ)�
 } }
 ```
 
-ツール (10): `sync_board` / `create_tasks` / `update_tasks` / `delete_tasks` /
-`restore_tasks` / `reorder_tasks` / `search_tasks` /
+ツール (10): `sync_board` / `create_cards` / `update_cards` / `delete_cards` /
+`restore_cards` / `reorder_cards` / `search_cards` /
 `query_log` / `get_project_context` / `update_project_context`
 
 - `sync_board` が手持ちの認識を最新に合わせる口 (#150/#187)。**同期トークン**を渡すと

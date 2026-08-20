@@ -28,8 +28,8 @@ function card(title: string, elements: string[]): string {
   return JSON.stringify([title, elements]);
 }
 
-function board(tasks: [number, TaskFacts][] = [], cards: [number, string][] = [], projectContextVersion = 1) {
-  return { tasks: new Map(tasks), cards: new Map(cards), projectContextVersion };
+function board(cards: [number, TaskFacts][] = [], projectContextVersion = 1) {
+  return { cards: new Map(cards), projectContextVersion };
 }
 
 test("何も変わっていなければ差分は空", () => {
@@ -59,7 +59,7 @@ test("追加は内容ごと載せる (IDだけでは何か分からないため)
 });
 
 test("消滅を拾える (タイムスタンプ方式では絶対に拾えないケース)", () => {
-  // 要約カードに畳まれて消えたタスクは updated_at で絞っても出てこない。
+  // 要約カードに畳まれて消えたカードは updated_at で絞っても出てこない。
   // Done要約が主戦場になる以上ここは頻発するので、スナップショット比較を選んでいる
   const changes = diffBoards(board([[6, task({ title: "終わった仕事" })]]), board());
   assert.equal(changes.length, 1);
@@ -211,7 +211,7 @@ test("列の先頭・末尾に入ったときも位置が分かる", () => {
   assert.match(atTail!, /todo の末尾 \(前が #20\)/);
 });
 
-test("検収済みのタスクが増えたら、追加行に検収済みが載る", () => {
+test("検収済みのカードが増えたら、追加行に検収済みが載る", () => {
   // 追加行は fieldChanges を通らないため、ここに書かないと検収状態が抜け落ちる (自動レビュー指摘)。
   //
   // **もとは「ゴミ箱からの復元」を例にしていたが、その経路では成立しなくなった** —
@@ -288,7 +288,7 @@ test("並べ替えが status の変化を埋もれさせない", () => {
 test("前提情報の更新は版だけで知らせる (本文は持っていない)", () => {
   // #187: スナップショットが持つのは版だけ。本文を持つと 3,000字級のものが
   // 保持数ぶん (最大32枚) メモリに乗り、差分にも載せたくなる
-  const changes = diffBoards(board([], [], 6), board([], [], 7));
+  const changes = diffBoards(board([], 6), board([], 7));
   assert.deepEqual(changes, ["プロジェクトの前提情報が更新された (v7)"]);
 });
 

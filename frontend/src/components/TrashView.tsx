@@ -4,7 +4,7 @@ import { socket } from "../socket";
 import type { Task } from "../types";
 
 // #102: ゴミ箱。チャット/MCPからの「削除」はここへ入るだけで実体は消えない。
-// 自然言語UIでは解釈ミスが必ず起きる (「消せます?」がタスク削除と解釈された事故) ので、
+// 自然言語UIでは解釈ミスが必ず起きる (「消せます?」がカード削除と解釈された事故) ので、
 // 「間違えないようにする」のではなく「間違えても取り返しがつく」形にした。
 // 実体を消せるのはこの画面からだけ = 人間だけが通れる扉 (doneの検収と同じ考え方)。
 export default function TrashView() {
@@ -15,7 +15,7 @@ export default function TrashView() {
   const load = useCallback(() => {
     api
       .trash()
-      .then((d) => setTasks(d.tasks))
+      .then((d) => setTasks(d.cards))
       .catch((e) => setError(String(e)));
   }, []);
 

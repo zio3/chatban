@@ -113,11 +113,11 @@ export function buildMcpServer(onEvent: (kind: "board" | "proposals") => void): 
   // という分岐 (#109/#110) をしていた。担当者そのものが無くなったので分岐ごと消えている
 
   server.registerTool(
-    "create_tasks",
+    "create_cards",
     {
-      description: "タスクをボードに追加する(複数可)。UIにはリアルタイム反映される",
+      description: "カードをボードに追加する(複数可)。UIにはリアルタイム反映される",
       inputSchema: {
-        tasks: z.array(
+        cards: z.array(
           z.object({
             title: z.string(),
             status: STATUS.optional().describe(`省略時はtodo。${STATUS_DESC}`),
@@ -130,10 +130,10 @@ export function buildMcpServer(onEvent: (kind: "board" | "proposals") => void): 
         sync_token: SYNC_TOKEN_ON_WRITE,
       },
     },
-    async ({ tasks, sync_token }) => {
+    async ({ cards, sync_token }) => {
       // #114: 書き込みは agentWrite に集約。以前はMCP側にガードが無く、
       // done指定がそのまま通って「AIが自主的にDoneへ移動」する事故が起きた
-      const r = createTasksAsAgent(tasks as any);
+      const r = createTasksAsAgent(cards as any);
       onEvent("board");
       return text({
         ok: true,
@@ -147,13 +147,13 @@ export function buildMcpServer(onEvent: (kind: "board" | "proposals") => void): 
   );
 
   server.registerTool(
-    "update_tasks",
+    "update_cards",
     {
       description: UPDATE_TASKS_DESCRIPTION,
       inputSchema: {
         updates: z.array(
           z.object({
-            id: z.number().int().describe("タスクID。会話で「#112」と呼ばれるものと同じで、tasks テーブルの主キー(id)。プロジェクトごとに1から振られるので、別プロジェクトの#112とは別物"),
+            id: z.number().int().describe("カードID。会話で「#112」と呼ばれるものと同じで、cards テーブルの主キー(id)。プロジェクトごとに1から振られるので、別プロジェクトの#112とは別物"),
             title: z.string().optional(),
             status: STATUS.optional().describe(STATUS_DESC),
             summary: z.string().optional().describe(SUMMARY_DESCRIPTION),
@@ -197,20 +197,20 @@ export function buildMcpServer(onEvent: (kind: "board" | "proposals") => void): 
   );
 
   server.registerTool(
-    "delete_tasks",
+    "delete_cards",
     {
-      description: "タスクをゴミ箱に入れる(複数可)。実データは残り restore_tasks で戻せる",
+      description: "カードをゴミ箱に入れる(複数可)。実データは残り restore_cards で戻せる",
       inputSchema: { ids: z.array(z.number().int()) },
     },
     async ({ ids }) => {
       const results = ids.map((id) => ({ id, trashed: trashTask(id) }));
       onEvent("board");
-      return text({ ok: true, results, note: "ゴミ箱に入れました (実データは残っています)。復元は restore_tasks" });
+      return text({ ok: true, results, note: "ゴミ箱に入れました (実データは残っています)。復元は restore_cards" });
     }
   );
 
   server.registerTool(
-    "restore_tasks",
+    "restore_cards",
     {
       description: RESTORE_DESCRIPTION,
       inputSchema: { ids: z.array(z.number().int()) },
@@ -225,7 +225,7 @@ export function buildMcpServer(onEvent: (kind: "board" | "proposals") => void): 
   );
 
   server.registerTool(
-    "search_tasks",
+    "search_cards",
     {
       description: SEARCH_DESCRIPTION,
       inputSchema: { terms: z.array(z.string()).describe("検索語(最大10)。言い換え・英日表記を並べる") },
@@ -257,12 +257,12 @@ export function buildMcpServer(onEvent: (kind: "board" | "proposals") => void): 
 
   // #107で並び順が「後で良い」の表現手段になったのに、MCPからは並べ替えられなかった
   server.registerTool(
-    "reorder_tasks",
+    "reorder_cards",
     {
       description: REORDER_DESCRIPTION,
       inputSchema: {
         status: z.enum(reorderableStatuses(LANES) as [string, ...string[]]).describe("対象の列"),
-        ids: z.array(z.number().int()).describe("その列のタスクを並べたい順に"),
+        ids: z.array(z.number().int()).describe("その列のカードを並べたい順に"),
       },
     },
     async ({ status, ids }) => {
@@ -371,7 +371,7 @@ export function buildMcpServer(onEvent: (kind: "board" | "proposals") => void): 
         projectContextVersion: d.projectContextVersion,
         // checked は brief に無いのでここで足す。**人が検収したかどうかは全件応答からも
         // 読めないといけない** — 差分だけ直しても、取り直したときに分からなければ同じ事故が起きる
-        tasks: listTasks().map((t) => ({ ...brief(t)!, checked: !!t.checkedAt })),
+        cards: listTasks().map((t) => ({ ...brief(t)!, checked: !!t.checkedAt })),
       });
     }
   );

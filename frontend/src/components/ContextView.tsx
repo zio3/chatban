@@ -4,7 +4,7 @@ import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
 // #73: プロジェクト前提情報の閲覧ビュー。編集UIは意図的に無い —
-// 変更はチャットで伝える (新規タスク作成をチャット専用にしたのと同じ「会話が構造の代わり」原則)
+// 変更はチャットで伝える (新規カード作成をチャット専用にしたのと同じ「会話が構造の代わり」原則)
 export default function ContextView() {
   const [data, setData] = useState<{ text: string; updatedAt: string | null } | null>(null);
   const [error, setError] = useState<string | null>(null);

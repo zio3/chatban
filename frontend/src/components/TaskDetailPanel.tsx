@@ -6,7 +6,7 @@ import { useAttachments } from "../hooks/useAttachments";
 import { useChatTurn } from "../hooks/useChatTurn";
 import AttachmentTray from "./AttachmentTray";
 import ThinkingIndicator from "./ThinkingIndicator";
-import { DepChip } from "./Board";
+import { DepChip, DueBadge } from "./Board";
 import { statusLabel } from "../types";
 import type { ChatEntry, CustomLane, Task } from "../types";
 
@@ -159,9 +159,8 @@ export default function TaskDetailPanel({
             <span className="rounded-full bg-rose-600 px-2.5 py-0.5 text-xs font-bold text-white">🚫 却下</span>
           )}
           <span className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${status.cls}`}>{status.label}</span>
-          {task.due && (
-            <span className="rounded bg-amber-50 px-1.5 py-0.5 text-[10px] text-amber-700">⏰ 期限 {task.due}</span>
-          )}
+          {/* #228: 以前はここだけ自前で整形しており、**期限切れでも普通の期限に見えていた** */}
+          {task.due && <DueBadge due={task.due} long />}
           {task.blockedBy && task.blockedBy.length > 0 && (
             <span className="text-[10px] text-slate-500" title="このカードが待っている先">
               ⛓ 待ち{" "}

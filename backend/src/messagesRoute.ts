@@ -87,7 +87,11 @@ export function toAnthropicMessages(messages: OaMessage[]): { system: string; me
       if (blocks.length > 0) out.push({ role: "assistant", content: blocks }); // 空の assistant は受け付けられない
       continue;
     }
-    // user。添付 (画像/PDF) はこの経路では持ち回れないのでテキストだけ通す
+    // user。添付 (画像/PDF) はこの経路では持ち回れないのでテキストだけ通す。
+    // **落とすこと自体は割り切りだが、黙って落とすのは駄目** — 呼び出し側は
+    // 「内容を読み取って活用すること」というテキストを付けているので、原本が届かないまま
+    // 読めと言われたモデルが**推測で答える** (レビュー指摘 2026-08-21)。
+    // 入口では canAcceptAttachments が断っているが、ここは最後の砦
     if (Array.isArray(m.content)) {
       const parts = (m.content as any[]).filter((p) => p?.type === "text").map((p) => ({ type: "text", text: p.text }));
       out.push({ role: "user", content: parts.length > 0 ? parts : [{ type: "text", text: "" }] });
@@ -174,6 +178,16 @@ export function toOpenAiShape(data: any, fallbackModel: string): OpenAiShapedRes
   };
 }
 
+/** 添付 (画像/PDF) が混ざっているか。**この経路は持ち回れない**ので、投げる前に見る。
+ * DBもHTTPも要らない純粋関数にしてあるのはテストのため (isTaskStatus / mayEnterDone と同じ置き方) */
+export function hasAttachmentParts(messages: OaMessage[]): boolean {
+  return messages.some(
+    (m) =>
+      Array.isArray(m.content) &&
+      (m.content as any[]).some((p) => p?.type === "image_url" || p?.type === "file" || p?.type === "input_audio")
+  );
+}
+
 /** Messages API 形式で問い合わせる。宛先は設定の baseURL をそのまま使う。
  * OrcaRouter は /v1/chat/completions と /v1/messages の両方を持ち、Anthropic直は後者だけを持つ —
  * どちらで話すかは `apiStyle` が決める (#182)。この関数は「言われた宛先へ Messages 形式で投げる」だけ */
@@ -184,6 +198,12 @@ export async function messagesCompletion(
   params: Omit<OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming, "model">,
   opts?: { timeoutMs?: number; signal?: AbortSignal }
 ): Promise<OpenAiShapedResponse> {
+  // **黙って落とさない。**ここまで来ているのは入口の判定が漏れたときなので、
+  // 中身を減らして送るのではなく止める (送ったのに読まれていない、が一番たちが悪い / #123)
+  if (hasAttachmentParts(params.messages as OaMessage[]))
+    throw new Error(
+      "いまの宛先 (apiStyle: messages) は添付を扱えません。添付を使うなら config.json を chat 形式の宛先にしてください"
+    );
   const { system, messages } = toAnthropicMessages(params.messages as OaMessage[]);
   const tools = toAnthropicTools(params.tools as OaTool[] | undefined);
 

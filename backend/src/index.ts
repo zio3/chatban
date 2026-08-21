@@ -9,6 +9,7 @@ import { warnIfConfigNotIgnored } from "./config.js";
 import { hooks } from "./hooks.js";
 import { upstreamRefused } from "./llm.js";
 import { attachmentsEnabled, jsonLimit } from "./demoMode.js";
+import { llmConfig } from "./config.js";
 import { log } from "./log.js";
 import { buildMcpServer } from "./mcp.js";
 import { isAllowedOrigin, isBrowserCrossSite } from "./origin.js";
@@ -172,6 +173,37 @@ function rejoinFollowers(projectId: number) {
 
 /** ボードが受け取る一式。**取得と配信で同じ関数を通す** —
  * 「初回だけ揃っていて以後ズレる」を型で防ぐ (#19 で lanes を足したとき、片方だけ直る形にしない) */
+/** 断る理由を言い分ける。**「受け取れない」だけだと直し方が分からない** —
+ * デモの方針なら諦めるしかないが、宛先の都合なら config.json を替えれば通る */
+function attachmentRefusal(): string {
+  try {
+    if (llmConfig().apiStyle === "messages")
+      return "いまの宛先 (apiStyle: messages) は添付を扱えません。添付を使うなら config.json を chat 形式の宛先にしてください";
+  } catch {
+    /* 設定が読めないときは下の一般的な文言で返す */
+  }
+  return "このデモでは添付を受け付けていません";
+}
+
+/** 添付 (画像/PDF) を受けられるか。**2つの理由をここで合わせる。**
+ *
+ * 1. デモでは受けない (#213: 認証なしで誰でも書けるうえ、入力トークンを大きく食う)
+ * 2. **宛先が Messages API 形式のときは経路が持ち回れない** (レビュー指摘 2026-08-21)。
+ *    toAnthropicMessages は添付パートを落とすので、モデルには原本が届かないまま
+ *    「内容を読み取って活用すること」というテキストだけが届く = **推測で答えられる**
+ *
+ * 名前を1つにしておくのは、入口が3つ (板の配信・/api/chat・/api/cards/:id/chat) あるため。
+ * `&&` を各所に書くと、次に条件が増えたときに片方だけ直る */
+function canAcceptAttachments(): boolean {
+  if (!attachmentsEnabled()) return false;
+  try {
+    return llmConfig().apiStyle !== "messages";
+  } catch {
+    // 設定が読めないならLLM自体が使えない。受け取れると言わない
+    return false;
+  }
+}
+
 /** #226: 板に配る1枚。**経緯メモの本文は載せない。**
  *
  * 実測 (2026-08-20、13枚): ペイロード 22,430字のうち 21,601字 = **96%が経緯メモ**だった。
@@ -197,7 +229,7 @@ function boardPayload(projectId: number) {
     llmRefused: upstreamRefused(),
     // #213: 添付の入口が開いているか。**画面を隠すだけでは足りない**ので下で断ってもいるが、
     // 押せないボタンを出しておく理由も無い
-    attachments: attachmentsEnabled(),
+    attachments: canAcceptAttachments(),
   };
 }
 
@@ -390,8 +422,8 @@ app.post("/api/chat", async (req, res) => {
   if (!message) return res.status(400).json({ error: "message required" });
   // #213: **入口ごとにズレると事故る。**画面の「+」を隠しても curl では通るので、ここで断る。
   // 黙って捨てない — 送ったのに読まれていない、が一番たちが悪い (#123 と同じ線)
-  if (attachments?.length && !attachmentsEnabled())
-    return res.status(400).json({ error: "このデモでは添付を受け付けていません" });
+  if (attachments?.length && !canAcceptAttachments())
+    return res.status(400).json({ error: attachmentRefusal() });
   const id = ++chatSeq;
   const t0 = Date.now();
   log(
@@ -451,8 +483,8 @@ app.post("/api/cards/:id/chat", async (req, res) => {
   if (!message) return res.status(400).json({ error: "message required" });
   // #213: **入口ごとにズレると事故る。**画面の「+」を隠しても curl では通るので、ここで断る。
   // 黙って捨てない — 送ったのに読まれていない、が一番たちが悪い (#123 と同じ線)
-  if (attachments?.length && !attachmentsEnabled())
-    return res.status(400).json({ error: "このデモでは添付を受け付けていません" });
+  if (attachments?.length && !canAcceptAttachments())
+    return res.status(400).json({ error: attachmentRefusal() });
   // 対象が居ないなら、LLMを呼ぶ前に断る。以前は存在確認が無く、taskFocus が undefined のまま
   // 通常チャットに近い状態で有料の呼び出しが走り、存在しないIDの会話ログまで残っていた
   // (chat_messages.card_id に外部キーは無い。自動レビュー指摘)。

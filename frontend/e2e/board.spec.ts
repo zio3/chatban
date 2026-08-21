@@ -1898,6 +1898,62 @@ test.describe("任意レーン (#19)", () => {
     expect(await getTaskStatus(id)).toBe("todo");
   });
 
+  // レビュー指摘 (2026-08-21): **レーンが「作業中の列」に入っていなかった。**
+  // 直行は塞いであったが、**遠回りは塞がっていなかった** —
+  // Reviewで検収 → レーンへ退避 → Reviewへ戻す、で古い印が生き残った。
+  // #161 (ゴミ箱) と #57 (Doneからの差し戻し) と同じ穴の3回目
+  test("レーンを経由しても古い検収の印は残らない (遠回りでDoneへ通せない)", async () => {
+    await setLanes("素材");
+    const id = await createTask("検収済みだがレーンを通ったタスク", "review");
+    await fetch(`${API}/api/cards/${id}/checked`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ checked: true }),
+    });
+    const checkedAt = async () =>
+      (await mcp("query_log", { sql: `SELECT checked_at FROM cards WHERE id=${id}` })).rows[0].checked_at;
+    expect(await checkedAt(), "検収の印が付いていない").toBeTruthy();
+
+    const move = (status: string) =>
+      fetch(`${API}/api/cards/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status }),
+      });
+    await move("custom1");
+    expect(await checkedAt(), "レーンへ動かしても印が残っている").toBeFalsy();
+
+    // 戻しても再検収なしではDoneへ行けない
+    await move("review");
+    await move("done");
+    expect(await getTaskStatus(id)).toBe("review");
+  });
+
+  // 畳む処理も updateTasks を通すようにした (以前は生SQLで status だけ書き換えていた)。
+  //
+  // **このテストは畳む処理を単独では捕まえられない。**setChecked が Review 列でしか印を
+  // 付けさせないので、印を持ったままレーンに居るカードは上の修正後は作れず、
+  // 生SQLに戻してもここは通る (実測済み)。畳む側の変更は経路を1本にするための保険で、
+  // ここで見ているのは**畳んで戻ってきたカードが未検収で todo に居る**という結果のほう */
+  test("レーンを畳むと todo へ戻り、検収の印は付いていない", async () => {
+    await setLanes("素材");
+    const id = await createTask("検収済みのままレーンで畳まれたタスク", "review");
+    await fetch(`${API}/api/cards/${id}/checked`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ checked: true }),
+    });
+    await fetch(`${API}/api/cards/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status: "custom1" }),
+    });
+    await setLanes(""); // 畳む → todo へ退避
+    expect(await getTaskStatus(id)).toBe("todo");
+    const row = (await mcp("query_log", { sql: `SELECT checked_at FROM cards WHERE id=${id}` })).rows[0];
+    expect(row.checked_at, "畳んで戻したカードに古い印が残っている").toBeFalsy();
+  });
+
   test("レーンからDoneへは直接行けない (退場はreviewを通る)", async () => {
     await setLanes("素材");
     const id = await createTask("素材から直行を試す", "custom1");

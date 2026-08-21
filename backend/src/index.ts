@@ -14,6 +14,7 @@ import { buildMcpServer } from "./mcp.js";
 import { isAllowedOrigin, isBrowserCrossSite } from "./origin.js";
 import { resetPromptState } from "./promptState.js";
 import { assertTimezone } from "./timezone.js";
+import type { Task } from "./types.js";
 import {
   activeProjectId,
   createProject,
@@ -171,9 +172,24 @@ function rejoinFollowers(projectId: number) {
 
 /** ボードが受け取る一式。**取得と配信で同じ関数を通す** —
  * 「初回だけ揃っていて以後ズレる」を型で防ぐ (#19 で lanes を足したとき、片方だけ直る形にしない) */
+/** #226: 板に配る1枚。**経緯メモの本文は載せない。**
+ *
+ * 実測 (2026-08-20、13枚): ペイロード 22,430字のうち 21,601字 = **96%が経緯メモ**だった。
+ * これが REST の初回だけでなく **Socket の board:changed で毎回飛ぶ**ので、
+ * カード1枚の status を変えるたびに全件の本文が配り直されていた。
+ * 画面に常時出ているのはタイトルと現況だけで、本文を使うのは詳細パネルを開いたときだけ。
+ *
+ * MCP側は #108 で同じことを直している (brief())。**画面向けだけが全文を配り続けていた**ので、
+ * 同じ形に揃える — 本文の代わりに contextChars (あるかどうか・どれくらいか) と
+ * contextVersion (変わったかどうか) を載せる。パネルは版を見て取り直せる */
+function briefCard(t: Task) {
+  const { context, ...rest } = t;
+  return { ...rest, contextChars: context?.length ?? 0 };
+}
+
 function boardPayload(projectId: number) {
   return {
-    cards: listCards(),
+    cards: listCards().map(briefCard),
     folded: foldedContainer(projectId) ?? [],
     lanes: customLanes(projectId),
     // #212: 上流に断られたまま (残高切れ・キー失効・混雑)。**板を開いた時点で伝わる**ようにする。

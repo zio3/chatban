@@ -80,7 +80,6 @@ export default function ProjectSettings() {
         <p className="mt-1 text-xs text-slate-500">
           プロジェクトごとにSQLiteファイルが分かれています。切り替えると<strong>ボード・チャット・前提情報</strong>
           がまとめて入れ替わり、カードの番号は各プロジェクトで <span className="font-mono">#1</span> から始まります。
-          コストの記録は全プロジェクト共通です。
         </p>
       </div>
 

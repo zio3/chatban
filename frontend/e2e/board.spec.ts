@@ -2017,3 +2017,26 @@ test("経緯メモは板の配信に載らないが、パネルを開くと読�
   });
   await expect(panel).toContainText("あとから足したこと");
 });
+
+// レビュー指摘 (2026-08-21): **パネルに key が無く、カードを切り替えても作り直されていなかった。**
+// チャットのログ・送信中のリクエスト・入力中の下書きが前のカードのまま引き継がれ、
+// 送信中に切り替えると応答が新しいカードのログに落ちる → そのまま次の発言の履歴として
+// LLMへ渡り、**別のカードの経緯メモが書かれる**。
+//
+// LLMを呼ばずに確かめるため、**同じ持ち越しが起きる下書き**で見る。
+// 直っていれば下書きは残らず、直っていなければ残る (どちらも同じ「作り直されたか」を見ている)
+test("カードを切り替えるとパネルは作り直される (前のカードの状態を持ち越さない)", async ({ page }) => {
+  const a = await createTask("先に開くカード");
+  const b = await createTask("次に開くカード");
+  await page.goto("/");
+
+  const panel = page.getByTestId("task-detail-panel");
+  await page.getByTestId(`task-card-${a}`).click();
+  const input = panel.locator("textarea");
+  await expect(input).toHaveAttribute("placeholder", new RegExp(`#${a}`));
+  await input.fill("#Aに向けて書きかけた文");
+
+  await page.getByTestId(`task-card-${b}`).click();
+  await expect(input).toHaveAttribute("placeholder", new RegExp(`#${b}`));
+  await expect(input, "前のカードの入力が持ち越されている (パネルが作り直されていない)").toHaveValue("");
+});

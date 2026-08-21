@@ -167,6 +167,8 @@ export default function App() {
 
   // アーカイブ済みカードの詳細表示用 (#59: 要約カードの#xxリンクから開く)
   const [archivedTask, setArchivedTask] = useState<Task | null>(null);
+  // #226: 経緯メモの本文だけを取りに行く先 (板の配信には載っていない)
+  const [detailFull, setDetailFull] = useState<Task | null>(null);
   const openTask = useCallback(
     (id: number) => {
       if (tasks.some((t) => t.id === id)) {
@@ -183,6 +185,29 @@ export default function App() {
     },
     [tasks]
   );
+
+  // #226: 開いているカードの経緯メモを取りに行く。**版が変わったら取り直す** —
+  // 依存に contextVersion を入れてあるので、チャット/MCP/他のタブが書き換えても追随する。
+  // 板の配信には版だけが載っているので、本文を配らずに鮮度が保てる
+  const detailContextVersion =
+    detailTaskId !== null ? tasks.find((t) => t.id === detailTaskId)?.contextVersion : undefined;
+  useEffect(() => {
+    if (detailTaskId === null) {
+      setDetailFull(null);
+      return;
+    }
+    let alive = true;
+    api
+      .getTask(detailTaskId)
+      .then((t) => {
+        if (alive) setDetailFull(t);
+      })
+      // 取れなくても本文が出ないだけ。パネル自体は板の配信で開いている
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [detailTaskId, detailContextVersion]);
 
   // 詳細パネルの「ボードで表示」: パネルは開いたまま、スクロール→フラッシュ (Slackスレッド風の常駐)
   const jumpToBoard = useCallback((id: number) => {
@@ -351,10 +376,16 @@ export default function App() {
   const foundDetailTask = detailTaskId !== null ? tasks.find((t) => t.id === detailTaskId) : undefined;
   const lastDetailTaskRef = useRef<Task | undefined>(undefined);
   if (foundDetailTask) lastDetailTaskRef.current = foundDetailTask;
-  const detailTask =
+  const detailBase =
     detailTaskId !== null
       ? foundDetailTask ?? (archivedTask?.id === detailTaskId ? archivedTask : undefined) ?? lastDetailTaskRef.current
       : undefined;
+  // #226: 経緯メモの本文は板の配信に載っていない (ペイロードの96%を占めていたので外した)。
+  // 開いたときに取りに行き、**版 (contextVersion) が変わったら取り直す** —
+  // チャットやMCPが書き換えても、板の配信に載る版だけで気づける。
+  // 新しい仕組みは作らない: 取得先はアーカイブ済みカードと同じ GET /api/cards/:id
+  const detailTask =
+    detailBase && detailFull?.id === detailBase.id ? { ...detailBase, context: detailFull.context } : detailBase;
   const detailArchived = detailTaskId !== null && !foundDetailTask && !!detailTask;
 
   // #97: プロジェクト切替はページ遷移 (/p/<id>) にしたので、画面の持ち越しを個別に消す処理は不要になった。

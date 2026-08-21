@@ -30,17 +30,18 @@ export default function ContextView() {
     load();
     // **繋ぎ直したら読み直す。**Socket.IO は切れていた間のイベントを再送しないので、
     // 通知を受ける形だけだと「スリープ中に書き換えられた」を取りこぼす。
-    // App.tsx が board:changed に対して同じことをしている (#97 の繋ぎ直し処理と同じ形)
-    let everConnected = socket.connected;
-    const onConnect = () => {
-      if (everConnected) load();
-      everConnected = true;
-    };
+    // App.tsx が board:changed に対して同じことをしている (#97 の繋ぎ直し処理と同じ形)。
+    //
+    // **App.tsx のように「初回の connect は飛ばす」判定は置かない** (レビュー指摘 2026-08-21、2周目)。
+    // あちらは常時マウントされているので初回=起動時だが、この画面は**後から開かれる**。
+    // 切断中にタブを開くと `socket.connected` が false で始まり、
+    // **そのあとの繋ぎ直しが「初回」に見えて取りこぼす**。
+    // 毎回読み直しても、前提情報の小さなGETが1回増えるだけ
     socket.on("context:changed", load);
-    socket.on("connect", onConnect);
+    socket.on("connect", load);
     return () => {
       socket.off("context:changed", load);
-      socket.off("connect", onConnect);
+      socket.off("connect", load);
     };
   }, [load]);
 

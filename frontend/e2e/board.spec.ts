@@ -2089,15 +2089,37 @@ test("前提情報を外から書き換えると、開いている📋前提の�
     // **切れている間の変更も取りこぼさない** (レビュー指摘 2026-08-21、2周目)。
     // Socket.IO は切断中のイベントを再送しないので、通知を受ける形だけだと
     // 「スリープ中に書き換えられた」が古いまま残る
-    // **繋ぎ直しの取りこぼし (切れている間の更新) はここで見ていない。**
-    // setOffline も socket.io の口を塞ぐのも試したが、**テスト時間の中では
-    // クライアントが切断に気づかず、ハンドラを外しても通るテストにしかならなかった**
-    // (実測して分かった)。保証していないものを名乗るテストは置かない。
-    // 繋ぎ直しの再取得自体は入れてあり、根拠は App.tsx が board:changed に対して
-    // 同じことをしていること (#97) — そちらは実運用で必要だと分かっている経路
-
   } finally {
     const now = await mcp("get_project_context", {});
     await mcp("update_project_context", { text: before.text, version: now.version });
   }
+});
+
+// **繋ぎ直しの取りこぼし。**Socket.IO は切れていた間のイベントを再送しないので、
+// 通知を受けるだけでは「スリープ中に書き換えられた」が古いまま残る。
+//
+// setOffline も socket.io の口を塞ぐのも、テスト時間の中ではクライアントが切断に気づかず
+// **ハンドラを外しても通るテスト**にしかならなかった。アプリが共有している socket を
+// ブラウザ内で直に切って繋ぎ直すと、**決定的に**再現できる (レビューで教わった方法)。
+//
+// 前提情報の応答は page.route で差し替える。DBを触らないので後始末が要らず、
+// 「切れている間に変わった」を1行で作れる
+test("切断中に📋前提を開いても、繋ぎ直したときに追いつく", async ({ page }) => {
+  let body = { text: "切れる前の前提", updatedAt: "2026-08-21 00:00:00" };
+  await page.route("**/api/project-context", (route) => route.fulfill({ json: body }));
+  const socket = (fn: "disconnect" | "connect") =>
+    page.evaluate((f) => import("/src/socket.ts").then((m) => (m.socket as any)[f]()), fn);
+
+  await page.goto("/");
+  // **開く前に切る。**ここが穴だった — 画面は socket.connected=false で始まるので、
+  // 「初回の connect は飛ばす」判定を持っていると、そのあとの繋ぎ直しを初回と誤認する
+  await socket("disconnect");
+  await page.getByRole("button", { name: /📋 前提/ }).click();
+  await expect(page.getByText("切れる前の前提")).toBeVisible();
+
+  // 切れている間に書き換わる (通知は届かない)
+  body = { text: "切れている間に変わった前提", updatedAt: "2026-08-21 01:00:00" };
+  await socket("connect");
+
+  await expect(page.getByText("切れている間に変わった前提"), "繋ぎ直しても古い本文のまま").toBeVisible();
 });

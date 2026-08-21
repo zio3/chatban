@@ -508,6 +508,7 @@ export default function App() {
           key={detailTask.id}
           task={detailTask}
           archived={detailArchived}
+          canAttach={canAttach}
           onClose={() => {
             setDetailTaskId(null);
             lastDetailTaskRef.current = undefined;

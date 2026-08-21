@@ -19,6 +19,7 @@ export default function TaskDetailPanel({
   taskById,
   onOpenTask,
   lanes = [],
+  canAttach = true,
 }: {
   task: Task;
   /** true: カードは完了→アーカイブ済み (表示は最後のスナップショット) */
@@ -32,6 +33,10 @@ export default function TaskDetailPanel({
   onOpenTask?: (id: number) => void;
   /** #19: 任意レーンの表示名。列バッジと依存チップに使う */
   lanes?: CustomLane[];
+  /** 添付を受けられるか (板の配信が決める)。**チャット面は2つあるので両方に渡す** —
+   * 以前はメインチャットにしか渡っておらず、カード専用チャットだけ
+   * 「押せるのに断られる」状態だった (レビュー指摘 2026-08-21) */
+  canAttach?: boolean;
 }) {
   const status = statusLabel(task.status, lanes);
   // #111: このカードを待っている側 (被依存)。データは blocked_by にあるので逆引きで足りる。
@@ -275,13 +280,16 @@ export default function TaskDetailPanel({
               e.target.value = "";
             }}
           />
-          <button
-            onClick={() => fileInputRef.current?.click()}
-            title="画像/PDFを添付 (貼り付けも可)"
-            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-slate-200 text-lg text-slate-500 hover:bg-slate-300"
-          >
-            +
-          </button>
+          {/* #213: 添付を閉じているときは入口ごと出さない (断るのはサーバー側 #123) */}
+          {canAttach && (
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              title="画像/PDFを添付 (貼り付けも可)"
+              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-slate-200 text-lg text-slate-500 hover:bg-slate-300"
+            >
+              +
+            </button>
+          )}
           {/* #76: Enter=送信 / Shift+Enter=改行 */}
           <textarea
             value={input}
@@ -298,7 +306,7 @@ export default function TaskDetailPanel({
                 (e.target as HTMLTextAreaElement).style.height = "auto";
               }
             }}
-            onPaste={(e) => atts.addFromPaste(e)}
+            onPaste={(e) => canAttach && atts.addFromPaste(e)}
             placeholder={`#${task.id} について話す… (Shift+Enterで改行)`}
             className="min-w-0 flex-1 resize-none rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-indigo-500"
           />

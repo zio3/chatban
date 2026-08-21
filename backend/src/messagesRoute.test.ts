@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { toAnthropicMessages, toAnthropicTools, toOpenAiShape } from "./messagesRoute.js";
+import {
+  toAnthropicMessages,
+  hasAttachmentParts,
+  messagesCompletion,
+  toAnthropicTools,
+  toOpenAiShape,
+} from "./messagesRoute.js";
 
 /** #172: OpenAI形式 ⇄ Anthropic Messages API 形式の変換。
  *
@@ -121,4 +127,42 @@ test("キャッシュ読みの回は書き込み分が0になる", () => {
   );
   assert.equal(res.usage.prompt_tokens_details!.cached_tokens, 25083);
   assert.equal(res.usage.prompt_tokens_details!.cache_creation_tokens, 0);
+});
+
+// レビュー指摘 (2026-08-21): **この経路は添付を持ち回れないのに、黙って落としていた。**
+// 呼び出し側は「内容を読み取って活用すること」を付けているので、原本が届かないまま
+// 読めと言われたモデルが推測で答える。落とす割り切り自体ではなく、黙っているのが問題。
+//
+// **変換は実装しない。**この経路は現在まったく通っておらず (config.json は apiStyle: chat)、
+// 同梱の Anthropic 設定も未検証と明記してある。一度も通していない経路のために
+// 画像/document ブロックの変換を持つのは、守るものに対して大きすぎる
+test("添付が混ざっているかを見分ける (この経路は持ち回れない)", () => {
+  const text = [{ role: "user" as const, content: [{ type: "text", text: "こんにちは" }] }];
+  assert.equal(hasAttachmentParts(text as any), false);
+  assert.equal(hasAttachmentParts([{ role: "user", content: "ただの文字列" }] as any), false);
+
+  const image = [
+    { role: "user", content: [{ type: "text", text: "これ何?" }, { type: "image_url", image_url: { url: "data:..." } }] },
+  ];
+  assert.equal(hasAttachmentParts(image as any), true);
+  const pdf = [{ role: "user", content: [{ type: "file", file: { filename: "a.pdf", file_data: "data:..." } }] }];
+  assert.equal(hasAttachmentParts(pdf as any), true);
+});
+
+test("添付が来たら、減らして送らずに止める", async () => {
+  const withImage = [
+    { role: "user", content: [{ type: "text", text: "読んで" }, { type: "image_url", image_url: { url: "data:..." } }] },
+  ];
+  // 変換に通すと消えてしまう。これが「止める必要がある」根拠
+  const { messages } = toAnthropicMessages(withImage as any);
+  assert.deepEqual(messages[0].content, [{ type: "text", text: "読んで" }], "添付が黙って消える形は変わっていない");
+
+  // **実物のガードを通す。**変換の性質を確かめるだけだと、messagesCompletion 側の
+  // 判定を将来消してもこのテストは通ってしまう (レビュー指摘 2026-08-21)。
+  // 判定は fetch より前にあるので、ネットワークに触れずに確かめられる
+  await assert.rejects(
+    () => messagesCompletion("https://example.invalid/v1", "dummy-key", "test-model", { messages: withImage } as any),
+    /添付を扱えません/,
+    "添付入りで呼んでも止まらない (最後の砦が効いていない)"
+  );
 });

@@ -139,7 +139,10 @@ export default function Chat({
         if (canAttach) atts.addFiles(e.dataTransfer.files);
       }}
     >
-      {dragOver && (
+      {/* #213 + レビュー指摘 (2026-08-21): 受けないときは**誘わない**。
+          ドロップは無視しているので害は無いが、「ここにドロップ」と出しておいて
+          何も起きないのは、押せるボタンを出して断るのと同じ */}
+      {dragOver && canAttach && (
         <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center bg-indigo-50/80 text-sm font-bold text-indigo-600">
           ここにドロップ (画像 / PDF)
         </div>
@@ -354,7 +357,11 @@ export default function Chat({
                   }
                 }}
                 onPaste={(e) => canAttach && atts.addFromPaste(e)}
-                placeholder="ボードに話しかける… (Shift+Enterで改行 / スクショやPDFも貼れます)"
+                placeholder={
+                  canAttach
+                    ? "ボードに話しかける… (Shift+Enterで改行 / スクショやPDFも貼れます)"
+                    : "ボードに話しかける… (Shift+Enterで改行)"
+                }
                 className="min-w-0 flex-1 resize-none bg-transparent px-1 py-1.5 text-sm outline-none"
               />
               <button

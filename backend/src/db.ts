@@ -110,14 +110,39 @@ export function isUsableStatus(v: unknown, lanes: CustomLane[]): v is TaskStatus
   return true;
 }
 
+/** **作業中の列か** = まだ人の手が入っている途中のもの。
+ *
+ * ここに入る列へ動かしたら検収の印 (checked_at) は落とす。「確かめた」のは前の状態に対してなので、
+ * 作り直しているものに印が残っていると、次の検収で「もう確認済み」と誤読される。
+ *
+ * **任意レーン (custom1 / custom2) も作業中に含む。**レビュー指摘 (2026-08-21) で分かった穴で、
+ * 以前は todo / inprogress だけを見ていたため、
+ * **Reviewで検収 → レーンへ退避 → Reviewへ戻す** の3手で印が生き残り、
+ * 確認し直さずにDoneへ通せた。#161 (ゴミ箱) と #57 (Doneからの差し戻し) で
+ * 同じ穴を2回塞いでいるのに、レーンだけ残っていた —
+ * **列が増えたときに「作業中とは何か」を更新し忘れる**形。だから判定を名前で持つ。
+ *
+ * review は含めない (検収待ちの列で印を付けてから一括確定するので、印は進捗そのもの)。
+ * done も含めない (そこから出るときの扱いは leavingDone が別に見ている) */
+export function isWorkStatus(v: TaskStatus): boolean {
+  return v === "todo" || v === "inprogress" || v === "custom1" || v === "custom2";
+}
+
 /** #19: レーンを畳むときに、そこに居たカードを todo へ戻す。戻した件数を返す。
  *
  * **畳むより先に必ず呼ぶ。**表示名を消すとボードはその列を描かなくなるので、中身を置いたままだと
  * 「保存されているのにどの列にも出ない」カードができる — isTaskStatus の注記にある
  * 「消えたように見えて実在する」そのもの。削除ではなく **todo へ戻す** のは、
- * どこへ行ったか分かる場所が todo だけだから (#102 と同じで、取り返しのつく側に倒す) */
+ * どこへ行ったか分かる場所が todo だけだから (#102 と同じで、取り返しのつく側に倒す)。
+ *
+ * **updateTasks を通す。**以前は生SQLで status だけを書き換えており、検収の印が残っていた
+ * (レビュー指摘 2026-08-21)。退避してきたカードをReviewへ戻すと、確認し直さずにDoneへ通せた。
+ * 「列を動かしたときに何が起きるか」の判断はここに書かない — 状態更新の経路を1本にしておけば、
+ * ルールが増えても退避だけが取り残されない (#60 の「Doneへ入るルートはここ1本」と同じ形) */
 export function evacuateLane(key: "custom1" | "custom2"): number {
-  return db().prepare("UPDATE cards SET status = 'todo' WHERE status = ?").run(key).changes;
+  const ids = (db().prepare("SELECT id FROM cards WHERE status = ?").all(key) as { id: number }[]).map((r) => r.id);
+  updateTasks(ids.map((id) => ({ id, patch: { status: "todo" as TaskStatus } })));
+  return ids.length;
 }
 
 export const DONE_GATE_RULE =
@@ -185,7 +210,7 @@ export function updateTasks(patches: { id: number; patch: TaskPatch }[]): (Task 
     // #108: 作業中の列へ戻したら検収の印は無効になる。「確かめた」のは前の状態に対してなので、
     // 作り直しているものに印が残っていると、次の検収で「もう確認済み」と誤読される。
     // review では消さない (検収待ちの列で印を付けてから一括確定するので、印は進捗そのもの)
-    const backToWork = next.status === "todo" || next.status === "inprogress";
+    const backToWork = isWorkStatus(next.status);
     // Doneから出るときも消す。差し戻しは「確定を取り消した」ということなので、
     // 前の検収の印をそのまま次の確定の根拠にはできない。
     //

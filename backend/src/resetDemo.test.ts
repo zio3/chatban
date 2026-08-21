@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 // @ts-ignore -- scripts/ は素のJS (依存を入れる前に動く必要があるので型を持たない)
-import { parseArgs, isResettable, isSeedable, matchesProject, SIDECAR_SUFFIXES } from "../scripts/reset-demo.mjs";
+import { parseArgs, isResettable, isSeedable, matchesProject, SIDECAR_SUFFIXES, isPromptDump } from "../scripts/reset-demo.mjs";
 
 // #183: 判断だけを純粋関数にしてある。ファイルを消す処理そのものはテストしない
 // (消す対象の**決め方**が合っていれば、消す処理は fs のもの)
@@ -62,4 +62,15 @@ test("--project の値を受け取る", () => {
   assert.equal(parseArgs(["--project", "3"]).project, "3");
   assert.equal(parseArgs(["--project=demo"]).project, "demo");
   assert.equal(parseArgs([]).project, null);
+});
+
+// #224: プロンプトのダンプ (訪問者が打った本文が平文で入る) も朝のリセットで流す。
+// **消してよい範囲は名前で決める** — logs/ には他のログも居るので、巻き添えにしない
+test("プロンプトのダンプだけを名前で見分ける", () => {
+  assert.equal(isPromptDump("last-request-p1-chat.json"), true);
+  assert.equal(isPromptDump("last-request-p32-suggest.json"), true);
+  // 同じ logs/ に居る他のログには触らない
+  assert.equal(isPromptDump("chatban-2026-08-21.log"), false);
+  assert.equal(isPromptDump("last-request.json"), false);
+  assert.equal(isPromptDump("last-request-p1-chat.json.bak"), false);
 });

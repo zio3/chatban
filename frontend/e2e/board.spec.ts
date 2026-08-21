@@ -2091,15 +2091,19 @@ test.describe("失敗のあとに再送を出してよいか (#123 の線)", () 
     await expect(page.getByRole("button", { name: /再送/ }), "停止後に再送ボタンが出ている").toHaveCount(0);
   });
 
-  // 対照。**普通の失敗では再送を出す** — 出さない側だけ固定すると、
-  // 「全部出さない」に倒しても気づけない
-  test("普通の失敗では再送を出す", async ({ page }) => {
+  // **普通の失敗でも出さない。**1周目は「停止・タイムアウトだけ危ない」と考えて
+  // ここに「普通の失敗では再送を出す」という対照を置いていたが、それが危険な境界だった
+  // (レビュー指摘 2026-08-21、2周目) — ツールの往復は1ターンに何ラウンドもあり、
+  // **1ラウンド目で create_cards が成功したあと2ラウンド目が失敗すると 500 が返る**。
+  // クライアントからは副作用の有無を判定できないので、案内だけ出す
+  test("普通の失敗でも再送は出さず、ボードを確かめるよう案内する", async ({ page }) => {
     await page.route("**/api/chat", (route) => route.fulfill({ status: 500, json: { error: "boom" } }));
     await page.goto("/");
 
     await page.getByPlaceholder(/ボードに話しかける/).fill("なにか話す");
     await page.keyboard.press("Enter");
 
-    await expect(page.getByRole("button", { name: /再送/ })).toBeVisible();
+    await expect(page.getByText(/途中まで実行されている場合があります/)).toBeVisible();
+    await expect(page.getByRole("button", { name: /再送/ }), "副作用の有無が分からないのに再送が出ている").toHaveCount(0);
   });
 });

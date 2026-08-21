@@ -501,6 +501,7 @@ export default function App() {
         <TaskDetailPanel
           task={detailTask}
           archived={detailArchived}
+          canAttach={canAttach}
           onClose={() => {
             setDetailTaskId(null);
             lastDetailTaskRef.current = undefined;

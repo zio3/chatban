@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { toAnthropicMessages, hasAttachmentParts, toAnthropicTools, toOpenAiShape } from "./messagesRoute.js";
+import {
+  toAnthropicMessages,
+  hasAttachmentParts,
+  messagesCompletion,
+  toAnthropicTools,
+  toOpenAiShape,
+} from "./messagesRoute.js";
 
 /** #172: OpenAI形式 ⇄ Anthropic Messages API 形式の変換。
  *
@@ -143,12 +149,20 @@ test("添付が混ざっているかを見分ける (この経路は持ち回れ
   assert.equal(hasAttachmentParts(pdf as any), true);
 });
 
-test("添付が来たら、減らして送らずに止める", () => {
+test("添付が来たら、減らして送らずに止める", async () => {
   const withImage = [
     { role: "user", content: [{ type: "text", text: "読んで" }, { type: "image_url", image_url: { url: "data:..." } }] },
   ];
-  // 変換は通ってしまう (テキストだけになる) ので、止めるのは messagesCompletion 側の役目。
-  // ここでは「変換に通すと消える」ことを固定しておく — なぜ止める必要があるかの根拠
+  // 変換に通すと消えてしまう。これが「止める必要がある」根拠
   const { messages } = toAnthropicMessages(withImage as any);
   assert.deepEqual(messages[0].content, [{ type: "text", text: "読んで" }], "添付が黙って消える形は変わっていない");
+
+  // **実物のガードを通す。**変換の性質を確かめるだけだと、messagesCompletion 側の
+  // 判定を将来消してもこのテストは通ってしまう (レビュー指摘 2026-08-21)。
+  // 判定は fetch より前にあるので、ネットワークに触れずに確かめられる
+  await assert.rejects(
+    () => messagesCompletion("https://example.invalid/v1", "dummy-key", "test-model", { messages: withImage } as any),
+    /添付を扱えません/,
+    "添付入りで呼んでも止まらない (最後の砦が効いていない)"
+  );
 });

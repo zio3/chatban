@@ -128,7 +128,15 @@ export default function Chat({
     <section
       className={`relative shrink-0 border-t border-slate-200 bg-white ${dragOver ? "ring-2 ring-inset ring-indigo-400" : ""}`}
       onDragOver={(e) => {
+        // preventDefault は**受けないときも必要**。外すとブラウザがファイルを開いて
+        // ページから離脱する (入力中の下書きごと消える)
         e.preventDefault();
+        // レビュー指摘 (2026-08-21): 受けないのに枠が光っていた。中央の案内だけ隠しても、
+        // **枠とカーソルが「置ける」と言っている**ので誘っていることに変わりがない
+        if (!canAttach) {
+          e.dataTransfer.dropEffect = "none";
+          return;
+        }
         setDragOver(true);
       }}
       onDragLeave={() => setDragOver(false)}
@@ -140,9 +148,9 @@ export default function Chat({
       }}
     >
       {/* #213 + レビュー指摘 (2026-08-21): 受けないときは**誘わない**。
-          ドロップは無視しているので害は無いが、「ここにドロップ」と出しておいて
-          何も起きないのは、押せるボタンを出して断るのと同じ */}
-      {dragOver && canAttach && (
+          dragOver が立たないので枠・カーソル・この案内がまとめて出ない
+          (判定を1か所にしておけば、表示を足したときに片方だけ光る形にならない) */}
+      {dragOver && (
         <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center bg-indigo-50/80 text-sm font-bold text-indigo-600">
           ここにドロップ (画像 / PDF)
         </div>

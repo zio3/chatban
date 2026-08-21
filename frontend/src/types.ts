@@ -11,7 +11,14 @@ export interface Task {
   id: number;
   title: string;
   status: TaskStatus;
-  context: string | null;
+  /** #226: 経緯メモの本文。**板の配信 (GET /api/board / board:changed) には載っていない** —
+   * ペイロードの96%を占めていたので外した。入るのは GET /api/cards/:id で取り直したときだけ。
+   * 「本文があるか」は contextChars、「変わったか」は contextVersion で分かる */
+  context?: string | null;
+  /** 経緯メモの文字数 (板の配信に載る)。本文の代わりに「あるか・どれくらいか」を伝える */
+  contextChars?: number;
+  /** #112: 経緯メモの版。本文が変わるたびに +1。パネルはこれを見て取り直す */
+  contextVersion?: number;
   /** 期限 YYYY-MM-DD (#44) */
   due: string | null;
   /** 依存先カードID (#41)。**関係の覚え書きで、着手やDoneを止めるものではない** (#152) */

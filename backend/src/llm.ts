@@ -5,6 +5,7 @@ import { currentProjectId } from "./store.js";
 import { log } from "./log.js";
 import { llmConfig, redactSecrets } from "./config.js";
 import { messagesCompletion } from "./messagesRoute.js";
+import { promptDumpEnabled } from "./demoMode.js";
 
 // #181: 計測系を撤去した。ここにあったもの:
 //  - fetchBillingUsage() — OrcaRouter専用の課金サマリーAPI (残高表示)
@@ -71,13 +72,16 @@ const NEEDS_REASONING_NONE = /gpt-5\.6-luna/;
  * どう伸びるかが、ツール呼び出しのコストそのもの)。
  *
  * 既定でON。1回20〜60KB程度の書き込みで、logs/ は gitignore 済み。
- * 止めたいときは CHATBAN_DUMP_PROMPT=0 */
+ * 止めたいときは CHATBAN_DUMP_PROMPT=0。
+ *
+ * #224: **公開デモでは既定でOFF** (promptDumpEnabled)。訪問者が打った本文が
+ * そのままディスクに平文で残るため。判断は demoMode.ts に寄せてあり、ここは値を見るだけ */
 function dumpRequest(
   purpose: string,
   model: string,
   params: Omit<OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming, "model">
 ) {
-  if (process.env.CHATBAN_DUMP_PROMPT === "0") return;
+  if (!promptDumpEnabled()) return;
   try {
     const dir = path.join(process.cwd(), "logs");
     fs.mkdirSync(dir, { recursive: true });

@@ -1928,3 +1928,36 @@ test("期限切れは詳細パネルでも超過として出る (#228)", async (
   await page.getByTestId(`task-card-${id}`).click();
   await expect(page.getByTestId("task-detail-panel")).toContainText("超過");
 });
+
+// #226: 経緯メモの本文は板の配信に載せていない (ペイロードの大半を占めていた)。
+// **配らないことと、開いたときに読めることは別の話**なので、両方をここで固定する。
+// 版が上がったら取り直す経路も見る — 配信に載るのは版だけなので、そこが切れると
+// 「パネルを開きっぱなしで古い本文を読み続ける」が起きる (画面もテストも落ちない形で)
+test("経緯メモは板の配信に載らないが、パネルを開くと読める (#226)", async ({ page }) => {
+  const id = await createTask("経緯メモを持つタスク");
+  await fetch(`${API}/api/cards/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ context: "最初に決めたこと", contextVersion: 0 }),
+  });
+
+  // 板の配信には本文が無い (代わりに「あるか・どれくらいか」と版が載る)
+  const board = await (await fetch(`${API}/api/board`)).json();
+  const card = board.cards.find((c: any) => c.id === id);
+  expect(card.context).toBeUndefined();
+  expect(card.contextChars).toBe("最初に決めたこと".length);
+
+  // 開けば読める (アーカイブ済みカードと同じ GET /api/cards/:id を通る)
+  await page.goto("/");
+  await page.getByTestId(`task-card-${id}`).click();
+  const panel = page.getByTestId("task-detail-panel");
+  await expect(panel).toContainText("最初に決めたこと");
+
+  // 開いたまま他所から書き換えられても、版が上がるので取り直す
+  await fetch(`${API}/api/cards/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ context: "あとから足したこと", contextVersion: 1 }),
+  });
+  await expect(panel).toContainText("あとから足したこと");
+});

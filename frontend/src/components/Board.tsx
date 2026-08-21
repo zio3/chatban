@@ -3,7 +3,7 @@ import type { DragEndEvent, DragOverEvent, DragStartEvent } from "@dnd-kit/core"
 import { SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { useState } from "react";
-import { statusLabel } from "../types";
+import { dueBadge, statusLabel } from "../types";
 import type { CustomLane, FoldedTask, Task, TaskStatus } from "../types";
 
 type Column = { key: TaskStatus; label: string; accent: string };
@@ -17,11 +17,14 @@ const GRID_BY_COLUMNS: Record<number, string> = {
 };
 
 /** 固定4列。**任意レーンが0本ならこれがそのまま列になる** (既定はこちら) */
+// #228: **表示名は statusLabel から引く。**ここが持つのは accent (枠線の色) だけ。
+// 以前は label も書いてあり、文字列が一致していたので見えていなかったが、
+// 片方を変えると列見出しとバッジで別の名前が出る形だった
 const BASE_COLUMNS: Column[] = [
-  { key: "todo", label: "Todo", accent: "border-slate-400" },
-  { key: "inprogress", label: "In Progress", accent: "border-blue-500" },
-  { key: "review", label: "Review", accent: "border-amber-500" },
-  { key: "done", label: "Done", accent: "border-emerald-500" },
+  { key: "todo", label: statusLabel("todo").label, accent: "border-slate-400" },
+  { key: "inprogress", label: statusLabel("inprogress").label, accent: "border-blue-500" },
+  { key: "review", label: statusLabel("review").label, accent: "border-amber-500" },
+  { key: "done", label: statusLabel("done").label, accent: "border-emerald-500" },
 ];
 
 /** #19: 任意レーンを Review と Done の**間**に差し込む。
@@ -30,18 +33,6 @@ function columnsFor(lanes: CustomLane[]): Column[] {
   const head = BASE_COLUMNS.slice(0, 3);
   const done = BASE_COLUMNS[3];
   return [...head, ...lanes.map((l) => ({ key: l.key, label: l.label, accent: "border-violet-500" })), done];
-}
-
-/** 期限バッジ: 超過=赤 / 今日・明日=琥珀 / それ以降=グレー (#44) */
-function dueBadge(due: string): { text: string; cls: string } {
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const d = new Date(`${due}T00:00:00`);
-  const diffDays = Math.round((d.getTime() - today.getTime()) / 86400000);
-  const label = `${d.getMonth() + 1}/${d.getDate()}`;
-  if (diffDays < 0) return { text: `⏰ ${label} 超過`, cls: "bg-red-100 font-bold text-red-700" };
-  if (diffDays <= 1) return { text: `⏰ ${label}`, cls: "bg-amber-100 font-bold text-amber-700" };
-  return { text: `⏰ ${label}`, cls: "bg-slate-100 text-slate-500" };
 }
 
 export interface MovePayload {
@@ -58,6 +49,14 @@ export interface MovePayload {
  * 既にあるので、依存チップも同じ意味にしておけば覚えることが増えない (#107でlaneを消したのと同じ、
  * 語彙を増やさない判断)。ホバーは標準のツールチップでタイトルだけ — レイアウトを覆わず、
  * 俯瞰したまま「何待ちか」が読める。モバイルはクリックだけで完結する */
+/** 期限バッジ。**カードと詳細パネルで同じものを出す** (#228) —
+ * 以前はそれぞれが自前で整形しており、超過の判定がカードにしか無かった。
+ * DepChip と同じく、板の外 (パネル) からも使う小さな部品 */
+export function DueBadge({ due, long }: { due: string; long?: boolean }) {
+  const b = dueBadge(due, { long });
+  return <span className={`rounded px-1.5 py-0.5 text-[10px] ${b.cls}`}>{b.text}</span>;
+}
+
 export function DepChip({
   id,
   dep,
@@ -151,9 +150,7 @@ function TaskCard({
           {task.rejected && (
             <span className="rounded bg-rose-600 px-1.5 py-0.5 text-[10px] font-bold text-white">🚫 却下</span>
           )}
-          {task.due && (
-            <span className={`rounded px-1 py-0.5 text-[10px] ${dueBadge(task.due).cls}`}>{dueBadge(task.due).text}</span>
-          )}
+          {task.due && <DueBadge due={task.due} />}
           {task.blockedBy && task.blockedBy.length > 0 && (
             <span
               className="text-[10px] text-slate-500"

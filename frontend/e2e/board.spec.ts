@@ -1911,3 +1911,20 @@ test.describe("任意レーン (#19)", () => {
     expect(res.status).toBeLessThan(500);
   });
 });
+
+// #228: 期限の整形がカードと詳細パネルで別々にあり、**超過の判定がカードにしか無かった**。
+// 見た目の違いではなく情報量の違いなので、パネル側を固定する。
+// 「1か所に置く」は types.ts の statusLabel に書いてある教訓で、期限には適用されていなかった
+test("期限切れは詳細パネルでも超過として出る (#228)", async ({ page }) => {
+  const id = await createTask("期限を過ぎたタスク");
+  await fetch(`${API}/api/cards/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ due: "2020-01-01" }),
+  });
+
+  await page.goto("/");
+  await expect(page.getByTestId(`task-card-${id}`)).toContainText("超過");
+  await page.getByTestId(`task-card-${id}`).click();
+  await expect(page.getByTestId("task-detail-panel")).toContainText("超過");
+});

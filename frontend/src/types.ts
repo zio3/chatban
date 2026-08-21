@@ -74,6 +74,26 @@ export interface ChatEntry {
   attachments?: { kind: "image" | "pdf"; name: string }[];
 }
 
+/** 期限バッジ: 超過=赤 / 今日・明日=琥珀 / それ以降=グレー (#44)。
+ *
+ * #228: **カードと詳細パネルで別々に整形していた。**見た目が違うだけならまだしも、
+ * 超過しているかどうかの判定がカードにしか無く、**パネルでは期限切れが普通の期限に見えていた**
+ * (情報量が違う)。すぐ下の statusLabel に「別々に持つとズレる」と書いてあるのに、
+ * 期限には適用されていなかった。
+ *
+ * cls は**色だけ**を返す。大きさと余白は置く場所ごとに違うので、呼ぶ側が付ける。
+ * long=true は詳細パネル用の「期限 2026-08-25」形式 (幅に余裕があるので年まで出す) */
+export function dueBadge(due: string, opts: { long?: boolean } = {}): { text: string; cls: string } {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const d = new Date(`${due}T00:00:00`);
+  const diffDays = Math.round((d.getTime() - today.getTime()) / 86400000);
+  const label = opts.long ? `期限 ${due}` : `${d.getMonth() + 1}/${d.getDate()}`;
+  if (diffDays < 0) return { text: `⏰ ${label} 超過`, cls: "bg-red-100 font-bold text-red-700" };
+  if (diffDays <= 1) return { text: `⏰ ${label}`, cls: "bg-amber-100 font-bold text-amber-700" };
+  return { text: `⏰ ${label}`, cls: "bg-slate-100 text-slate-500" };
+}
+
 /** 列の表示名。パネルとカードで別々に持つとズレるので1箇所に置く */
 export const STATUS_LABELS: Record<string, { label: string; cls: string }> = {
   todo: { label: "Todo", cls: "bg-slate-200 text-slate-700" },

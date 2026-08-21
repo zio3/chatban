@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { cardIndexJson, clampSummary } from "./promptState.js";
 import { SUMMARY_DESCRIPTION } from "./chat.js";
-import type { TaskStatus } from "./types.js";
+import type { CardStatus } from "./types.js";
 
 // #221: **索引に何が載るか**の番人。
 //
@@ -16,13 +16,13 @@ import type { TaskStatus } from "./types.js";
 // **契約は嘘をついていたが、何も落ちない** — 画面は正常、テストも通る、LLMは黙って
 // 知らないまま答える。だから機械に見張らせる。
 //
-// MCP側 (boardState.ts の TaskFacts) には最初から入っていたので、
+// MCP側 (boardState.ts の CardFacts) には最初から入っていたので、
 // **外部エージェントには見えていてボードのチャットだけ見えていない**という非対称だった。
 
 const card = {
   id: 7,
   title: "デモ環境を直す",
-  status: "review" as TaskStatus,
+  status: "review" as CardStatus,
   summary: "実装完了 (commit abc123)",
   due: null,
   blockedBy: null,

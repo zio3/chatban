@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { extractChoices, suggestSkipReason } from "./chat.js";
 import { readFileSync } from "node:fs";
 import { buildTools } from "./chat.js";
-import { DONE_GATE_RULE, isDueDate, isTaskStatus, mayEnterDone } from "./db.js";
+import { DONE_GATE_RULE, isDueDate, isCardStatus, mayEnterDone } from "./db.js";
 import { AGENT_STATUS_VALUES } from "./chat.js";
 import { isAllowedOrigin, isBrowserCrossSite } from "./origin.js";
 
@@ -170,22 +170,22 @@ test("断る理由 (経路) を説明する。できませんとだけ言わな�
   assert.match(DONE_GATE_RULE, /直送はできません/);
 });
 
-// TypeScript の TaskStatus は実行時には消える。RESTは検証していなかったので
+// TypeScript の CardStatus は実行時には消える。RESTは検証していなかったので
 // status:"banana" が保存でき、ボードは4列でしか抽出しないのでカードがどこにも出ず、
 // 詳細を開くと STATUS_LABELS[status] が undefined で画面が落ちた (自動レビュー指摘)。
 // 「消えた」ように見えて実在する、が一番たちが悪い
 
 test("実在する列だけを通す", () => {
-  for (const s of ["todo", "inprogress", "review", "done"]) assert.equal(isTaskStatus(s), true);
+  for (const s of ["todo", "inprogress", "review", "done"]) assert.equal(isCardStatus(s), true);
 });
 
 test("知らない値は列として認めない", () => {
-  assert.equal(isTaskStatus("banana"), false);
-  assert.equal(isTaskStatus("Done"), false); // 大文字違いも別物
-  assert.equal(isTaskStatus(""), false);
-  assert.equal(isTaskStatus(undefined), false);
-  assert.equal(isTaskStatus(null), false);
-  assert.equal(isTaskStatus(3), false);
+  assert.equal(isCardStatus("banana"), false);
+  assert.equal(isCardStatus("Done"), false); // 大文字違いも別物
+  assert.equal(isCardStatus(""), false);
+  assert.equal(isCardStatus(undefined), false);
+  assert.equal(isCardStatus(null), false);
+  assert.equal(isCardStatus(3), false);
 });
 
 // 提案チップを「呼ばずに諦める」条件。#167 でOFFにできるようにしたとき、

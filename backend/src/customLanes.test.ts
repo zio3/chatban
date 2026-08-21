@@ -1,21 +1,21 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { isTaskStatus, isUsableStatus, isWorkStatus, TASK_STATUSES } from "./db.js";
+import { isCardStatus, isUsableStatus, isWorkStatus, CARD_STATUSES } from "./db.js";
 import { agentStatusValues, reorderableStatuses, statusDescription, STATUS_DESCRIPTION } from "./chat.js";
-import type { CustomLane, TaskStatus } from "./types.js";
+import type { CustomLane, CardStatus } from "./types.js";
 
 // #19: 任意レーン。**判定はどれも純粋関数**にしてあるので、DBもexpressも要らない
-// (isTaskStatus / mayEnterDone / isDueDate と同じ置き方)。
+// (isCardStatus / mayEnterDone / isDueDate と同じ置き方)。
 
 const 素材: CustomLane = { key: "custom1", label: "素材" };
 const 保留: CustomLane = { key: "custom2", label: "保留" };
 
 test("custom1 / custom2 は値としては実在する", () => {
   for (const s of ["todo", "inprogress", "review", "custom1", "custom2", "done"]) {
-    assert.equal(isTaskStatus(s), true, s);
+    assert.equal(isCardStatus(s), true, s);
   }
-  assert.equal(isTaskStatus("custom3"), false);
-  assert.equal(isTaskStatus("custom"), false);
+  assert.equal(isCardStatus("custom3"), false);
+  assert.equal(isCardStatus("custom"), false);
 });
 
 // ここが #19 の肝。列を描かないのに保存だけ通ると、カードが「消えたように見えて実在する」
@@ -70,8 +70,8 @@ test("レーンの表示名が契約の説明に入る", () => {
 });
 
 test("列の並びは Review と Done の間で固定", () => {
-  // TASK_STATUSES の順序がそのままボードの列順の根拠になっている
-  assert.deepEqual([...TASK_STATUSES], ["todo", "inprogress", "review", "custom1", "custom2", "done"]);
+  // CARD_STATUSES の順序がそのままボードの列順の根拠になっている
+  assert.deepEqual([...CARD_STATUSES], ["todo", "inprogress", "review", "custom1", "custom2", "done"]);
 });
 
 // レビュー指摘 (2026-08-21): **任意レーンが「作業中」に入っていなかった。**
@@ -79,7 +79,7 @@ test("列の並びは Review と Done の間で固定", () => {
 // 確認し直さずにDoneへ通せた。#161 (ゴミ箱) と #57 (Doneからの差し戻し) で
 // 同じ穴を2回塞いでいるのに、レーンだけ取り残されていた
 test("任意レーンも作業中の列 (検収の印を落とす側)", () => {
-  for (const s of ["todo", "inprogress", "custom1", "custom2"] as TaskStatus[]) {
+  for (const s of ["todo", "inprogress", "custom1", "custom2"] as CardStatus[]) {
     assert.equal(isWorkStatus(s), true, `${s} は作業中の列`);
   }
   // review は含めない。検収待ちの列で印を付けてから一括確定するので、印は進捗そのもの
@@ -91,6 +91,6 @@ test("任意レーンも作業中の列 (検収の印を落とす側)", () => {
 // **列を足したら「作業中とは何か」も更新する。**今回の穴はそこを忘れて開いた。
 // 値の一覧と判定が別々に伸びると、次に列が増えたときに同じことが起きる
 test("すべての列が作業中かレビュー/完了のどちらかに分類されている", () => {
-  const unclassified = TASK_STATUSES.filter((s) => !isWorkStatus(s) && s !== "review" && s !== "done");
+  const unclassified = CARD_STATUSES.filter((s) => !isWorkStatus(s) && s !== "review" && s !== "done");
   assert.deepEqual(unclassified, [], `分類されていない列がある: ${unclassified.join(", ")}`);
 });

@@ -2,7 +2,7 @@ import { hooks } from "./hooks.js";
 import { log } from "./log.js";
 import { admin, currentProjectId, customLanes, db, projectReadonly } from "./store.js";
 import { decodeUnicodeEscapes } from "./text.js";
-import type { CustomLane, Task, TaskStatus } from "./types.js";
+import type { CustomLane, Card, CardStatus } from "./types.js";
 
 // #179: 担当者・割り振りは機能ごと落とした (個人利用に特化)。
 // cards.assignee / assign_reason と members / proposals / assignment_history は
@@ -14,7 +14,7 @@ import type { CustomLane, Task, TaskStatus } from "./types.js";
 // ここは「いまアクティブなプロジェクトのDB」に対する操作だけを書く。
 // db() = プロジェクトDB / admin = 管理DB (プロジェクト一覧・アプリ設定・LLM呼び出し記録)
 
-export function listCards(includeArchived = false): Task[] {
+export function listCards(includeArchived = false): Card[] {
   // sort未設定の既存行はid順に混ざる (COALESCEでidを暫定sortとして扱う)
   // #102: ゴミ箱(trashed_at)は常に除外。復元できる形にしただけで、見え方は削除と同じ
   const where = includeArchived ? "WHERE trashed_at IS NULL" : "WHERE archived = 0 AND trashed_at IS NULL";
@@ -22,13 +22,13 @@ export function listCards(includeArchived = false): Task[] {
 }
 
 /** ゴミ箱の中身 (新しい順)。UIの復元導線とチャットの「戻して」で使う */
-export function listTrashedTasks(): Task[] {
+export function listTrashedTasks(): Card[] {
   return (
     db().prepare("SELECT * FROM cards WHERE trashed_at IS NOT NULL ORDER BY trashed_at DESC, id DESC").all() as any[]
   ).map(rowToTask);
 }
 
-function rowToTask(r: any): Task {
+function rowToTask(r: any): Card {
   return {
     id: r.id,
     title: r.title,
@@ -48,7 +48,7 @@ function rowToTask(r: any): Task {
   };
 }
 
-export function createTask(title: string, status: TaskStatus = "todo"): Task {
+export function createTask(title: string, status: CardStatus = "todo"): Card {
   // 新規作成でいきなり Done は作れない。検収は「実物を確かめた」記録なので、
   // 生まれた瞬間に確かめ終わっているものは無い (mayEnterDone と同じ理由)
   if (!isUsableStatus(status, customLanes())) {
@@ -63,13 +63,13 @@ export function createTask(title: string, status: TaskStatus = "todo"): Task {
   return getTask(Number(info.lastInsertRowid))!;
 }
 
-export function getTask(id: number): Task | undefined {
+export function getTask(id: number): Card | undefined {
   const r = db().prepare("SELECT * FROM cards WHERE id = ?").get(id) as any;
   return r ? rowToTask(r) : undefined;
 }
 
-export type TaskPatch = Partial<
-  Pick<Task, "title" | "status" | "sort" | "context" | "summary" | "due" | "blockedBy" | "rejected">
+export type CardPatch = Partial<
+  Pick<Card, "title" | "status" | "sort" | "context" | "summary" | "due" | "blockedBy" | "rejected">
 >;
 
 /** Doneへ入ってよい状態か。approveChecked が通す条件そのもの。
@@ -88,24 +88,24 @@ export type TaskPatch = Partial<
  *
  * DONE_GATE_RULE は、断ったときに返す説明。REST・チャット・MCPで同じ文言を使う —
  * 「なぜ動かなかったのか」を入口ごとに違う言葉で返すと、別のルールがあるように読める */
-/** 実在する列。TypeScriptの TaskStatus は実行時には消えるので、外から来た値は必ずここで確かめる。
+/** 実在する列。TypeScriptの CardStatus は実行時には消えるので、外から来た値は必ずここで確かめる。
  * "banana" のような値がそのまま保存されると、ボードは4列でしか抽出しないのでカードが
  * どの列にも出なくなり、詳細を開くと STATUS_LABELS[status] が undefined で画面が落ちる
  * (自動レビュー指摘)。「消えた」ように見えて実在する、が一番たちが悪い */
-export const TASK_STATUSES = ["todo", "inprogress", "review", "custom1", "custom2", "done"] as const;
-export function isTaskStatus(v: unknown): v is TaskStatus {
-  return typeof v === "string" && (TASK_STATUSES as readonly string[]).includes(v);
+export const CARD_STATUSES = ["todo", "inprogress", "review", "custom1", "custom2", "done"] as const;
+export function isCardStatus(v: unknown): v is CardStatus {
+  return typeof v === "string" && (CARD_STATUSES as readonly string[]).includes(v);
 }
 
-/** #19: **そのプロジェクトで実際に置ける列か。**TASK_STATUSES は「値として在る」だけで、
+/** #19: **そのプロジェクトで実際に置ける列か。**CARD_STATUSES は「値として在る」だけで、
  * custom1 / custom2 は表示名を付けたプロジェクトにしか存在しない。
  *
  * 有効でないレーンを通すと、ボードはそのレーンの列を描かないので**カードがどこにも出なくなる** —
- * isTaskStatus の注記にある「消えたように見えて実在する」がそのまま起きる。
+ * isCardStatus の注記にある「消えたように見えて実在する」がそのまま起きる。
  * 契約 (ツールの enum) 側でも有効なレーンしか出さないが、**選べないことと保存できないことは別**なので
- * 書き込みの手前にも同じ判定を置く。isTaskStatus と同じで、DBもHTTPも要らない純粋関数 */
-export function isUsableStatus(v: unknown, lanes: CustomLane[]): v is TaskStatus {
-  if (!isTaskStatus(v)) return false;
+ * 書き込みの手前にも同じ判定を置く。isCardStatus と同じで、DBもHTTPも要らない純粋関数 */
+export function isUsableStatus(v: unknown, lanes: CustomLane[]): v is CardStatus {
+  if (!isCardStatus(v)) return false;
   if (v === "custom1" || v === "custom2") return lanes.some((l) => l.key === v);
   return true;
 }
@@ -124,14 +124,14 @@ export function isUsableStatus(v: unknown, lanes: CustomLane[]): v is TaskStatus
  *
  * review は含めない (検収待ちの列で印を付けてから一括確定するので、印は進捗そのもの)。
  * done も含めない (そこから出るときの扱いは leavingDone が別に見ている) */
-export function isWorkStatus(v: TaskStatus): boolean {
+export function isWorkStatus(v: CardStatus): boolean {
   return v === "todo" || v === "inprogress" || v === "custom1" || v === "custom2";
 }
 
 /** #19: レーンを畳むときに、そこに居たカードを todo へ戻す。戻した件数を返す。
  *
  * **畳むより先に必ず呼ぶ。**表示名を消すとボードはその列を描かなくなるので、中身を置いたままだと
- * 「保存されているのにどの列にも出ない」カードができる — isTaskStatus の注記にある
+ * 「保存されているのにどの列にも出ない」カードができる — isCardStatus の注記にある
  * 「消えたように見えて実在する」そのもの。削除ではなく **todo へ戻す** のは、
  * どこへ行ったか分かる場所が todo だけだから (#102 と同じで、取り返しのつく側に倒す)。
  *
@@ -141,7 +141,7 @@ export function isWorkStatus(v: TaskStatus): boolean {
  * ルールが増えても退避だけが取り残されない (#60 の「Doneへ入るルートはここ1本」と同じ形) */
 export function evacuateLane(key: "custom1" | "custom2"): number {
   const ids = (db().prepare("SELECT id FROM cards WHERE status = ?").all(key) as { id: number }[]).map((r) => r.id);
-  updateTasks(ids.map((id) => ({ id, patch: { status: "todo" as TaskStatus } })));
+  updateTasks(ids.map((id) => ({ id, patch: { status: "todo" as CardStatus } })));
   return ids.length;
 }
 
@@ -155,7 +155,7 @@ export const DONE_GATE_RULE =
  * 2026-13-01 が通る。通してしまうと、カードのバッジ(dueBadge)や「期限が近い順」の判断が
  * 静かに狂う — 保存できてしまう値のほうが、弾かれる値より始末が悪い。
  *
- * isTaskStatus と同じ置き方 (実行時に外から来た値を確かめる純粋関数)。DBもHTTPも要らないので
+ * isCardStatus と同じ置き方 (実行時に外から来た値を確かめる純粋関数)。DBもHTTPも要らないので
  * ユニットで押さえられるし、REST・チャット・MCPのどこから来ても同じ判定になる */
 export function isDueDate(v: unknown): v is string {
   if (typeof v !== "string") return false;
@@ -171,20 +171,20 @@ export const DUE_FORMAT_RULE = "期限は YYYY-MM-DD (実在する日付) で渡
 
 /** Doneへ確定して要約カードに畳まれたか。
  *
- * archived は Task 型に出していない (getTask はアーカイブ済みも返すが、UIは要約カード経由で読む)。
+ * archived は Card 型に出していない (getTask はアーカイブ済みも返すが、UIは要約カード経由で読む)。
  * 「確定してよいか」「消してよいか」の判定は隠れている列も見る必要があるので、ここに1本だけ置く */
 export function isArchived(id: number): boolean {
   return !!(db().prepare("SELECT archived FROM cards WHERE id = ?").get(id) as { archived: number } | undefined)
     ?.archived;
 }
 
-export function mayEnterDone(cur: Pick<Task, "status" | "checkedAt" | "trashedAt">): boolean {
+export function mayEnterDone(cur: Pick<Card, "status" | "checkedAt" | "trashedAt">): boolean {
   return cur.status === "review" && !!cur.checkedAt && !cur.trashedAt;
 }
 
 /** 複数カードの一括更新 (#60)。完了遷移はまとめて1回だけ通知する (要約再生成のバッチ化)。
  * 単一更新もこの関数の長さ1ケースとして扱う — Doneへ入るルートはここ1本 */
-export function updateTasks(patches: { id: number; patch: TaskPatch }[]): (Task | undefined)[] {
+export function updateTasks(patches: { id: number; patch: CardPatch }[]): (Card | undefined)[] {
   const completed: number[] = [];
   const reopened: number[] = [];
   const results = patches.map(({ id, patch }) => {
@@ -261,7 +261,7 @@ export function updateTasks(patches: { id: number; patch: TaskPatch }[]): (Task 
  * 割り込まない。そのうえで、通らなかったものは理由つきで返す (黙って落とすと
  * 「押したのに動かない」になる) */
 export function approveChecked(ids: number[]): {
-  updated: (Task | undefined)[];
+  updated: (Card | undefined)[];
   skipped: { id: number; reason: string }[];
 } {
   const skipped: { id: number; reason: string }[] = [];
@@ -283,7 +283,7 @@ export function approveChecked(ids: number[]): {
   return { updated, skipped };
 }
 
-export function updateTask(id: number, patch: TaskPatch): Task | undefined {
+export function updateTask(id: number, patch: CardPatch): Card | undefined {
   return updateTasks([{ id, patch }])[0];
 }
 
@@ -343,7 +343,7 @@ export function trashTask(id: number): boolean {
  * ゴミ箱に無い生きたカードのIDを渡しても成功として扱われ、呼び出し側が
  * 「復元しました」と報告していた (Codexレビュー指摘)。**やっていないことを報告しない** —
  * 0件更新は undefined を返し、入口側 (REST 404 / restored:false) に判断させる */
-export function restoreTask(id: number): Task | undefined {
+export function restoreTask(id: number): Card | undefined {
   const changed = db()
     .prepare("UPDATE cards SET trashed_at = NULL, checked_at = NULL WHERE id = ? AND trashed_at IS NOT NULL")
     .run(id).changes;
@@ -504,7 +504,7 @@ export function listChatMessages(limit = 50, taskId?: number): {
 // 表示設定ではなく操作なので「いまソート中」という画面の隠れ状態は生まれず、あとから手で直せる。
 export function reorderTasks(
   ids: number[],
-  status: TaskStatus
+  status: CardStatus
 ): { ordered: number; appended: number; ignored?: number[] } {
   // 母集団はサーバー側で決める。listCards() が archived=0 AND trashed_at IS NULL なので、
   // アーカイブ済み・ゴミ箱は最初から対象外 — query_log の説明で読み手に教えている
@@ -514,7 +514,7 @@ export function reorderTasks(
   const byId = new Map(targets.map((t) => [t.id, t]));
   const seen = new Set<number>();
   const ignored: number[] = [];
-  const ordered: Task[] = [];
+  const ordered: Card[] = [];
   for (const id of ids) {
     if (seen.has(id)) continue;
     const t = byId.get(id);
@@ -792,9 +792,9 @@ export function queryLogHelp(message: string): Record<string, unknown> {
 }
 
 /** #108: 検収の印を付け外しする。人間のUI操作 (REST) からのみ呼ぶ。
- * agentWrite の TaskPatch には入れない — エージェントが「確認しておきました」と
+ * agentWrite の CardPatch には入れない — エージェントが「確認しておきました」と
  * 自分でチェックを付けてしまう事故を、プロンプトではなく経路の有無で防ぐ */
-export function setChecked(id: number, checked: boolean): { task?: Task; error?: string } {
+export function setChecked(id: number, checked: boolean): { task?: Card; error?: string } {
   const cur = getTask(id);
   if (!cur) return {};
   // 印を付けられるのは Review にあるものだけ。以前は列を見ていなかったので、

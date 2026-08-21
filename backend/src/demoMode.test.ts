@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { isDemoMode, attachmentsEnabled, jsonLimit, suggestBootGraceMs, DEMO_SUGGEST_GRACE_MS } from "./demoMode.js";
+import { isDemoMode, attachmentsEnabled, jsonLimit, suggestBootGraceMs, DEMO_SUGGEST_GRACE_MS, promptDumpEnabled } from "./demoMode.js";
 
 // #213: DEMO_MODE は**既定値のセットであって、モード分岐ではない**。
 // ここで固定するのは「何が既定になるか」と「個別指定が勝つこと」の2点。
@@ -41,4 +41,15 @@ test("真偽値の書き方は複数受ける。知らない文字列は既定�
 test("数値でない SUGGEST_BOOT_GRACE_MS は既定に倒す (NaNで猶予が壊れない)", () => {
   assert.equal(suggestBootGraceMs(env({ SUGGEST_BOOT_GRACE_MS: "ずっと" })), 60_000);
   assert.equal(suggestBootGraceMs(env({ DEMO_MODE: "on", SUGGEST_BOOT_GRACE_MS: "ずっと" })), DEMO_SUGGEST_GRACE_MS);
+});
+
+// #224: 公開デモでは訪問者が打った本文がそのまま VPS のディスクに平文で残っていた。
+// #213 (添付の入口を閉じる) と同じ系譜で、**個別の環境変数をserviceに書き足すのではなく
+// DEMO_MODE の既定値として持つ** — 書き忘れても既定で守られる側に倒す
+test("プロンプトのダンプはデモでは既定OFF、それ以外は既定ON", () => {
+  assert.equal(promptDumpEnabled(env({})), true, "個人利用では調査の道具として要る");
+  assert.equal(promptDumpEnabled(env({ DEMO_MODE: "on" })), false, "訪問者の入力を残さない");
+  // 明示すればどちらでも勝てる (デモで調査したい場面はありうる)
+  assert.equal(promptDumpEnabled(env({ DEMO_MODE: "on", CHATBAN_DUMP_PROMPT: "1" })), true);
+  assert.equal(promptDumpEnabled(env({ CHATBAN_DUMP_PROMPT: "0" })), false);
 });

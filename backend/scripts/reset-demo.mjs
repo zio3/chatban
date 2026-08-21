@@ -32,6 +32,17 @@ export function isResettable(name) {
   return /\.db$/.test(name) || SIDECAR_SUFFIXES.some((s) => name.endsWith(`.db${s}`));
 }
 
+/** #224: プロンプトのダンプ (LLMへ送った中身の実物)。**訪問者が打った本文が平文で入る。**
+ *
+ * 新しく書かないようにするのは demoMode 側 (promptDumpEnabled) だが、
+ * **切り替える前に書かれたものはディスクに残ったまま**なので、朝のリセットで一緒に流す。
+ * 「毎朝きれいになる」が板の中身だけを指していると、訪問者の入力だけが残り続ける。
+ *
+ * data ではなく logs 配下なので isResettable とは別に持つ (消してよい範囲を混ぜない) */
+export function isPromptDump(name) {
+  return /^last-request-p\d+-.+\.json$/.test(name);
+}
+
 /** seed に採るもの = DB本体と `-wal`。**`.db` だけでは中身が入らない。**
  *
  * WALモードでは、書いた内容はしばらく `-wal` 側にあり、`.db` には取り込まれていない。
@@ -210,7 +221,14 @@ async function main() {
         copyFileSync(path.join(SEED, rel), to);
         matchOwner(to, DATA, DATA);
       }
-      say(`リセットしました (${doomed.length}件を削除 / ${seeds.length}件を復元)。`);
+      // #224: 訪問者の入力が残ったままにならないよう、ダンプも一緒に流す
+      const logs = path.join(process.cwd(), "logs");
+      const dumps = existsSync(logs) ? readdirSync(logs).map(String).filter(isPromptDump) : [];
+      for (const name of dumps) rmSync(path.join(logs, name), { force: true });
+      say(
+        `リセットしました (${doomed.length}件を削除 / ${seeds.length}件を復元` +
+          `${dumps.length > 0 ? ` / プロンプトのダンプ ${dumps.length}件を削除` : ""})。`
+      );
     }
   } finally {
     // **止めたものは必ず起こす。**途中で失敗しても、板が落ちたままにはしない

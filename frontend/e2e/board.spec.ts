@@ -2123,3 +2123,42 @@ test("切断中に📋前提を開いても、繋ぎ直したときに追いつ�
 
   await expect(page.getByText("切れている間に変わった前提"), "繋ぎ直しても古い本文のまま").toBeVisible();
 });
+// レビュー指摘 (2026-08-21): **停止しても、サーバーのLLM処理は続いている。**
+// 停止はクライアント側で受信を捨てるだけなので、そこで再送すると元の処理と並走し、
+// **同じ操作が二重に走る** (「カードを追加して」→ 停止 → 再送 → カードが2枚)。
+// 表示ではなくデータが増えるので、再送ボタンを出さないことをここで固定する。
+//
+// LLMは呼ばない。**チャットの往復を page.route で作る**ので、実物のサーバーには触れない
+test.describe("失敗のあとに再送を出してよいか (#123 の線)", () => {
+  test("停止したときは再送を出さない (サーバー側は動き続けているため)", async ({ page }) => {
+    // 応答を返さないまま待たせる = 「処理中」の状態を作る
+    await page.route("**/api/chat", () => new Promise(() => {}));
+    await page.goto("/");
+
+    await page.getByPlaceholder(/ボードに話しかける/).fill("カードを追加して");
+    await page.keyboard.press("Enter");
+
+    const stop = page.getByTitle(/応答の受信をやめる/);
+    await expect(stop).toBeVisible();
+    await stop.click();
+
+    await expect(page.getByText(/応答の受信を停止しました/)).toBeVisible();
+    await expect(page.getByRole("button", { name: /再送/ }), "停止後に再送ボタンが出ている").toHaveCount(0);
+  });
+
+  // **普通の失敗でも出さない。**1周目は「停止・タイムアウトだけ危ない」と考えて
+  // ここに「普通の失敗では再送を出す」という対照を置いていたが、それが危険な境界だった
+  // (レビュー指摘 2026-08-21、2周目) — ツールの往復は1ターンに何ラウンドもあり、
+  // **1ラウンド目で create_cards が成功したあと2ラウンド目が失敗すると 500 が返る**。
+  // クライアントからは副作用の有無を判定できないので、案内だけ出す
+  test("普通の失敗でも再送は出さず、ボードを確かめるよう案内する", async ({ page }) => {
+    await page.route("**/api/chat", (route) => route.fulfill({ status: 500, json: { error: "boom" } }));
+    await page.goto("/");
+
+    await page.getByPlaceholder(/ボードに話しかける/).fill("なにか話す");
+    await page.keyboard.press("Enter");
+
+    await expect(page.getByText(/途中まで実行されている場合があります/)).toBeVisible();
+    await expect(page.getByRole("button", { name: /再送/ }), "副作用の有無が分からないのに再送が出ている").toHaveCount(0);
+  });
+});

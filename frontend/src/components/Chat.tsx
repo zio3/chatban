@@ -201,18 +201,9 @@ export default function Chat({
                     {e.pending ? (
                       <ThinkingIndicator label={e.content} elapsedSec={elapsedSec} onStop={onStop} />
                     ) : e.error ? (
-                      <div className="flex items-center gap-2">
-                        <span>{e.content}</span>
-                        {e.retryText && (
-                          <button
-                            onClick={() => onSend(e.retryText!)}
-                            disabled={sending}
-                            className="shrink-0 rounded-md bg-red-600 px-2 py-0.5 text-xs font-medium text-white hover:bg-red-700 disabled:opacity-40"
-                          >
-                            🔄 再送
-                          </button>
-                        )}
-                      </div>
+                      // 再送ボタンは置かない (レビュー指摘 2026-08-21)。
+                      // 失敗しても**途中まで実行されている**ことがあり、押すと同じ操作が重複する
+                      <span>{e.content}</span>
                     ) : e.role === "assistant" ? (
                       <div className="chat-md">
                         <Markdown

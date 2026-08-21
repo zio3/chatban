@@ -44,7 +44,7 @@ export default function App() {
   // #14 → #90 → #180: なりきりの切替UIを撤去したあとも発言者(speaker)の配線だけ残していたが、
   // 個人利用に特化したので概念ごと外した (話しかけてくるのは常に持ち主ひとり)
 
-  // メインチャット: ライフサイクル(送信/考え中/停止/タイムアウト/再送)は共有フックに集約 (#23/#28/#29/#30)
+  // メインチャット: ライフサイクル(送信/考え中/停止/タイムアウト)は共有フックに集約 (#23/#28/#29/#30)
   const mainChat = useChatTurn({
     request: (m, h, signal, attachments) => api.chat(m, h, signal, attachments, viewRef.current),
     onResponse: (res) => {

@@ -97,7 +97,31 @@ export function useChatTurn(opts: {
           : reason === "timeout"
             ? `⏱ ${TIMEOUT_MS / 1000}秒応答がないため打ち切りました`
             : `エラー: ${e?.message ?? e}`;
-      setLog((prev) => [...prev.filter((en) => !en.pending), { role: "assistant", content, error: true, retryText: text }]);
+      // **失敗しても「何も起きていない」とは限らないので、ワンボタンの再送は出さない**
+      // (レビュー指摘 2026-08-21、2周目)。
+      //
+      // 1周目は「停止・タイムアウトだけ危ない」と考えたが、それでは足りなかった。
+      // ツールの往復は1ターンに何ラウンドもあり、**1ラウンド目で create_cards が成功して
+      // DBに書けたあと、文章化のための2ラウンド目が失敗すると 500 が返る**。
+      // カードは既にあるのに、押せば同じ依頼がもう一度走る — 停止のときと同じデータ増加が、
+      // 普通のエラーでも成立する。
+      //   停止・タイムアウト … サーバーの処理が**続いている**
+      //   500 / ネットワーク … サーバーの処理が**途中まで終わっている**かもしれない
+      //   添付あり … 再送すると原本が無いので**別のリクエストになる** (#68 / #123)
+      // どれも**クライアントからは副作用の有無を判定できない**。
+      // 冪等化 (リクエストIDをサーバーで覚える) なら安全に再送できるが、それは別の話。
+      //
+      // 発言そのものはログに残っているので、確かめてから同じことを打ち直せる
+      const hadAttachments = !!attachments?.length;
+      const detail = hadAttachments
+        ? " — 添付をもう一度付けて送り直してください"
+        : reason === "stopped" || reason === "timeout"
+          ? "" // 文面が既に「実行済みの操作はボードに反映されます」と言っている
+          : " — 途中まで実行されている場合があります。ボードを確かめてから送り直してください";
+      setLog((prev) => [
+        ...prev.filter((en) => !en.pending),
+        { role: "assistant", content: content + detail, error: true },
+      ]);
     } finally {
       window.clearTimeout(timeout);
       abortRef.current = null;

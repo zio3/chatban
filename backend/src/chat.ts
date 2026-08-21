@@ -28,7 +28,7 @@ import { getModel } from "./config.js";
 import { foldedContainer } from "./archive.js";
 import { suggestBootGraceMs } from "./demoMode.js";
 import { log } from "./log.js";
-import type { CustomLane, TaskStatus, UiAction } from "./types.js";
+import type { CustomLane, TaskStatus, UiAction, ViewEvent } from "./types.js";
 
 export interface ToolTrace {
   tool: string;
@@ -473,6 +473,9 @@ async function execTool(name: string, args: any, uiActions: UiAction[], events: 
     }
     case "update_project_context": {
       const r = setProjectContext(args.text ?? "", args.version);
+      // 📋前提の画面は編集UIを持たず変更経路がチャットだけ (#73) なので、
+      // ここで伝えないと**開いたまま古い本文を読み続ける** (レビュー指摘 2026-08-21)
+      if (r.ok) events.add("context");
       if (!r.ok)
         return {
           ok: false,
@@ -806,7 +809,7 @@ async function generateSuggestionsUncached(
 export async function runChatTurn(
   userMessage: string,
   history: { role: "user" | "assistant"; content: string }[],
-  onEvent: (kind: "board" | "proposals") => void,
+  onEvent: (kind: ViewEvent) => void,
   onProgress?: (label: string) => void,
   taskFocusId?: number,
   attachments?: ChatAttachment[],
@@ -837,7 +840,7 @@ export async function runChatTurn(
 async function runChatTurnInner(
   userMessage: string,
   history: { role: "user" | "assistant"; content: string }[],
-  onEvent: (kind: "board" | "proposals") => void,
+  onEvent: (kind: ViewEvent) => void,
   onProgress?: (label: string) => void,
   taskFocusId?: number,
   attachments?: ChatAttachment[],
@@ -892,7 +895,7 @@ async function runChatTurnInner(
         trace.push({ tool: tc.function.name, input: args, result });
         messages.push({ role: "tool", tool_call_id: tc.id, content: JSON.stringify(result) });
       }
-      for (const e of events) onEvent(e as "board" | "proposals");
+      for (const e of events) onEvent(e as ViewEvent);
       continue;
     }
     reply = typeof msg.content === "string" ? msg.content : "";

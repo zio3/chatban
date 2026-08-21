@@ -2067,3 +2067,26 @@ test("添付を受けない板では、2つあるチャット面の両方で入�
   await expect(panel).toBeVisible();
   await expect(panel.getByTitle(/画像\/PDFを添付/), "カード専用チャットに能力フラグが届いていない").toHaveCount(0);
 });
+
+// レビュー指摘 (2026-08-21): **📋前提の画面が開いたまま古い本文を出し続けていた。**
+// この画面は編集UIを持たず、変更経路はチャット (と外部エージェント) だけ (#73) なので、
+// 取得がマウント時の1回だけだと**設計上の唯一の使い方で必ず古くなる**。
+// 見ている人は変わっていないと思ってもう一度依頼する。
+test("前提情報を外から書き換えると、開いている📋前提の画面が追いつく (#73)", async ({ page }) => {
+  const before = await mcp("get_project_context", {});
+  try {
+    await page.goto("/");
+    await page.getByRole("button", { name: /📋 前提/ }).click();
+    await expect(page.getByText(/プロジェクトの前提情報/)).toBeVisible();
+
+    // 画面を開いたまま、外 (MCP = チャットと同じ書き込み経路) から書き換える
+    const cur = await mcp("get_project_context", {});
+    await mcp("update_project_context", { text: "画面を開いたまま書き換えた前提", version: cur.version });
+
+    // 再読み込みもタブ切り替えもせずに追いつく
+    await expect(page.getByText("画面を開いたまま書き換えた前提")).toBeVisible();
+  } finally {
+    const now = await mcp("get_project_context", {});
+    await mcp("update_project_context", { text: before.text, version: now.version });
+  }
+});

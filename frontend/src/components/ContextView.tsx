@@ -1,5 +1,6 @@
 import { apiFetch } from "../api";
-import { useEffect, useState } from "react";
+import { socket } from "../socket";
+import { useCallback, useEffect, useState } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
@@ -9,12 +10,24 @@ export default function ContextView() {
   const [data, setData] = useState<{ text: string; updatedAt: string | null } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
+  const load = useCallback(() => {
     apiFetch("/api/project-context")
       .then((r) => r.json())
       .then(setData)
       .catch((e) => setError(String(e)));
   }, []);
+
+  // **開いたまま古い本文を読み続けない** (レビュー指摘 2026-08-21)。
+  // この画面は編集UIを持たず、変更経路はチャット (と外部エージェント) だけなので、
+  // 取得がマウント時の1回だけだと**設計上の唯一の使い方で必ず古くなる**。
+  // 本文は配信に載せず「変わった」とだけ受けて取り直す (板の配信を太らせない / #226 と同じ線)
+  useEffect(() => {
+    load();
+    socket.on("context:changed", load);
+    return () => {
+      socket.off("context:changed", load);
+    };
+  }, [load]);
 
   if (error) return <p className="p-6 text-sm text-red-600">読み込み失敗: {error}</p>;
   if (!data) return <p className="p-6 text-sm text-slate-500">読み込み中…</p>;

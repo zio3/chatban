@@ -2040,3 +2040,30 @@ test("カードを切り替えるとパネルは作り直される (前のカー
   await expect(input).toHaveAttribute("placeholder", new RegExp(`#${b}`));
   await expect(input, "前のカードの入力が持ち越されている (パネルが作り直されていない)").toHaveValue("");
 });
+
+// レビュー指摘 (2026-08-21): **能力フラグが2つあるチャット面の片方にしか届いていなかった。**
+// 「まとめたつもり」と「実際に全部に届いている」がズレる形で、配線なので画面も型も落ちない。
+//
+// 板の配信を差し替えて「添付を受けない構成」を作る。**サーバーの環境変数を触らない**ので、
+// 他のテストと同じ1台のまま確かめられる (apiStyle: messages を再現する必要もない)
+test("添付を受けない板では、2つあるチャット面の両方で入口が閉じる", async ({ page }) => {
+  const id = await createTask("添付の入口を確かめるカード");
+
+  await page.route("**/api/board", async (route) => {
+    const res = await route.fetch();
+    const body = await res.json();
+    await route.fulfill({ json: { ...body, attachments: false } });
+  });
+  await page.goto("/");
+
+  // 1. メインチャット
+  const mainAttach = page.getByTitle(/画像\/PDFを添付/);
+  await expect(mainAttach).toHaveCount(0);
+  await expect(page.getByPlaceholder(/スクショやPDFも貼れます/)).toHaveCount(0);
+
+  // 2. カード専用チャット (ここが届いていなかった側)
+  await page.getByTestId(`task-card-${id}`).click();
+  const panel = page.getByTestId("task-detail-panel");
+  await expect(panel).toBeVisible();
+  await expect(panel.getByTitle(/画像\/PDFを添付/), "カード専用チャットに能力フラグが届いていない").toHaveCount(0);
+});

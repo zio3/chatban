@@ -179,7 +179,7 @@ export function toOpenAiShape(data: any, fallbackModel: string): OpenAiShapedRes
 }
 
 /** 添付 (画像/PDF) が混ざっているか。**この経路は持ち回れない**ので、投げる前に見る。
- * DBもHTTPも要らない純粋関数にしてあるのはテストのため (isTaskStatus / mayEnterDone と同じ置き方) */
+ * DBもHTTPも要らない純粋関数にしてあるのはテストのため (isCardStatus / mayEnterDone と同じ置き方) */
 export function hasAttachmentParts(messages: OaMessage[]): boolean {
   return messages.some(
     (m) =>

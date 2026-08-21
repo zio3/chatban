@@ -7,10 +7,10 @@ import {
   restoreTask,
   updateTask,
   updateTasks,
-  type TaskPatch,
+  type CardPatch,
 } from "./db.js";
 import { cleanAgentText } from "./text.js";
-import type { TaskStatus } from "./types.js";
+import type { CardStatus } from "./types.js";
 
 // #114: エージェント(内蔵チャット / MCP越しの外部エージェント)からのカード書き込みは、
 // 必ずこのモジュールを通す。
@@ -51,10 +51,10 @@ export interface ContextConflict {
 }
 
 /** doneはエージェントから設定できない。唯一の扉は人間の検収UI (#69) */
-function coerceStatus(status: string | undefined): { status?: TaskStatus; coerced: boolean } {
+function coerceStatus(status: string | undefined): { status?: CardStatus; coerced: boolean } {
   if (status === undefined) return { coerced: false };
   if (status === "done") return { status: "review", coerced: true };
-  return { status: status as TaskStatus, coerced: false };
+  return { status: status as CardStatus, coerced: false };
 }
 
 /** 経緯メモへの追記。外部エージェントからの指摘 —
@@ -111,7 +111,7 @@ export function createTasksAsAgent(cards: AgentTaskInput[]): {
     const task = createTask(title, status ?? "todo");
     const due = acceptableDue(t.due);
     if (due.bad) badDue.push(title);
-    const patch: TaskPatch = {
+    const patch: CardPatch = {
       ...(t.context !== undefined ? { context: cleanAgentText(t.context) } : {}),
       ...(t.summary !== undefined ? { summary: cleanAgentText(t.summary) } : {}),
       ...(due.due !== undefined ? { due: due.due } : {}),
@@ -143,7 +143,7 @@ export function createTasksAsAgent(cards: AgentTaskInput[]): {
  * 「さっき検収されていたから確定できる」という前提のまま話を進めてしまう */
 export function restoreTasksAsAgent(ids: number[]): {
   ok: boolean;
-  /** 戻したものの要点だけ。**Task をそのまま載せない** — `context` (1件1,000字超) が
+  /** 戻したものの要点だけ。**Card をそのまま載せない** — `context` (1件1,000字超) が
    * 応答に乗り、チャットではそれが次のLLM入力とtraceへ再投入される (#108 と同じ無駄)。
    * ここで絞っておけば入口ごとに要約する必要がなく、経路差も生まれない (Codexレビュー指摘) */
   restored: { id: number; title: string; status: string }[];
@@ -267,13 +267,13 @@ export function updateTasksAsAgent(updates: AgentTaskUpdate[]): {
       id: u.id,
       patch: {
         ...(changed(cleanAgentText(u.title), cur?.title) ? { title: cleanAgentText(u.title) } : {}),
-        ...(statusChanged ? { status: status as TaskStatus } : {}),
+        ...(statusChanged ? { status: status as CardStatus } : {}),
         ...(changed(due, cur?.due ?? null) ? { due } : {}),
         ...(blockedBy !== undefined && !sameDeps ? { blockedBy } : {}),
         ...(contextIncoming && !contextStale ? { context: cleanAgentText(nextContext) } : {}),
         ...(changed(cleanAgentText(u.summary), cur?.summary ?? null) ? { summary: cleanAgentText(u.summary) } : {}),
         ...(rejectedChanged ? { rejected: !!u.rejected } : {}),
-      } as TaskPatch,
+      } as CardPatch,
     };
   });
 

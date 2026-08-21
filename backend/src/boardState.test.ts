@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { diffBoards, formatBoardUpdate, makeSyncToken, type TaskFacts } from "./boardState.js";
+import { diffBoards, formatBoardUpdate, makeSyncToken, type CardFacts } from "./boardState.js";
 
 /** #150: ボード状況の差分。
  *
@@ -8,7 +8,7 @@ import { diffBoards, formatBoardUpdate, makeSyncToken, type TaskFacts } from "./
  * (2026-08-15 に実際に起きた誤報告: 人間が9件を検収して消えていたのに、ビューのバグだと報告した)。
  * 差分計算は純粋関数にしてあるので、DBもMCPサーバーも要らずに確かめられる */
 
-function task(over: Partial<TaskFacts> = {}): TaskFacts {
+function task(over: Partial<CardFacts> = {}): CardFacts {
   return {
     title: "既定のタイトル",
     status: "todo",
@@ -28,7 +28,7 @@ function card(title: string, elements: string[]): string {
   return JSON.stringify([title, elements]);
 }
 
-function board(cards: [number, TaskFacts][] = [], projectContextVersion = 1) {
+function board(cards: [number, CardFacts][] = [], projectContextVersion = 1) {
   return { cards: new Map(cards), projectContextVersion };
 }
 

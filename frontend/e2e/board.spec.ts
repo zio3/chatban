@@ -2067,3 +2067,39 @@ test("添付を受けない板では、2つあるチャット面の両方で入�
   await expect(panel).toBeVisible();
   await expect(panel.getByTitle(/画像\/PDFを添付/), "カード専用チャットに能力フラグが届いていない").toHaveCount(0);
 });
+
+// レビュー指摘 (2026-08-21): **停止しても、サーバーのLLM処理は続いている。**
+// 停止はクライアント側で受信を捨てるだけなので、そこで再送すると元の処理と並走し、
+// **同じ操作が二重に走る** (「カードを追加して」→ 停止 → 再送 → カードが2枚)。
+// 表示ではなくデータが増えるので、再送ボタンを出さないことをここで固定する。
+//
+// LLMは呼ばない。**チャットの往復を page.route で作る**ので、実物のサーバーには触れない
+test.describe("失敗のあとに再送を出してよいか (#123 の線)", () => {
+  test("停止したときは再送を出さない (サーバー側は動き続けているため)", async ({ page }) => {
+    // 応答を返さないまま待たせる = 「処理中」の状態を作る
+    await page.route("**/api/chat", () => new Promise(() => {}));
+    await page.goto("/");
+
+    await page.getByPlaceholder(/ボードに話しかける/).fill("カードを追加して");
+    await page.keyboard.press("Enter");
+
+    const stop = page.getByTitle(/応答の受信をやめる/);
+    await expect(stop).toBeVisible();
+    await stop.click();
+
+    await expect(page.getByText(/応答の受信を停止しました/)).toBeVisible();
+    await expect(page.getByRole("button", { name: /再送/ }), "停止後に再送ボタンが出ている").toHaveCount(0);
+  });
+
+  // 対照。**普通の失敗では再送を出す** — 出さない側だけ固定すると、
+  // 「全部出さない」に倒しても気づけない
+  test("普通の失敗では再送を出す", async ({ page }) => {
+    await page.route("**/api/chat", (route) => route.fulfill({ status: 500, json: { error: "boom" } }));
+    await page.goto("/");
+
+    await page.getByPlaceholder(/ボードに話しかける/).fill("なにか話す");
+    await page.keyboard.press("Enter");
+
+    await expect(page.getByRole("button", { name: /再送/ })).toBeVisible();
+  });
+});

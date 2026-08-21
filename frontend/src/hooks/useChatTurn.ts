@@ -97,7 +97,25 @@ export function useChatTurn(opts: {
           : reason === "timeout"
             ? `⏱ ${TIMEOUT_MS / 1000}秒応答がないため打ち切りました`
             : `エラー: ${e?.message ?? e}`;
-      setLog((prev) => [...prev.filter((en) => !en.pending), { role: "assistant", content, error: true, retryText: text }]);
+      // **再送を出してよい失敗と、出してはいけない失敗がある** (レビュー指摘 2026-08-21)。
+      //
+      // 停止・タイムアウトは**クライアント側で受信を捨てただけ**で、サーバーのLLM処理は続いている
+      // (エラー文自身が「実行済みの操作はボードに反映されます」と言っている)。
+      // ここで再送すると元の処理と並走し、**同じ操作が二重に走る** —
+      // 「カードを追加して」で停止 → 再送 → カードが2枚できる。表示ではなくデータが増える。
+      //
+      // 添付付きは別の理由で出さない。原本を保持しない方針 (#68) なので、
+      // 再送すると**テキストだけの別のリクエストになる** — 「送ったのに読まれていない」(#123) の再来。
+      // 添付し直してもらうほうが速いし、嘘がない
+      const interrupted = reason === "stopped" || reason === "timeout";
+      const hadAttachments = !!attachments?.length;
+      // 中断は文面が既に事情を説明しているので足さない。添付ありのときだけ「どうすればよいか」を添える
+      const detail = !interrupted && hadAttachments ? " — 添付をもう一度付けて送り直してください" : "";
+      const canRetry = !interrupted && !hadAttachments;
+      setLog((prev) => [
+        ...prev.filter((en) => !en.pending),
+        { role: "assistant", content: content + detail, error: true, ...(canRetry ? { retryText: text } : {}) },
+      ]);
     } finally {
       window.clearTimeout(timeout);
       abortRef.current = null;

@@ -2068,6 +2068,61 @@ test("添付を受けない板では、2つあるチャット面の両方で入�
   await expect(panel.getByTitle(/画像\/PDFを添付/), "カード専用チャットに能力フラグが届いていない").toHaveCount(0);
 });
 
+// レビュー指摘 (2026-08-21): **📋前提の画面が開いたまま古い本文を出し続けていた。**
+// この画面は編集UIを持たず、変更経路はチャット (と外部エージェント) だけ (#73) なので、
+// 取得がマウント時の1回だけだと**設計上の唯一の使い方で必ず古くなる**。
+// 見ている人は変わっていないと思ってもう一度依頼する。
+test("前提情報を外から書き換えると、開いている📋前提の画面が追いつく (#73)", async ({ page }) => {
+  const before = await mcp("get_project_context", {});
+  try {
+    await page.goto("/");
+    await page.getByRole("button", { name: /📋 前提/ }).click();
+    await expect(page.getByText(/プロジェクトの前提情報/)).toBeVisible();
+
+    // 画面を開いたまま、外 (MCP = チャットと同じ書き込み経路) から書き換える
+    const cur = await mcp("get_project_context", {});
+    await mcp("update_project_context", { text: "画面を開いたまま書き換えた前提", version: cur.version });
+
+    // 再読み込みもタブ切り替えもせずに追いつく
+    await expect(page.getByText("画面を開いたまま書き換えた前提")).toBeVisible();
+
+    // **切れている間の変更も取りこぼさない** (レビュー指摘 2026-08-21、2周目)。
+    // Socket.IO は切断中のイベントを再送しないので、通知を受ける形だけだと
+    // 「スリープ中に書き換えられた」が古いまま残る
+  } finally {
+    const now = await mcp("get_project_context", {});
+    await mcp("update_project_context", { text: before.text, version: now.version });
+  }
+});
+
+// **繋ぎ直しの取りこぼし。**Socket.IO は切れていた間のイベントを再送しないので、
+// 通知を受けるだけでは「スリープ中に書き換えられた」が古いまま残る。
+//
+// setOffline も socket.io の口を塞ぐのも、テスト時間の中ではクライアントが切断に気づかず
+// **ハンドラを外しても通るテスト**にしかならなかった。アプリが共有している socket を
+// ブラウザ内で直に切って繋ぎ直すと、**決定的に**再現できる (レビューで教わった方法)。
+//
+// 前提情報の応答は page.route で差し替える。DBを触らないので後始末が要らず、
+// 「切れている間に変わった」を1行で作れる
+test("切断中に📋前提を開いても、繋ぎ直したときに追いつく", async ({ page }) => {
+  let body = { text: "切れる前の前提", updatedAt: "2026-08-21 00:00:00" };
+  await page.route("**/api/project-context", (route) => route.fulfill({ json: body }));
+  const socket = (fn: "disconnect" | "connect") =>
+    page.evaluate((f) => import("/src/socket.ts").then((m) => (m.socket as any)[f]()), fn);
+
+  await page.goto("/");
+  // **開く前に切る。**ここが穴だった — 画面は socket.connected=false で始まるので、
+  // 「初回の connect は飛ばす」判定を持っていると、そのあとの繋ぎ直しを初回と誤認する
+  await socket("disconnect");
+  await page.getByRole("button", { name: /📋 前提/ }).click();
+  await expect(page.getByText("切れる前の前提")).toBeVisible();
+
+  // 切れている間に書き換わる (通知は届かない)
+  body = { text: "切れている間に変わった前提", updatedAt: "2026-08-21 01:00:00" };
+  await socket("connect");
+
+  await expect(page.getByText("切れている間に変わった前提"), "繋ぎ直しても古い本文のまま").toBeVisible();
+});
 // レビュー指摘 (2026-08-21): **停止しても、サーバーのLLM処理は続いている。**
 // 停止はクライアント側で受信を捨てるだけなので、そこで再送すると元の処理と並走し、
 // **同じ操作が二重に走る** (「カードを追加して」→ 停止 → 再送 → カードが2枚)。

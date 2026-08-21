@@ -1,5 +1,6 @@
 import { apiFetch } from "../api";
-import { useEffect, useState } from "react";
+import { socket } from "../socket";
+import { useCallback, useEffect, useState } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
@@ -9,12 +10,40 @@ export default function ContextView() {
   const [data, setData] = useState<{ text: string; updatedAt: string | null } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
+  const load = useCallback(() => {
     apiFetch("/api/project-context")
       .then((r) => r.json())
-      .then(setData)
+      .then((d) => {
+        setData(d);
+        // 取れたらエラー表示から戻る。消さないと、一度切れた画面が
+        // 繋ぎ直しても「読み込み失敗」のままになる (レビュー指摘 2026-08-21、2周目)
+        setError(null);
+      })
       .catch((e) => setError(String(e)));
   }, []);
+
+  // **開いたまま古い本文を読み続けない** (レビュー指摘 2026-08-21)。
+  // この画面は編集UIを持たず、変更経路はチャット (と外部エージェント) だけなので、
+  // 取得がマウント時の1回だけだと**設計上の唯一の使い方で必ず古くなる**。
+  // 本文は配信に載せず「変わった」とだけ受けて取り直す (板の配信を太らせない / #226 と同じ線)
+  useEffect(() => {
+    load();
+    // **繋ぎ直したら読み直す。**Socket.IO は切れていた間のイベントを再送しないので、
+    // 通知を受ける形だけだと「スリープ中に書き換えられた」を取りこぼす。
+    // App.tsx が board:changed に対して同じことをしている (#97 の繋ぎ直し処理と同じ形)。
+    //
+    // **App.tsx のように「初回の connect は飛ばす」判定は置かない** (レビュー指摘 2026-08-21、2周目)。
+    // あちらは常時マウントされているので初回=起動時だが、この画面は**後から開かれる**。
+    // 切断中にタブを開くと `socket.connected` が false で始まり、
+    // **そのあとの繋ぎ直しが「初回」に見えて取りこぼす**。
+    // 毎回読み直しても、前提情報の小さなGETが1回増えるだけ
+    socket.on("context:changed", load);
+    socket.on("connect", load);
+    return () => {
+      socket.off("context:changed", load);
+      socket.off("connect", load);
+    };
+  }, [load]);
 
   if (error) return <p className="p-6 text-sm text-red-600">読み込み失敗: {error}</p>;
   if (!data) return <p className="p-6 text-sm text-slate-500">読み込み中…</p>;

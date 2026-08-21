@@ -15,7 +15,7 @@ import { buildMcpServer } from "./mcp.js";
 import { isAllowedOrigin, isBrowserCrossSite } from "./origin.js";
 import { resetPromptState } from "./promptState.js";
 import { assertTimezone } from "./timezone.js";
-import type { Task } from "./types.js";
+import type { Task, ViewEvent } from "./types.js";
 import {
   activeProjectId,
   createProject,
@@ -173,6 +173,17 @@ function rejoinFollowers(projectId: number) {
 
 /** ボードが受け取る一式。**取得と配信で同じ関数を通す** —
  * 「初回だけ揃っていて以後ズレる」を型で防ぐ (#19 で lanes を足したとき、片方だけ直る形にしない) */
+/** 書き込み経路 (チャット / MCP) からの通知を画面へ流す。**入口が3つあるので1か所にまとめる** —
+ * 以前は `if (kind === "board")` が3か所に書いてあり、種類を足すときに片方だけ直る形だった。
+ *
+ * `context` は前提情報の更新 (レビュー指摘 2026-08-21)。📋前提の画面は**編集UIを持たず、
+ * 変更経路がチャットだけ** (#73) なのに、開いたままだと古い本文が出続けていた。
+ * 板を配り直すのではなく「変わった」とだけ伝え、見ている画面が取り直す (本文を二重に配らない) */
+function notifyView(kind: ViewEvent, projectId = currentProjectId()): void {
+  if (kind === "board") broadcastBoard(projectId);
+  if (kind === "context") io.to(room(projectId)).emit("context:changed");
+}
+
 /** 断る理由を言い分ける。**「受け取れない」だけだと直し方が分からない** —
  * デモの方針なら諦めるしかないが、宛先の都合なら config.json を替えれば通る */
 function attachmentRefusal(): string {
@@ -442,9 +453,7 @@ app.post("/api/chat", async (req, res) => {
     const result = await runChatTurn(
       message,
       history ?? [],
-      (kind) => {
-        if (kind === "board") broadcastBoard();
-          },
+      (kind) => notifyView(kind),
       (label) => io.to(room(currentProjectId())).emit("chat:progress", { label }), // 応答完了前の逐次フィードバック
       undefined,
       attachments,
@@ -501,9 +510,7 @@ app.post("/api/cards/:id/chat", async (req, res) => {
     const result = await runChatTurn(
       message,
       history ?? [],
-      (kind) => {
-        if (kind === "board") broadcastBoard();
-          },
+      (kind) => notifyView(kind),
       (label) => io.to(room(currentProjectId())).emit("chat:progress", { label, cardId }),
       cardId,
       attachments,
@@ -685,9 +692,7 @@ app.post("/mcp/:projectId", async (req, res) => {
     await withProject(projectId, async () => {
       // 書き込みはこの接続のプロジェクトに対して行う。UIへの通知は表示中のときだけ
       // #99: 接続先プロジェクトのroomへ送るだけでよい (購読していないクライアントには届かない)
-      const mcpServer = buildMcpServer((kind) => {
-        if (kind === "board") broadcastBoard(projectId);
-          });
+      const mcpServer = buildMcpServer((kind) => notifyView(kind, projectId));
       const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
       res.on("close", () => {
         transport.close();

@@ -41,7 +41,7 @@ import {
 import { boardDelta, formatBoardUpdate } from "./boardState.js";
 import { contextReference, contextTemplateHint } from "./contextTemplate.js";
 import { currentProjectId, customLanes, getProject } from "./store.js";
-import type { TaskStatus } from "./types.js";
+import type { TaskStatus, ViewEvent } from "./types.js";
 
 // 値の一覧はチャット側と共有する。入口ごとに書き分けると必ずズレる (#92 #108 #114 #125 #126)
 /** boolean を文字列で送ってくるMCPクライアントがある (実測: Claude Code から
@@ -100,7 +100,7 @@ function currentProject() {
 }
 
 // MCPクライアント(Claude Code等)向けのサーバー。変更系は onEvent でUIへブロードキャストする
-export function buildMcpServer(onEvent: (kind: "board" | "proposals") => void): McpServer {
+export function buildMcpServer(onEvent: (kind: ViewEvent) => void): McpServer {
   const server = new McpServer({ name: "chatban", version: "0.1.0" });
 
   // #19: このサーバーは接続ごと (=プロジェクトごと) に組み立てられるので、
@@ -332,6 +332,8 @@ export function buildMcpServer(onEvent: (kind: "board" | "proposals") => void): 
     },
     async ({ text: t, version }) => {
       const r = setProjectContext(t, version);
+      // 外部エージェントが書き換えたときも、開いている画面に伝える (入口で挙動を変えない)
+      if (r.ok) onEvent("context");
       if (!r.ok)
         return text({
           ok: false,

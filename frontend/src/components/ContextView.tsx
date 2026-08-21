@@ -13,7 +13,12 @@ export default function ContextView() {
   const load = useCallback(() => {
     apiFetch("/api/project-context")
       .then((r) => r.json())
-      .then(setData)
+      .then((d) => {
+        setData(d);
+        // 取れたらエラー表示から戻る。消さないと、一度切れた画面が
+        // 繋ぎ直しても「読み込み失敗」のままになる (レビュー指摘 2026-08-21、2周目)
+        setError(null);
+      })
       .catch((e) => setError(String(e)));
   }, []);
 
@@ -23,9 +28,19 @@ export default function ContextView() {
   // 本文は配信に載せず「変わった」とだけ受けて取り直す (板の配信を太らせない / #226 と同じ線)
   useEffect(() => {
     load();
+    // **繋ぎ直したら読み直す。**Socket.IO は切れていた間のイベントを再送しないので、
+    // 通知を受ける形だけだと「スリープ中に書き換えられた」を取りこぼす。
+    // App.tsx が board:changed に対して同じことをしている (#97 の繋ぎ直し処理と同じ形)
+    let everConnected = socket.connected;
+    const onConnect = () => {
+      if (everConnected) load();
+      everConnected = true;
+    };
     socket.on("context:changed", load);
+    socket.on("connect", onConnect);
     return () => {
       socket.off("context:changed", load);
+      socket.off("connect", onConnect);
     };
   }, [load]);
 

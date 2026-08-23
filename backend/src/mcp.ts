@@ -135,10 +135,14 @@ export function buildMcpServer(onEvent: (kind: ViewEvent) => void): McpServer {
       const r = createCardsAsAgent(cards as any);
       onEvent("board");
       return text({
-        ok: true,
+        // #245: **`ok:true` を被せない。**共有入口が決めた ok/status をそのまま返す
+        ok: r.ok,
+        status: r.status,
         created: (r.created as any[]).map((t: any) => brief(t)),
         // #153: 期限の形が違って捨てたものは名指しで返す (保存されたつもりにさせない)
         ...(r.badDue ? { badDue: r.badDue } : {}),
+        // #245: 型または値が契約と違って作らなかったもの
+        ...(r.invalid ? { invalid: r.invalid } : {}),
         ...(r.note ? { note: r.note } : {}),
         ...boardUpdate(sync_token),
       });

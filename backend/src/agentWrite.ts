@@ -103,6 +103,11 @@ const NOT_FOUND_NOTE =
 function typeErrors(u: AgentCardUpdate): string[] {
   const bad: string[] = [];
   const got = (v: unknown) => (v === null ? "null" : Array.isArray(v) ? "配列" : typeof v);
+  // **行そのものを先に見る。**`updates:[null]` は配列としては正しいので入口を通り、
+  // 直後の `u.title` で `Cannot read properties of null` が未処理で飛ぶ (Codex実測)。
+  // ここで打ち切らないと、**fail-closed のはずが例外でラウンドごと落ちる**
+  if (u === null || typeof u !== "object" || Array.isArray(u))
+    return [`1件ぶんはオブジェクトで渡してください (届いたのは ${got(u)})`];
   // **id を最初に見る。**`getCard()` より前でないと、`id:{}` で
   // `Too few parameter values were provided` が未処理で飛ぶ (Codexが実測)
   if (!Number.isInteger(u?.id)) bad.push(`id はカードID (整数) で渡してください (届いたのは ${got(u?.id)})`);
@@ -160,10 +165,35 @@ function idListErrors(kind: string, ids: unknown): string | null {
 /** 配列そのものが契約と違うときの返し方は入口ごとに違うので、文面だけ共有する */
 export { notAnArray as arrayArgError, idListErrors as idListArgError };
 
+/** 作成で使えるキー。**更新用の検査を流用しない。**
+ * `context_append` や `rejected` は型としては正しいので更新側の検査は通るが、
+ * **作成の patch は読まないので黙って捨てられる** (Codex実測: 決定事項を書いたのに記録されず、
+ * それでも成功に見えた)。`context_append:null` の偽成功を塞いだのと同じことが、
+ * **型の正しい未対応キー**では残っていた */
+const CREATE_KEYS = ["title", "status", "context", "summary", "due", "blocked_by"] as const;
+
+function createErrors(t: AgentCardInput, ): string[] {
+  const got = (v: unknown) => (v === null ? "null" : Array.isArray(v) ? "配列" : typeof v);
+  if (t === null || typeof t !== "object" || Array.isArray(t))
+    return [`1件ぶんはオブジェクトで渡してください (届いたのは ${got(t)})`];
+
+  const bad = typeErrors({ ...(t as object), id: 1 } as AgentCardUpdate).filter((m) => !m.startsWith("id "));
+  if (typeof t.title !== "string" || cleanAgentText(t.title).trim() === "")
+    bad.unshift("title は空でない文字列で渡してください");
+
+  const unknown = Object.keys(t).filter((k) => !(CREATE_KEYS as readonly string[]).includes(k));
+  if (unknown.length > 0)
+    bad.push(
+      `${unknown.join(", ")} は create_cards では使えません (使えるのは ${CREATE_KEYS.join(" / ")})。` +
+        "作ったあとに update_cards で足してください"
+    );
+  return bad;
+}
+
 /** 型が契約と違った行の断り文。**版の競合とは別の失敗**なので、文言も分ける —
  * 「版が合わない」と案内すると、**LLMは版だけ差し替えて同じ不正な値で再実行する** */
 const INVALID_NOTE =
-  "指定された値の型が契約と違うため、この行の更新は一切適用していません (他のフィールドも保存されていません)。**invalid の reason を読んで、そこに書かれた型で送り直してください** (項目ごとに違います。summary や context のような本文を消すときは null ではなく空文字、blocked_by の解除は null です)";
+  "指定された値の型または値が契約と違うため、この行の更新は一切適用していません (他のフィールドも保存されていません)。**invalid の reason を読んで、そこに書かれた型で送り直してください** (項目ごとに違います。summary や context のような本文を消すときは null ではなく空文字、blocked_by の解除は null です)";
 
 const CONFLICT_NOTE =
   "経緯メモの版が合わないため、この行の更新は一切適用していません (他のフィールドも保存されていません)。conflicts の context に自分の追記をマージし、その contextVersion を添えて再実行してください。上書きに失敗したことをユーザーにも伝えてください";
@@ -182,6 +212,10 @@ function acceptableDue(due: string | null | undefined): { due?: string | null; b
 }
 
 export function createCardsAsAgent(cards: AgentCardInput[]): {
+  /** #245: **更新側と同じ契約にする。**1件でも作れなければ false。
+   * 以前は入口が無条件に `ok:true` を付けており、**1件も作れなくても成功に見えた** */
+  ok: boolean;
+  status: "ok" | "partial" | "failed";
   created: unknown[];
   note?: string;
   /** 期限の形が違って捨てたもの (タイトルで返す。作成時点ではIDを知らせても意味が薄い) */
@@ -190,24 +224,22 @@ export function createCardsAsAgent(cards: AgentCardInput[]): {
   invalid?: { at: number; reason: string }[];
 } {
   const argError = notAnArray("cards", cards);
-  if (argError) return { created: [], note: argError };
+  if (argError) return { ok: false, status: "failed", created: [], note: argError };
 
   // #245: **1件も書く前に、全行を検査する。**途中で例外が飛ぶと
   // **前の行は作成済みなのに応答が返らない** (Codex実測: `[{title:"CREATED FIRST"},{title:null}]` で
   // 1件目を作った後に `NOT NULL constraint failed` が未処理で送出された)。
   // 更新側と違って作成は取り消せないので、**書き始める前に決める**
   const invalid: { at: number; reason: string }[] = [];
-  const ok = cards.filter((t, at) => {
-    const bad = typeErrors({ ...(t as object), id: 1 } as AgentCardUpdate).filter((m) => !m.startsWith("id "));
-    if (typeof t?.title !== "string" || cleanAgentText(t.title).trim() === "")
-      bad.unshift("title は空でない文字列で渡してください");
+  const usable = cards.filter((t, at) => {
+    const bad = createErrors(t);
     if (bad.length > 0) invalid.push({ at, reason: bad.join(" / ") });
     return bad.length === 0;
   });
 
   let anyCoerced = false;
   const badDue: string[] = [];
-  const created = ok.map((t) => {
+  const created = usable.map((t) => {
     const { status, coerced } = coerceStatus(t.status);
     if (coerced) anyCoerced = true;
     const title = cleanAgentText(t.title);
@@ -231,6 +263,8 @@ export function createCardsAsAgent(cards: AgentCardInput[]): {
       : "",
   ].filter(Boolean);
   return {
+    ok: invalid.length === 0,
+    status: invalid.length === 0 ? "ok" : created.length > 0 ? "partial" : "failed",
     created,
     ...(notes.length > 0 ? { note: notes.join(" / ") } : {}),
     ...(badDue.length > 0 ? { badDue } : {}),

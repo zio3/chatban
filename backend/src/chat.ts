@@ -406,14 +406,19 @@ export function buildTools(lanes: CustomLane[]): OpenAI.Chat.Completions.ChatCom
 // プロンプトのバイト列が揺れる余地 (キャッシュが外れる原因) も1つ減っている
 
 
-async function execTool(name: string, args: any, events: Set<string>): Promise<unknown> {
+/** #245: **テストから入口の配線を叩けるようにしてある。**
+ * `delete_cards` / `reorder_cards` は agentWrite を通らず、ガードがここにしか無い。
+ * ヘルパ単体のテストでは**配線を消しても気づけない** (Codexレビュー指摘) */
+export async function execTool(name: string, args: any, events: Set<string>): Promise<unknown> {
   switch (name) {
     case "create_cards": {
       // #114: 書き込みは agentWrite に集約 (チャットとMCPで同じガードを通す)
       // #245: **`?? []` にしない。**欠落を空配列に補うと「何もしていないのに成功」になる
       const r = createCardsAsAgent(args.cards);
       events.add("board");
-      return { ok: true, ...r };
+      // #245: **`ok:true` を被せない。**共有入口が決めた ok/status をそのまま返す —
+      // 被せていたので、1件も作れなくても成功に見えていた
+      return r;
     }
     case "update_cards": {
       const { ok, status, updated, note, conflicts, notFound, badDue, invalid } = updateCardsAsAgent(args.updates);
@@ -459,6 +464,13 @@ async function execTool(name: string, args: any, events: Set<string>): Promise<u
     case "reorder_cards": {
       const reorderError = idListArgError("ids", args.ids);
       if (reorderError) return { ok: false, note: reorderError };
+      // #245: **列も見る。**未知の列だと対象が0件になるだけで `ok:true` が返り、
+      // 「並べ替えたつもり」とズレる (更新側で塞いだ偽成功が、ここに残っていた)
+      if (!reorderableStatuses(customLanes()).includes(args.status))
+        return {
+          ok: false,
+          note: `${JSON.stringify(args.status)} は並べ替えできる列ではありません (${reorderableStatuses(customLanes()).join(" / ")})。1件も動かしていません`,
+        };
       const r = reorderCards(args.ids, args.status);
       events.add("board");
       return reorderResult(r);

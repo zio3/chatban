@@ -604,7 +604,7 @@ export interface ProjectSummary {
   active: boolean;
   /** #107: 無効。ドロップダウンには出さないが設定画面には出る */
   archived: boolean;
-  openTasks: number;
+  openCards: number;
   /** #117: このプロジェクト用のMCP接続先 (.mcp.json に貼る) */
   mcpUrl: string;
   /** #19: 有効な任意レーン (0〜2本)。**空配列がふつう** — 4列のままのプロジェクトはこれ */
@@ -630,7 +630,7 @@ export function projectSummaries(): ProjectSummary[] {
       lanes: customLanes(p.id),
       // ゴミ箱を数えない (ボードから消えているのに件数が減らない、を防ぐ)。
       // 条件はボードの一覧と揃える — 母集団の条件を書き分けると必ずズレる
-      openTasks: (
+      openCards: (
         pdb
           .prepare("SELECT COUNT(*) AS c FROM cards WHERE archived = 0 AND status != 'done' AND trashed_at IS NULL")
           .get() as { c: number }

@@ -155,7 +155,7 @@ export default function ProjectSettings() {
                   <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-bold text-emerald-700">表示中</span>
                 )}
                 <span className="text-xs text-slate-500">
-                  未完了{p.openTasks}件
+                  未完了{p.openCards}件
                 </span>
                 {/* #117: MCPの接続先はプロジェクトごとに違う (URLで固定する設計 #96)。
                     .mcp.json に貼る値をここから直接コピーできるようにする */}

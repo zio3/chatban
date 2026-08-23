@@ -473,7 +473,6 @@ export default function App() {
         {view === "board" && !loading && !loadError && (
           <Board
             cards={visibleCards}
-            allCards={visibleCards}
             folded={folded}
             lanes={lanes}
             onMove={moveCard}

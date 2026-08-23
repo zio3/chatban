@@ -5,22 +5,20 @@ import os from "node:os";
 import path from "node:path";
 import Database from "better-sqlite3";
 
-/** #232: **`tasks` → `cards` の移行が生きていることを見る番人。**
+/** #232: **旧スキーマのDBを黙って受け入れないことを見る番人。**
  *
- * #215 の改名でいちばん壊れやすいのは移行そのものなのに、ここには1本もテストが無かった。
- * 2026-08-23 の改名作業で実際に踏んだ: 一括置換が SQL 文字列の中まで書き換えて
- * `if (has("cards") && !has("cards"))` / `ALTER TABLE cards RENAME TO cards` になった。
- * **型は通るし、既存のテストも全部通る** — 古いDBを開いたときにだけ、板が空に見える。
+ * もとは `tasks` → `cards` の移行 (#215) が効くことを見ていた。2026-08-23 に
+ * ローカルの全DB (稼働中10件 + ゴミ箱22件) を移行し切ったので移行コードを畳み、
+ * 守るものが「移行が効くこと」から「**移行が要るDBを開かないこと**」に変わった。
  *
- * 守りたいのは3つ:
- *   1. 古い `tasks` が `cards` に化け、**行とIDがそのまま残る** (`#112` は `#112` のまま)
- *   2. 古いビュー (`live_tasks` / `done_tasks`) が残骸として残らない
- *   3. `chat_messages.task_id` が `card_id` に付け替わる
+ * **ここを外すと、いちばん気付きにくい形で壊れる。**`CREATE TABLE IF NOT EXISTS cards` が
+ * 空のテーブルを作り、データの入った `tasks` が取り残されて、板が空になったように見える。
+ * エラーは出ず、テストも通り、型も通る。**古いDBを開いた人にしか見えない。**
  *
- * DBを使うのは、守りたいものがDDLそのものだから。純粋関数に切り出せる判断が無い。 */
+ * 移行そのものは `scripts/migrate-cards.mjs` に移した (バックアップから古いDBを戻したときの出口)。 */
 
 // **実データに触らせない。**store.ts は読み込み時に管理DBを開く (foldDone.test.ts と同じ作法)
-const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "chatban-migtest-"));
+const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "chatban-schematest-"));
 process.env.CHATBAN_DATA_DIR = dataDir;
 
 const { ensureProjectSchema } = await import("./store.js");
@@ -33,83 +31,111 @@ function legacyDb() {
   db.exec("DROP VIEW IF EXISTS live_cards; DROP VIEW IF EXISTS done_cards;");
   db.exec("ALTER TABLE cards RENAME TO tasks");
   db.exec("ALTER TABLE chat_messages RENAME COLUMN card_id TO task_id");
-  db.exec("CREATE VIEW live_tasks AS SELECT * FROM tasks WHERE archived = 0;");
-  db.exec("CREATE VIEW done_tasks AS SELECT * FROM tasks WHERE status = 'done';");
   return db;
 }
 
 const names = (db: Database.Database, type: "table" | "view"): string[] =>
   (db.prepare("SELECT name FROM sqlite_master WHERE type = ?").all(type) as { name: string }[]).map((r) => r.name);
 
-test("古いDBを開くと tasks が cards になり、行もIDもそのまま残る", () => {
+test("旧スキーマのDBは開かずに止める (黙って空の cards を作らない)", () => {
   const db = legacyDb();
-  db.prepare("INSERT INTO tasks (id, title, status) VALUES (?, ?, ?)").run(112, "語彙をカードに寄せる", "review");
-  db.prepare("INSERT INTO tasks (id, title) VALUES (?, ?)").run(232, "コードの識別子から Task を消す");
+  db.prepare("INSERT INTO tasks (id, title) VALUES (?, ?)").run(112, "語彙をカードに寄せる");
 
-  ensureProjectSchema(db);
+  assert.throws(() => ensureProjectSchema(db), /tasks/);
 
-  assert.ok(names(db, "table").includes("cards"), "cards が無い");
-  assert.ok(!names(db, "table").includes("tasks"), "古い tasks が残っている");
-
-  const rows = db.prepare("SELECT id, title, status FROM cards ORDER BY id").all();
-  assert.deepEqual(rows, [
-    { id: 112, title: "語彙をカードに寄せる", status: "review" },
-    { id: 232, title: "コードの識別子から Task を消す", status: "todo" },
-  ]);
+  // **止めたあとも、元のデータに触っていないこと。**中途半端に作りかけると次が余計に難しくなる
+  assert.ok(!names(db, "table").includes("cards"), "止めたはずなのに cards を作っている");
+  assert.equal(db.prepare("SELECT COUNT(*) FROM tasks").pluck().get(), 1);
 });
 
-test("古いビュー (live_tasks / done_tasks) は残骸として残らない", () => {
+test("止めるときは、何をすればいいかを名指しで言う", () => {
   const db = legacyDb();
-  ensureProjectSchema(db);
-
-  const views = names(db, "view");
-  assert.ok(!views.includes("live_tasks"), "live_tasks が残っている");
-  assert.ok(!views.includes("done_tasks"), "done_tasks が残っている");
-  // 新しい名前は張り直されている (残骸を消すだけで作り直さないと、次の SELECT で落ちる)
-  assert.ok(views.includes("live_cards"), "live_cards が作られていない");
+  // 「移行してください」だけでは、どこに何があるか分からない。**出口の名前を出す**
+  assert.throws(() => ensureProjectSchema(db), /migrate-cards\.mjs/);
 });
 
-test("chat_messages.task_id は card_id に付け替わる", () => {
-  const db = legacyDb();
-  db.prepare("INSERT INTO chat_messages (role, content, task_id) VALUES ('user', 'これ直して', 112)").run();
-
+test("いまのスキーマのDBは素通りする (何度開いても同じ)", () => {
+  const db = new Database(":memory:");
   ensureProjectSchema(db);
+  db.prepare("INSERT INTO cards (id, title) VALUES (1, '普通のカード')").run();
 
-  const cols = (db.prepare("PRAGMA table_info(chat_messages)").all() as { name: string }[]).map((c) => c.name);
-  assert.ok(cols.includes("card_id"), "card_id が無い");
-  assert.ok(!cols.includes("task_id"), "古い task_id が残っている");
-  assert.equal(db.prepare("SELECT card_id FROM chat_messages").pluck().get(), 112);
-});
-
-test("移行は何度流しても同じ結果になる (DBを開くたびに走るため)", () => {
-  const db = legacyDb();
-  db.prepare("INSERT INTO tasks (id, title) VALUES (1, '一度きり')").run();
-
-  ensureProjectSchema(db);
   ensureProjectSchema(db);
   ensureProjectSchema(db);
 
   assert.equal(db.prepare("SELECT COUNT(*) FROM cards").pluck().get(), 1);
-  assert.equal(db.prepare("SELECT title FROM cards WHERE id = 1").pluck().get(), "一度きり");
+  assert.equal(db.prepare("SELECT title FROM cards WHERE id = 1").pluck().get(), "普通のカード");
+  assert.ok(names(db, "view").includes("live_cards"));
 });
 
-test("新規DB (tasks が無い) でも素通りして cards ができる", () => {
+// **`cards` が在れば、古い `tasks` が横に居ても止めない。**
+// 移行し切ったDBに古いコードで触ると、空の `tasks` が復活しうる (2026-08-23 に実測。
+// 稼働中10件が全部この形だった)。データは `cards` に在るので、開くのを止める理由はない
+test("cards が在れば、古い tasks が残っていても開ける", () => {
+  const db = new Database(":memory:");
+  ensureProjectSchema(db);
+  db.prepare("INSERT INTO cards (id, title) VALUES (1, '本物')").run();
+  db.exec("CREATE TABLE tasks (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL)");
+
+  ensureProjectSchema(db); // 例外にならない
+
+  assert.equal(db.prepare("SELECT title FROM cards WHERE id = 1").pluck().get(), "本物");
+});
+
+test("新規DBには cards が作られる", () => {
   const db = new Database(":memory:");
   ensureProjectSchema(db);
 
   assert.ok(names(db, "table").includes("cards"));
   assert.equal(db.prepare("SELECT COUNT(*) FROM cards").pluck().get(), 0);
+  assert.ok(!names(db, "table").includes("tasks"), "新規DBに古い名前が作られている");
 });
 
-// **`cards` が既に在るときは古い `tasks` で上書きしない** (人が手で作った側を正とする)。
-// store.ts のコメントが約束していることなので、実際にそうなるか見る
-test("両方が在れば cards を正として何もしない", () => {
-  const db = legacyDb();
-  db.prepare("INSERT INTO tasks (id, title) VALUES (1, '古い方')").run();
-  db.exec("CREATE TABLE cards AS SELECT * FROM tasks WHERE 0");
-  db.prepare("INSERT INTO cards (id, title) VALUES (1, '新しい方')").run();
+// ---- ここから下はレビュー指摘 (P1、2026-08-23) で足した分 ----------------------------
+//
+// **名前だけ見ていたのが穴だった。**「`tasks` が在って `cards` が無い」しか見ないと、
+// 両方在って旧側に**行が入っている**DBがちょうど網から漏れる。
+// 本体は `cards` しか読まないので、`tasks` に増えた分がエラーも出ずに板から消える —
+// このPRが防ごうとしていた障害そのものが、混在スキーマでは残っていた。
+//
+// 到達経路: 移行済みのDBを古い版で開く → 古い版が空の `tasks` を作り直す →
+// そこへカードが書かれる → この版で開く。
 
+test("cards と行入り tasks が混在していたら止める (旧側を黙って無視しない)", () => {
+  const db = new Database(":memory:");
   ensureProjectSchema(db);
+  db.prepare("INSERT INTO cards (id, title) VALUES (1, '新しい方')").run();
+  db.exec("CREATE TABLE tasks (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL)");
+  db.prepare("INSERT INTO tasks (id, title) VALUES (2, '旧側に書かれたカード')").run();
 
-  assert.equal(db.prepare("SELECT title FROM cards WHERE id = 1").pluck().get(), "新しい方");
+  assert.throws(() => ensureProjectSchema(db), /tasks/);
+  // 止めたあとも両側そのまま (人が中身を見て決められる状態で渡す)
+  assert.equal(db.prepare("SELECT COUNT(*) FROM tasks").pluck().get(), 1);
+  assert.equal(db.prepare("SELECT COUNT(*) FROM cards").pluck().get(), 1);
+});
+
+test("chat_messages.task_id に値が残っていたら止める (会話の紐付けが黙って失われる)", () => {
+  const db = new Database(":memory:");
+  ensureProjectSchema(db);
+  db.exec("ALTER TABLE chat_messages ADD COLUMN task_id INTEGER");
+  db.prepare("INSERT INTO chat_messages (role, content, task_id) VALUES ('user', 'これ直して', 7)").run();
+
+  assert.throws(() => ensureProjectSchema(db), /task_id/);
+});
+
+test("chat_messages が task_id だけなら止める (card_id が無い旧スキーマ)", () => {
+  const db = legacyDb();
+  db.exec("ALTER TABLE tasks RENAME TO cards"); // tasks 側は移行済みにして、列だけ旧いDBを作る
+  assert.throws(() => ensureProjectSchema(db), /task_id/);
+});
+
+// **空の残骸は通す。**ここを止めると、実測した稼働中10件が全部開けなくなる
+test("tasks も task_id も空なら、残骸として通す", () => {
+  const db = new Database(":memory:");
+  ensureProjectSchema(db);
+  db.exec("CREATE TABLE tasks (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL)");
+  db.exec("ALTER TABLE chat_messages ADD COLUMN task_id INTEGER");
+  db.prepare("INSERT INTO chat_messages (role, content, card_id) VALUES ('user', '普通の発言', 1)").run();
+
+  ensureProjectSchema(db); // 例外にならない
+  assert.equal(db.prepare("SELECT COUNT(*) FROM chat_messages").pluck().get(), 1);
 });

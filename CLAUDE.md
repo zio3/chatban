@@ -70,8 +70,13 @@ REST経路 (`/api/cards`)・JSONとSocketのキー (`cards` / `cardId`)・DBス�
 (`cards` / `live_cards` / `done_cards` / `chat_messages.card_id`)・docs まで全部カード。
 
 **`#112` だけは変わらない。**改名は名前だけで、列も行もIDも動かしていない。
-移行は `ensureProjectSchema` の**先頭**で流す (順序を逆にすると空の `cards` ができて
-既存データが取り残される)。DBを開くたびに走るので、古いDBは開いた時点で自動で移行される。
+
+**移行コードはもう無い (#232、2026-08-23)。**ローカルの全DB (稼働中10件 + ゴミ箱22件) を
+移行し切ったので畳んだ。代わりに `ensureProjectSchema` の**先頭で旧スキーマを拒む** —
+`tasks` が在って `cards` が無いDBは、開かずに例外を投げて `scripts/migrate-cards.mjs` を案内する。
+**撤去するだけだと、いちばん気付きにくい形で壊れる**ため (`CREATE TABLE IF NOT EXISTS cards` が
+空を作り、データの入った `tasks` が取り残されて、エラーも出ずに板が空に見える)。
+古いDBを戻すときは、開く前に `node scripts/migrate-cards.mjs` (下見) → `--apply`。
 
 - **ユーザーに言い換えを強いない。**「タスク」「チケット」「項目」はすべて同じものを指す。
   ユーザーが使った語をそのまま使って応答し、訂正しない (システムプロンプトの行動ルール1行目)。

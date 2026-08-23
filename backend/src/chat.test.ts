@@ -198,24 +198,50 @@ test("知らない値は列として認めない", () => {
 // そこまで固定するには LLM 呼び出しを差し替えられる形にする必要があり、それは別の改修になる。
 // いま呼び出し0回を保証しているものは無い — 判定の正しさと、E2Eの「OFFなら空で返る」までが範囲
 
-// #209: ON/OFF設定は撤去した (#199で作った設定タブごと)。代わりに起動猶予が先頭に立つ
-const AFTER_BOOT = 60_000; // 猶予を過ぎた状態
+// #209: ON/OFF設定は撤去した (#199で作った設定タブごと)。代わりに起動猶予が先頭に立つ。
+//
+// **猶予はテストが決める。**以前は既定値 60_000 を書き写していたが、判定側が
+// モジュール変数 (環境変数 SUGGEST_BOOT_GRACE_MS 由来) を読んでいたため、
+// **開発機だけ2本落ちる**状態だった (提案チップを止める設定が入っている)。
+// 引数で渡す形にしたので、どの環境でも同じ結果になる
+const GRACE = 60_000;
+const AFTER_BOOT = GRACE; // 猶予を過ぎた状態
 
 test("提案の生成を諦める判定: 起動直後が最優先で booting を返す", () => {
-  assert.equal(suggestSkipReason({ sinceBootMs: 0, chatBusy: false, emptyBoard: false }), "booting");
+  assert.equal(suggestSkipReason({ graceMs: GRACE, sinceBootMs: 0, chatBusy: false, emptyBoard: false }), "booting");
   // 他の条件が「生成してよい」と言っていても起動直後が勝つ
-  assert.equal(suggestSkipReason({ sinceBootMs: 59_999, chatBusy: true, emptyBoard: true }), "booting");
+  assert.equal(
+    suggestSkipReason({ graceMs: GRACE, sinceBootMs: GRACE - 1, chatBusy: true, emptyBoard: true }),
+    "booting"
+  );
 });
 
 test("提案の生成を諦める判定: 会話中は chat-busy、空ボードは empty-board", () => {
-  assert.equal(suggestSkipReason({ sinceBootMs: AFTER_BOOT, chatBusy: true, emptyBoard: false }), "chat-busy");
-  assert.equal(suggestSkipReason({ sinceBootMs: AFTER_BOOT, chatBusy: false, emptyBoard: true }), "empty-board");
+  assert.equal(
+    suggestSkipReason({ graceMs: GRACE, sinceBootMs: AFTER_BOOT, chatBusy: true, emptyBoard: false }),
+    "chat-busy"
+  );
+  assert.equal(
+    suggestSkipReason({ graceMs: GRACE, sinceBootMs: AFTER_BOOT, chatBusy: false, emptyBoard: true }),
+    "empty-board"
+  );
 });
 
 test("提案の生成を諦める判定: 猶予を過ぎ・会話中でない・中身があるときだけ null (生成へ進む)", () => {
-  assert.equal(suggestSkipReason({ sinceBootMs: AFTER_BOOT, chatBusy: false, emptyBoard: false }), null);
+  assert.equal(
+    suggestSkipReason({ graceMs: GRACE, sinceBootMs: AFTER_BOOT, chatBusy: false, emptyBoard: false }),
+    null
+  );
   // 境界: ちょうど猶予に達したら通す
-  assert.equal(suggestSkipReason({ sinceBootMs: 60_000, chatBusy: false, emptyBoard: false }), null);
+  assert.equal(suggestSkipReason({ graceMs: GRACE, sinceBootMs: GRACE, chatBusy: false, emptyBoard: false }), null);
+});
+
+// **猶予の値そのものに依存しないことを見る。**上の3本は 60_000 を使っているが、
+// それは「既定値だから」ではなく「テストが決めた値だから」。別の値でも同じ形で動く
+test("提案の生成を諦める判定: 猶予の値は呼び出し側が決める (デモ用の短い猶予でも同じ形)", () => {
+  assert.equal(suggestSkipReason({ graceMs: 0, sinceBootMs: 0, chatBusy: false, emptyBoard: false }), null);
+  assert.equal(suggestSkipReason({ graceMs: 5_000, sinceBootMs: 4_999, chatBusy: false, emptyBoard: false }), "booting");
+  assert.equal(suggestSkipReason({ graceMs: 5_000, sinceBootMs: 5_000, chatBusy: false, emptyBoard: false }), null);
 });
 
 // #180 で「Exportに認証の設定と64桁hexが載っていないこと」を見る番人を2本置いていたが、

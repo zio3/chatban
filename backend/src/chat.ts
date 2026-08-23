@@ -711,8 +711,12 @@ export function suggestSkipReason(state: {
   sinceBootMs: number;
   chatBusy: boolean;
   emptyBoard: boolean;
+  /** 起動猶予。**呼び出し側が必ず渡す。**既定値を持たせるとモジュール変数 (= 環境変数) を
+   * 読むことになり、「純粋関数だからDBもexpressも要らない」が成り立たなくなる —
+   * 実際 #232 の作業中、開発機の SUGGEST_BOOT_GRACE_MS が効いてユニットが2本落ちていた */
+  graceMs: number;
 }): "booting" | "chat-busy" | "empty-board" | null {
-  if (state.sinceBootMs < BOOT_GRACE_MS) return "booting";
+  if (state.sinceBootMs < state.graceMs) return "booting";
   if (state.chatBusy) return "chat-busy";
   if (state.emptyBoard) return "empty-board";
   return null;
@@ -720,6 +724,7 @@ export function suggestSkipReason(state: {
 
 export async function generateSuggestions(): Promise<{ label: string; message: string }[]> {
   const skip = suggestSkipReason({
+    graceMs: BOOT_GRACE_MS,
     sinceBootMs: Date.now() - BOOTED_AT,
     chatBusy: isChatBusy(currentProjectId()),
     // #200: 畳んだ箱も見る。**入口ごとにズレると事故る** — 画面側 (App.tsx の isEmptyBoard) は

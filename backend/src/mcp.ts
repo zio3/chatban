@@ -41,7 +41,7 @@ import {
 import { boardDelta, formatBoardUpdate } from "./boardState.js";
 import { contextReference, contextTemplateHint } from "./contextTemplate.js";
 import { currentProjectId, customLanes, getProject } from "./store.js";
-import type { TaskStatus, ViewEvent } from "./types.js";
+import type { CardStatus, ViewEvent } from "./types.js";
 
 // 値の一覧はチャット側と共有する。入口ごとに書き分けると必ずズレる (#92 #108 #114 #125 #126)
 /** boolean を文字列で送ってくるMCPクライアントがある (実測: Claude Code から
@@ -274,7 +274,7 @@ export function buildMcpServer(onEvent: (kind: ViewEvent) => void): McpServer {
       },
     },
     async ({ status, ids, sync_token }) => {
-      const r = reorderTasks(ids, status as TaskStatus);
+      const r = reorderTasks(ids, status as CardStatus);
       onEvent("board");
       return text({ ...reorderResult(r), ...boardUpdate(sync_token) });
     }

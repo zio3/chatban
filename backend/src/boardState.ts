@@ -29,7 +29,7 @@ const TTL_MS = 60 * 60 * 1000;
  * 差分で100文字だったものが全件で2万文字に戻るという、この機能の意義だけが削れる形。
  *
  * 単位を取り違えていた上限なので、値を調整するのではなく**当たらない大きさ**に置く。
- * 持っているのは TaskFacts だけ (context本文は版番号のみ) なので1個は軽く、
+ * 持っているのは CardFacts だけ (context本文は版番号のみ) なので1個は軽く、
  * 60分ぶん溜めてもメモリは問題にならない。60分で512回の呼び出しは実運用では起きない
  * (1回がLLMの往復に対応する) し、仮に当たっても古いものが落ちるだけで壊れない */
 const MAX_SNAPSHOTS = 512;
@@ -37,7 +37,7 @@ const MAX_SNAPSHOTS = 512;
 const MAX_CHANGES = 40;
 
 /** 差分に出す分だけを持つ。context本文のような重いものは持たない (版だけ見る) */
-export interface TaskFacts {
+export interface CardFacts {
   title: string;
   status: string;
   summary: string | null;
@@ -56,7 +56,7 @@ export interface TaskFacts {
 export interface BoardSnapshot {
   syncToken: string;
   takenAt: number;
-  cards: Map<number, TaskFacts>;
+  cards: Map<number, CardFacts>;
   /** 前提情報は**本文を持たない (#187)**。応答に載せるのも版だけで、
    * 中身が要るなら get_project_context を呼ばせる。
    * 3,000字級の本文がボードを取るたびに乗るのを止めるのが目的 (#186 と同じ問題) */
@@ -100,7 +100,7 @@ const snapshots = new Map<number, BoardSnapshot[]>();
 
 /** いまのボードを写し取る。DBに触るのはここだけで、差分計算(diffBoards)は純粋関数にしてある */
 export function captureBoard(): Omit<BoardSnapshot, "syncToken" | "takenAt"> {
-  const cards = new Map<number, TaskFacts>(
+  const cards = new Map<number, CardFacts>(
     listCards().map((t) => [
       t.id,
       {
@@ -123,7 +123,7 @@ export function captureBoard(): Omit<BoardSnapshot, "syncToken" | "takenAt"> {
  * only を渡すと、そこに含まれるIDだけで並びを作る (追加・消滅による見かけの変化を除くため)。
  * sort が同値のときは id で決める — 実データは listCards の ORDER BY sort, id 順で入るので、
  * 比較関数にも同じ規則を書いておく (暗黙の安定性に寄りかからない) */
-function columnLists(cards: Map<number, TaskFacts>, only?: Set<number>): Map<string, number[]> {
+function columnLists(cards: Map<number, CardFacts>, only?: Set<number>): Map<string, number[]> {
   const byStatus = new Map<string, { id: number; sort: number }[]>();
   for (const [id, t] of cards) {
     if (only && !only.has(id)) continue;
@@ -141,7 +141,7 @@ function columnLists(cards: Map<number, TaskFacts>, only?: Set<number>): Map<str
   return out;
 }
 
-function columnOrders(cards: Map<number, TaskFacts>, only?: Set<number>): Map<string, string> {
+function columnOrders(cards: Map<number, CardFacts>, only?: Set<number>): Map<string, string> {
   const out = new Map<string, string>();
   for (const [status, ids] of columnLists(cards, only)) out.set(status, ids.map((id) => `#${id}`).join(","));
   return out;
@@ -166,7 +166,7 @@ function sameDeps(a: number[] | null, b: number[] | null): boolean {
 }
 
 /** 1件のカードについて、変わったフィールドだけを "status: todo -> inprogress" の形で並べる */
-function fieldChanges(prev: TaskFacts, cur: TaskFacts): string[] {
+function fieldChanges(prev: CardFacts, cur: CardFacts): string[] {
   const out: string[] = [];
   if (prev.status !== cur.status) out.push(`status: ${prev.status} -> ${cur.status}`);
   if (prev.title !== cur.title) out.push(`title: 「${prev.title}」-> 「${cur.title}」`);

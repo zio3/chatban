@@ -28,7 +28,7 @@ import { getModel } from "./config.js";
 import { foldedContainer } from "./archive.js";
 import { suggestBootGraceMs } from "./demoMode.js";
 import { log } from "./log.js";
-import type { CustomLane, TaskStatus, UiAction, ViewEvent } from "./types.js";
+import type { CustomLane, CardStatus, UiAction, ViewEvent } from "./types.js";
 
 export interface ToolTrace {
   tool: string;

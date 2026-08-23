@@ -1,5 +1,5 @@
 import { getProjectContext, listCards } from "./db.js";
-import type { Task } from "./types.js";
+import type { Card } from "./types.js";
 import { currentProjectId, customLanes } from "./store.js";
 import { log } from "./log.js";
 
@@ -77,7 +77,7 @@ export function clampSummary(s: string): string {
  * #221: **summary を載せていなかった。**ツール契約 (SUMMARY_DESCRIPTION) は
  * 「カードに出るだけでなく、**ボードのチャットが常時これを読んで受け答えする**」と
  * 約束しているのに、索引に無いのでチャットは query_log を叩かない限り現況を知らなかった。
- * MCP側 (boardState.ts の TaskFacts) には入っていたので、**外部エージェントには見えていて
+ * MCP側 (boardState.ts の CardFacts) には入っていたので、**外部エージェントには見えていて
  * ボードのチャットだけ見えていない**という非対称になっていた。
  *
  * 実測して載せると決めた (2026-08-21): 18枚で725字・平均40字・最長60字、
@@ -91,7 +91,7 @@ export function clampSummary(s: string): string {
  * 値が空のものは載せない (due / dep / rejected と同じ扱い)。キーが増えるほど
  * 索引は太るので、「無い」ことは書かずに黙っている */
 export function cardIndexJson(
-  t: Pick<Task, "id" | "title" | "status" | "summary" | "due" | "blockedBy" | "rejected" | "context">
+  t: Pick<Card, "id" | "title" | "status" | "summary" | "due" | "blockedBy" | "rejected" | "context">
 ): string {
   return JSON.stringify({
     id: t.id,

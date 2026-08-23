@@ -422,7 +422,7 @@ export function customLanes(id: number = currentProjectId()): CustomLane[] {
 
 /** 表示名を設定する。空文字・空白だけはNULL扱い = そのレーンを畳む。
  * **畳んでも、そこに居たカードは消さない。**呼び出し側 (index.ts) が todo へ戻してから呼ぶ —
- * 「消えたように見えて実在する」(TASK_STATUSES の注記) を作らないため */
+ * 「消えたように見えて実在する」(CARD_STATUSES の注記) を作らないため */
 export function setCustomLabel(id: number, key: CustomLaneKey, label: string | null): void {
   const v = label?.trim() ? label.trim() : null;
   admin.prepare(`UPDATE projects SET ${key}_label = ? WHERE id = ?`).run(v, id);

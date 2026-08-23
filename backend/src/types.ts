@@ -2,7 +2,7 @@
  * 値そのものは固定 (静的な enum) で、意味は表示名と前提情報が与える。
  * 位置は Review と Done の間。Todo/Inprogress と同じ緩い箱で、live_cards にも入る。
  * **Done へは行けない** — 退場は review を通る規則のまま (mayEnterDone は変えていない) */
-export type TaskStatus = "todo" | "inprogress" | "review" | "custom1" | "custom2" | "done";
+export type CardStatus = "todo" | "inprogress" | "review" | "custom1" | "custom2" | "done";
 export type CustomLaneKey = "custom1" | "custom2";
 export interface CustomLane {
   key: CustomLaneKey;
@@ -10,10 +10,10 @@ export interface CustomLane {
   label: string;
 }
 
-export interface Task {
+export interface Card {
   id: number;
   title: string;
-  status: TaskStatus;
+  status: CardStatus;
   /** 詳細・決定事項・ブリーフィングの置き場 (フリーテキスト、遅延読み込み) */
   context: string | null;
   /** 期限 YYYY-MM-DD (#44)。相対表現はチャットが今日の日付から解決して格納する */

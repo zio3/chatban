@@ -15,7 +15,7 @@ import { buildMcpServer } from "./mcp.js";
 import { isAllowedOrigin, isBrowserCrossSite } from "./origin.js";
 import { resetPromptState } from "./promptState.js";
 import { assertTimezone } from "./timezone.js";
-import type { Task, ViewEvent } from "./types.js";
+import type { Card, ViewEvent } from "./types.js";
 import {
   activeProjectId,
   createProject,
@@ -52,10 +52,10 @@ import {
   DUE_FORMAT_RULE,
   isArchived,
   isDueDate,
-  isTaskStatus,
+  isCardStatus,
   isUsableStatus,
   evacuateLane,
-  TASK_STATUSES,
+  CARD_STATUSES,
 } from "./db.js";
 
 const PORT = Number(process.env.PORT ?? 8787);
@@ -225,7 +225,7 @@ function canAcceptAttachments(): boolean {
  * MCP側は #108 で同じことを直している (brief())。**画面向けだけが全文を配り続けていた**ので、
  * 同じ形に揃える — 本文の代わりに contextChars (あるかどうか・どれくらいか) と
  * contextVersion (変わったかどうか) を載せる。パネルは版を見て取り直せる */
-function briefCard(t: Task) {
+function briefCard(t: Card) {
   const { context, ...rest } = t;
   return { ...rest, contextChars: context?.length ?? 0 };
 }
@@ -307,8 +307,8 @@ function badStatus(status: unknown): string | null {
   const lanes = customLanes();
   if (status === undefined || isUsableStatus(status, lanes)) return null;
   // #19: 使える列はプロジェクトによって違うので、**そのプロジェクトで実際に置けるもの**を並べて返す。
-  // TASK_STATUSES をそのまま出すと、有効化していない custom1 を「使える」と案内してしまう
-  const usable = TASK_STATUSES.filter((v) => isUsableStatus(v, lanes));
+  // CARD_STATUSES をそのまま出すと、有効化していない custom1 を「使える」と案内してしまう
+  const usable = CARD_STATUSES.filter((v) => isUsableStatus(v, lanes));
   return `status は ${usable.join(" / ")} のいずれかです (受け取った値: ${JSON.stringify(status)})`;
 }
 

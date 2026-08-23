@@ -8,7 +8,7 @@ import { diffBoards, formatBoardUpdate, makeSyncToken, type CardFacts } from "./
  * (2026-08-15 に実際に起きた誤報告: 人間が9件を検収して消えていたのに、ビューのバグだと報告した)。
  * 差分計算は純粋関数にしてあるので、DBもMCPサーバーも要らずに確かめられる */
 
-function task(over: Partial<CardFacts> = {}): CardFacts {
+function facts(over: Partial<CardFacts> = {}): CardFacts {
   return {
     title: "既定のタイトル",
     status: "todo",
@@ -33,13 +33,13 @@ function board(cards: [number, CardFacts][] = [], projectContextVersion = 1) {
 }
 
 test("何も変わっていなければ差分は空", () => {
-  const b = board([[4, task()]]);
+  const b = board([[4, facts()]]);
   assert.deepEqual(diffBoards(b, b), []);
 });
 
 test("状態の変化は「どこからどこへ」が1行で分かる", () => {
-  const before = board([[4, task({ title: "認証を廃止する" })]]);
-  const after = board([[4, task({ title: "認証を廃止する", status: "inprogress" })]]);
+  const before = board([[4, facts({ title: "認証を廃止する" })]]);
+  const after = board([[4, facts({ title: "認証を廃止する", status: "inprogress" })]]);
 
   const changes = diffBoards(before, after);
   assert.equal(changes.length, 1);
@@ -51,7 +51,7 @@ test("状態の変化は「どこからどこへ」が1行で分かる", () => {
 });
 
 test("追加は内容ごと載せる (IDだけでは何か分からないため)", () => {
-  const changes = diffBoards(board(), board([[12, task({ title: "新しい仕事", due: "2026-08-20" })]]));
+  const changes = diffBoards(board(), board([[12, facts({ title: "新しい仕事", due: "2026-08-20" })]]));
   assert.equal(changes.length, 1);
   assert.match(changes[0], /^\+ #12/);
   assert.match(changes[0], /新しい仕事/);
@@ -61,15 +61,15 @@ test("追加は内容ごと載せる (IDだけでは何か分からないため)
 test("消滅を拾える (タイムスタンプ方式では絶対に拾えないケース)", () => {
   // 要約カードに畳まれて消えたカードは updated_at で絞っても出てこない。
   // Done要約が主戦場になる以上ここは頻発するので、スナップショット比較を選んでいる
-  const changes = diffBoards(board([[6, task({ title: "終わった仕事" })]]), board());
+  const changes = diffBoards(board([[6, facts({ title: "終わった仕事" })]]), board());
   assert.equal(changes.length, 1);
   assert.match(changes[0], /^- #6/);
   assert.match(changes[0], /終わった仕事/);
 });
 
 test("変わったフィールドだけを並べる (変わっていないものは書かない)", () => {
-  const before = board([[7, task({ title: "T", status: "todo", summary: "前の現況", due: "2026-08-18" })]]);
-  const after = board([[7, task({ title: "T", status: "review", summary: "前の現況", due: "2026-08-19" })]]);
+  const before = board([[7, facts({ title: "T", status: "todo", summary: "前の現況", due: "2026-08-18" })]]);
+  const after = board([[7, facts({ title: "T", status: "review", summary: "前の現況", due: "2026-08-19" })]]);
 
   const changes = diffBoards(before, after);
   assert.equal(changes.length, 1);
@@ -79,38 +79,38 @@ test("変わったフィールドだけを並べる (変わっていないもの
 });
 
 test("却下と却下の取り消しを区別する", () => {
-  const plain = board([[9, task()]]);
-  const rejected = board([[9, task({ rejected: true })]]);
+  const plain = board([[9, facts()]]);
+  const rejected = board([[9, facts({ rejected: true })]]);
 
   assert.match(diffBoards(plain, rejected)[0], /却下された/);
   assert.match(diffBoards(rejected, plain)[0], /却下を取り消した/);
 });
 
 test("経緯メモは版だけ伝える (本文を載せると差分が膨らむ)", () => {
-  const changes = diffBoards(board([[3, task()]]), board([[3, task({ contextVersion: 2 })]]));
+  const changes = diffBoards(board([[3, facts()]]), board([[3, facts({ contextVersion: 2 })]]));
   assert.equal(changes.length, 1);
   assert.match(changes[0], /経緯メモが更新された \(v2\)/);
 });
 
 test("依存は中身で比べる (null と空配列は同じ扱い)", () => {
-  assert.deepEqual(diffBoards(board([[1, task({ blockedBy: null })]]), board([[1, task({ blockedBy: [] })]])), []);
-  assert.deepEqual(diffBoards(board([[1, task({ blockedBy: [2, 3] })]]), board([[1, task({ blockedBy: [2, 3] })]])), []);
+  assert.deepEqual(diffBoards(board([[1, facts({ blockedBy: null })]]), board([[1, facts({ blockedBy: [] })]])), []);
+  assert.deepEqual(diffBoards(board([[1, facts({ blockedBy: [2, 3] })]]), board([[1, facts({ blockedBy: [2, 3] })]])), []);
 
-  const changed = diffBoards(board([[1, task({ blockedBy: [2] })]]), board([[1, task({ blockedBy: null })]]));
+  const changed = diffBoards(board([[1, facts({ blockedBy: [2] })]]), board([[1, facts({ blockedBy: null })]]));
   assert.equal(changed.length, 1);
   assert.match(changed[0], /依存: \[2\] -> \[\]/);
 });
 
 test("並べ替えは1行にまとめ、その1行から現在の順を復元できる", () => {
   const before = board([
-    [1, task({ sort: 0 })],
-    [2, task({ sort: 1 })],
-    [3, task({ sort: 2 })],
+    [1, facts({ sort: 0 })],
+    [2, facts({ sort: 1 })],
+    [3, facts({ sort: 2 })],
   ]);
   const after = board([
-    [1, task({ sort: 1 })],
-    [2, task({ sort: 2 })],
-    [3, task({ sort: 0 })],
+    [1, facts({ sort: 1 })],
+    [2, facts({ sort: 2 })],
+    [3, facts({ sort: 0 })],
   ]);
 
   const changes = diffBoards(before, after);
@@ -121,12 +121,12 @@ test("並べ替えは1行にまとめ、その1行から現在の順を復元で
 
 test("入れ替われば現在の並びを出す", () => {
   const before = board([
-    [1, task({ sort: 0 })],
-    [2, task({ sort: 1 })],
+    [1, facts({ sort: 0 })],
+    [2, facts({ sort: 1 })],
   ]);
   const swapped = board([
-    [1, task({ sort: 1 })],
-    [2, task({ sort: 0 })],
+    [1, facts({ sort: 1 })],
+    [2, facts({ sort: 0 })],
   ]);
 
   assert.match(diffBoards(before, swapped)[0], /todo: #2,#1/);
@@ -136,12 +136,12 @@ test("sort の数値だけ振り直され、並びが同じなら何も言わな
   // 0,1 -> 5,9 は数値が変わっても見た目の順は #1,#2 のまま。
   // sort の数値差で判定すると、ここで「並び順が変わった」と嘘をつく (自動レビュー指摘)
   const before = board([
-    [1, task({ sort: 0 })],
-    [2, task({ sort: 1 })],
+    [1, facts({ sort: 0 })],
+    [2, facts({ sort: 1 })],
   ]);
   const renumbered = board([
-    [1, task({ sort: 5 })],
-    [2, task({ sort: 9 })],
+    [1, facts({ sort: 5 })],
+    [2, facts({ sort: 9 })],
   ]);
 
   assert.deepEqual(diffBoards(before, renumbered), []);
@@ -151,14 +151,14 @@ test("列を移っても sort の数値が変わらないケースを拾う", ()
   // UIは移動先の先頭要素の sort-1 を振るので、先頭が 0 の列の先頭へ入れると sort は 0 のまま。
   // 数値を比べていると status の行しか出ず、移動先の現在順を返せなかった (自動レビュー指摘)
   const before = board([
-    [1, task({ status: "todo", sort: 0 })],
-    [2, task({ status: "review", sort: 1 })],
-    [3, task({ status: "review", sort: 2 })],
+    [1, facts({ status: "todo", sort: 0 })],
+    [2, facts({ status: "review", sort: 1 })],
+    [3, facts({ status: "review", sort: 2 })],
   ]);
   const after = board([
-    [1, task({ status: "review", sort: 0 })],
-    [2, task({ status: "review", sort: 1 })],
-    [3, task({ status: "review", sort: 2 })],
+    [1, facts({ status: "review", sort: 0 })],
+    [2, facts({ status: "review", sort: 1 })],
+    [3, facts({ status: "review", sort: 2 })],
   ]);
 
   const changes = diffBoards(before, after);
@@ -172,17 +172,17 @@ test("列を移っても sort の数値が変わらないケースを拾う", ()
 });
 
 test("ゴミ箱からの復元は、列の途中に戻っても位置が分かる", () => {
-  // restoreTask は sort を保ったまま戻すので、列の真ん中に現れることがある。
+  // restoreCard は sort を保ったまま戻すので、列の真ん中に現れることがある。
   // 復元は「追加」なので並び順の判定 (居続けたIDの比較) には入らず、
   // 追加行に位置を書かないとエージェントには順序が分からない (自動レビュー指摘)
   const before = board([
-    [10, task({ sort: 0 })],
-    [20, task({ sort: 10 })],
+    [10, facts({ sort: 0 })],
+    [20, facts({ sort: 10 })],
   ]);
   const after = board([
-    [10, task({ sort: 0 })],
-    [5, task({ sort: 5, title: "戻ってきた仕事" })],
-    [20, task({ sort: 10 })],
+    [10, facts({ sort: 0 })],
+    [5, facts({ sort: 5, title: "戻ってきた仕事" })],
+    [20, facts({ sort: 10 })],
   ]);
 
   const added = diffBoards(before, after).find((c) => c.startsWith("+"));
@@ -192,21 +192,21 @@ test("ゴミ箱からの復元は、列の途中に戻っても位置が分か�
 
 test("列の先頭・末尾に入ったときも位置が分かる", () => {
   const base = board([
-    [10, task({ sort: 0 })],
-    [20, task({ sort: 10 })],
+    [10, facts({ sort: 0 })],
+    [20, facts({ sort: 10 })],
   ]);
 
   const atHead = diffBoards(base, board([
-    [1, task({ sort: -5 })],
-    [10, task({ sort: 0 })],
-    [20, task({ sort: 10 })],
+    [1, facts({ sort: -5 })],
+    [10, facts({ sort: 0 })],
+    [20, facts({ sort: 10 })],
   ])).find((c) => c.startsWith("+"));
   assert.match(atHead!, /todo の先頭 \(次が #10\)/);
 
   const atTail = diffBoards(base, board([
-    [10, task({ sort: 0 })],
-    [20, task({ sort: 10 })],
-    [30, task({ sort: 99 })],
+    [10, facts({ sort: 0 })],
+    [20, facts({ sort: 10 })],
+    [30, facts({ sort: 99 })],
   ])).find((c) => c.startsWith("+"));
   assert.match(atTail!, /todo の末尾 \(前が #20\)/);
 });
@@ -215,13 +215,13 @@ test("検収済みのカードが増えたら、追加行に検収済みが載�
   // 追加行は fieldChanges を通らないため、ここに書かないと検収状態が抜け落ちる (自動レビュー指摘)。
   //
   // **もとは「ゴミ箱からの復元」を例にしていたが、その経路では成立しなくなった** —
-  // #161 で restoreTask が復元時に checked_at を落とすようにしたので、復元で現れる追加行に
+  // #161 で restoreCard が復元時に checked_at を落とすようにしたので、復元で現れる追加行に
   // 検収済みは付かない。テストが守っていたのは「追加行にも検収状態を載せる」という一般の性質で、
   // 復元はその一例に過ぎなかったので、例のほうを差し替えた (別プロジェクトからの取り込み・
   // スナップショット失効後の再ベースラインなど、検収済みが「追加」として現れる経路は他にもある)
   const changes = diffBoards(
     board(),
-    board([[5, task({ status: "review", title: "戻ってきた仕事", checkedAt: "2026-08-17 10:00:00" })]])
+    board([[5, facts({ status: "review", title: "戻ってきた仕事", checkedAt: "2026-08-17 10:00:00" })]])
   );
 
   const added = changes.find((c) => c.startsWith("+"));
@@ -230,20 +230,20 @@ test("検収済みのカードが増えたら、追加行に検収済みが載�
 });
 
 test("通常の新規追加には検収済みが付かない", () => {
-  const changes = diffBoards(board(), board([[6, task({ title: "新しい仕事" })]]));
+  const changes = diffBoards(board(), board([[6, facts({ title: "新しい仕事" })]]));
   assert.ok(!changes[0].includes("検収済み"));
 });
 
 test("列をまたいで動いたら、入った先の並びを出す (抜けたほうは出さない)", () => {
   const before = board([
-    [1, task({ status: "todo", sort: 0 })],
-    [2, task({ status: "todo", sort: 1 })],
-    [3, task({ status: "review", sort: 0 })],
+    [1, facts({ status: "todo", sort: 0 })],
+    [2, facts({ status: "todo", sort: 1 })],
+    [3, facts({ status: "review", sort: 0 })],
   ]);
   const after = board([
-    [1, task({ status: "review", sort: 1 })],
-    [2, task({ status: "todo", sort: 1 })],
-    [3, task({ status: "review", sort: 0 })],
+    [1, facts({ status: "review", sort: 1 })],
+    [2, facts({ status: "todo", sort: 1 })],
+    [3, facts({ status: "review", sort: 0 })],
   ]);
 
   const line = diffBoards(before, after).find((c) => c.startsWith("並び順"));
@@ -254,8 +254,8 @@ test("列をまたいで動いたら、入った先の並びを出す (抜けた
 });
 
 test("人の検収の印を拾う (setChecked は updated_at を動かさないので差分でしか気づけない)", () => {
-  const before = board([[5, task({ status: "review" })]]);
-  const after = board([[5, task({ status: "review", checkedAt: "2026-08-17 10:00:00" })]]);
+  const before = board([[5, facts({ status: "review" })]]);
+  const after = board([[5, facts({ status: "review", checkedAt: "2026-08-17 10:00:00" })]]);
 
   const changes = diffBoards(before, after);
   assert.equal(changes.length, 1);
@@ -268,12 +268,12 @@ test("人の検収の印を拾う (setChecked は updated_at を動かさない�
 
 test("並べ替えが status の変化を埋もれさせない", () => {
   const before = board([
-    [1, task({ title: "動く", sort: 0 })],
-    [2, task({ title: "並ぶ", sort: 1 })],
+    [1, facts({ title: "動く", sort: 0 })],
+    [2, facts({ title: "並ぶ", sort: 1 })],
   ]);
   const after = board([
-    [1, task({ title: "動く", status: "review", sort: 1 })],
-    [2, task({ title: "並ぶ", sort: 0 })],
+    [1, facts({ title: "動く", status: "review", sort: 1 })],
+    [2, facts({ title: "並ぶ", sort: 0 })],
   ]);
 
   const changes = diffBoards(before, after);
@@ -294,14 +294,14 @@ test("前提情報の更新は版だけで知らせる (本文は持っていな
 
 test("複数の変化がまとめて返る", () => {
   const before = board([
-    [1, task({ title: "残るもの" })],
-    [2, task({ title: "動くもの" })],
-    [3, task({ title: "消えるもの" })],
+    [1, facts({ title: "残るもの" })],
+    [2, facts({ title: "動くもの" })],
+    [3, facts({ title: "消えるもの" })],
   ]);
   const after = board([
-    [1, task({ title: "残るもの" })],
-    [2, task({ title: "動くもの", status: "review" })],
-    [4, task({ title: "増えたもの" })],
+    [1, facts({ title: "残るもの" })],
+    [2, facts({ title: "動くもの", status: "review" })],
+    [4, facts({ title: "増えたもの" })],
   ]);
 
   const changes = diffBoards(before, after);

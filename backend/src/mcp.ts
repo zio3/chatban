@@ -1,10 +1,10 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import {
   CONTEXT_APPEND_DESCRIPTION,
-  createTasksAsAgent,
+  createCardsAsAgent,
   RESTORE_DESCRIPTION,
-  restoreTasksAsAgent,
-  updateTasksAsAgent,
+  restoreCardsAsAgent,
+  updateCardsAsAgent,
 } from "./agentWrite.js";
 import {
   BLOCKED_BY_DESCRIPTION,
@@ -27,16 +27,16 @@ import { z } from "zod";
 import {
   queryLogHelp,
   queryProjectData,
-  reorderTasks,
-  createTask,
-  trashTask,
+  reorderCards,
+  createCard,
+  trashCard,
   getProjectContextRow,
-  getTask,
+  getCard,
   listCards,
-  listTrashedTasks,
-  searchTasks,
+  listTrashedCards,
+  searchCards,
   setProjectContext,
-  updateTasks,
+  updateCards,
 } from "./db.js";
 import { boardDelta, formatBoardUpdate } from "./boardState.js";
 import { contextReference, contextTemplateHint } from "./contextTemplate.js";
@@ -78,7 +78,7 @@ function boardUpdate(syncToken?: string) {
 
 /** #108: 更新結果は要点だけ返す。以前は context を含む全フィールドが返っており、
  * 経緯メモを更新するたびに自分が書いた1,800字がそっくり戻ってきていた (トークンの無駄) */
-function brief(t: ReturnType<typeof getTask>) {
+function brief(t: ReturnType<typeof getCard>) {
   if (!t) return null;
   return {
     id: t.id,
@@ -135,7 +135,7 @@ export function buildMcpServer(onEvent: (kind: ViewEvent) => void): McpServer {
     async ({ cards, sync_token }) => {
       // #114: 書き込みは agentWrite に集約。以前はMCP側にガードが無く、
       // done指定がそのまま通って「AIが自主的にDoneへ移動」する事故が起きた
-      const r = createTasksAsAgent(cards as any);
+      const r = createCardsAsAgent(cards as any);
       onEvent("board");
       return text({
         ok: true,
@@ -178,7 +178,7 @@ export function buildMcpServer(onEvent: (kind: ViewEvent) => void): McpServer {
       },
     },
     async ({ updates, sync_token }) => {
-      const { ok, status, updated, note, conflicts, notFound, badDue } = updateTasksAsAgent(updates as any);
+      const { ok, status, updated, note, conflicts, notFound, badDue } = updateCardsAsAgent(updates as any);
       onEvent("board");
       return text({
         // #120/#123: 1件でも適用できなければ ok:false。
@@ -205,7 +205,7 @@ export function buildMcpServer(onEvent: (kind: ViewEvent) => void): McpServer {
       inputSchema: { ids: z.array(z.number().int()), sync_token: SYNC_TOKEN_ON_WRITE },
     },
     async ({ ids, sync_token }) => {
-      const results = ids.map((id) => ({ id, trashed: trashTask(id) }));
+      const results = ids.map((id) => ({ id, trashed: trashCard(id) }));
       onEvent("board");
       return text({
         ok: true,
@@ -227,7 +227,7 @@ export function buildMcpServer(onEvent: (kind: ViewEvent) => void): McpServer {
       // 返す形も共通側で絞ってあるので、ここで brief() を通す必要はない —
       // **チャットとMCPで応答の形まで同じ**になる (以前は片方だけ要約していた)
       onEvent("board");
-      return text({ ...restoreTasksAsAgent(ids), ...boardUpdate(sync_token) });
+      return text({ ...restoreCardsAsAgent(ids), ...boardUpdate(sync_token) });
     }
   );
 
@@ -237,7 +237,7 @@ export function buildMcpServer(onEvent: (kind: ViewEvent) => void): McpServer {
       description: SEARCH_DESCRIPTION,
       inputSchema: { terms: z.array(z.string()).describe("検索語(最大10)。言い換え・英日表記を並べる") },
     },
-    async ({ terms }) => text(searchResult(searchTasks(terms)))
+    async ({ terms }) => text(searchResult(searchCards(terms)))
   );
 
   // #108: 記録へのSQL窓口。チャットにしか無く、MCP越しの外部エージェントからは引けなかった。
@@ -274,7 +274,7 @@ export function buildMcpServer(onEvent: (kind: ViewEvent) => void): McpServer {
       },
     },
     async ({ status, ids, sync_token }) => {
-      const r = reorderTasks(ids, status as CardStatus);
+      const r = reorderCards(ids, status as CardStatus);
       onEvent("board");
       return text({ ...reorderResult(r), ...boardUpdate(sync_token) });
     }

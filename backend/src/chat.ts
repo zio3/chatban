@@ -1,26 +1,26 @@
 import type OpenAI from "openai";
 import {
   CONTEXT_APPEND_DESCRIPTION,
-  createTasksAsAgent,
+  createCardsAsAgent,
   RESTORE_DESCRIPTION,
-  restoreTasksAsAgent,
-  updateTasksAsAgent,
+  restoreCardsAsAgent,
+  updateCardsAsAgent,
 } from "./agentWrite.js";
 import { cleanAgentText } from "./text.js";
 import { getBoardPromptSection } from "./promptState.js";
 import {
-  createTask,
-  trashTask,
-  getTask,
+  createCard,
+  trashCard,
+  getCard,
   listCards,
   PUBLIC_TABLES,
   queryLogHelp,
   queryProjectData,
-  reorderTasks,
-  searchTasks,
+  reorderCards,
+  searchCards,
   setProjectContext,
-  updateTask,
-  updateTasks,
+  updateCard,
+  updateCards,
 } from "./db.js";
 import { currentProjectId, customLanes } from "./store.js";
 import { chatCompletion } from "./llm.js";
@@ -413,12 +413,12 @@ async function execTool(name: string, args: any, uiActions: UiAction[], events: 
   switch (name) {
     case "create_cards": {
       // #114: 書き込みは agentWrite に集約 (チャットとMCPで同じガードを通す)
-      const r = createTasksAsAgent(args.cards ?? []);
+      const r = createCardsAsAgent(args.cards ?? []);
       events.add("board");
       return { ok: true, ...r };
     }
     case "update_cards": {
-      const { ok, status, updated, note, conflicts, notFound, badDue } = updateTasksAsAgent(args.updates ?? []);
+      const { ok, status, updated, note, conflicts, notFound, badDue } = updateCardsAsAgent(args.updates ?? []);
       events.add("board");
       // #112: 版が合わなかった経緯メモは適用していない。現在の全文を返すのでマージして再実行する
       // #153: badDue も返す。**列挙して返しているので、足し忘れると入口ごとにズレる** —
@@ -435,7 +435,7 @@ async function execTool(name: string, args: any, uiActions: UiAction[], events: 
     }
     case "delete_cards": {
       // #102: 実データは消さずゴミ箱へ。誤解釈で消えても取り返しがつくようにする
-      const results = (args.ids as number[]).map((id) => ({ id, trashed: trashTask(id) }));
+      const results = (args.ids as number[]).map((id) => ({ id, trashed: trashCard(id) }));
       // 復元できることは毎回文章で説明しない (くどい)。#xx リンクから詳細パネルを開けば「戻す」がある
       events.add("board");
       return { ok: true, results };
@@ -448,17 +448,17 @@ async function execTool(name: string, args: any, uiActions: UiAction[], events: 
       // #161: 判定と報告は agentWrite に集約。以前はここだけ **常に ok:true** で、
       // MCPは「1件でも戻せなければ ok:false」だった — ok だけを見るエージェントは
       // 入口によって失敗を見落とす (Codexレビュー指摘)
-      const r = restoreTasksAsAgent(args.ids as number[]);
+      const r = restoreCardsAsAgent(args.ids as number[]);
       events.add("board");
       return r;
     }
     case "reorder_cards": {
-      const r = reorderTasks(args.ids ?? [], args.status);
+      const r = reorderCards(args.ids ?? [], args.status);
       events.add("board");
       return reorderResult(r);
     }
     case "search_cards": {
-      const r = searchTasks(args.terms ?? []);
+      const r = searchCards(args.terms ?? []);
       return searchResult(r);
     }
     case "query_log": {
@@ -489,7 +489,7 @@ async function execTool(name: string, args: any, uiActions: UiAction[], events: 
   }
 }
 
-export function buildSystemPrompt(taskFocus?: ReturnType<typeof getTask>, view?: string): string {
+export function buildSystemPrompt(cardFocus?: ReturnType<typeof getCard>, view?: string): string {
   // キャッシュ友好の並び: 静的な内容(人格/ルール/思想)を先頭に固定し、動的な内容(索引/履歴/カード)を末尾へ。
   // プロンプトキャッシュはプレフィックス一致なので、先頭が安定しているほどヒット部分が伸びる。
   return [
@@ -559,13 +559,13 @@ export function buildSystemPrompt(taskFocus?: ReturnType<typeof getTask>, view?:
     // #14/#126 → #180: ここに「いまの発言者」を渡していた。個人利用に特化したので、
     // 話しかけてくるのは常に持ち主ひとり。名前を毎ターン送っても情報が増えない (実測で
     // null 554件 / "zio" 100件) ため、発言者という概念ごと外した
-    taskFocus
+    cardFocus
       ? [
           "",
-          `## いま注目しているカード (このチャットは #${taskFocus.id} 専用)`,
-          JSON.stringify(taskFocus),
-          `- 「これ」「このカード」等の指示語は #${taskFocus.id} を指す。`,
-          `- この会話で決まったこと・分かったことは update_cards の context_append で #${taskFocus.id} の経緯メモに足す (既存を読む必要も版も要らない)。`,
+          `## いま注目しているカード (このチャットは #${cardFocus.id} 専用)`,
+          JSON.stringify(cardFocus),
+          `- 「これ」「このカード」等の指示語は #${cardFocus.id} を指す。`,
+          `- この会話で決まったこと・分かったことは update_cards の context_append で #${cardFocus.id} の経緯メモに足す (既存を読む必要も版も要らない)。`,
         ].join("\n")
       : "",
   ]
@@ -811,7 +811,7 @@ export async function runChatTurn(
   history: { role: "user" | "assistant"; content: string }[],
   onEvent: (kind: ViewEvent) => void,
   onProgress?: (label: string) => void,
-  taskFocusId?: number,
+  cardFocusId?: number,
   attachments?: ChatAttachment[],
   view?: string
 ): Promise<ChatResult> {
@@ -826,7 +826,7 @@ export async function runChatTurn(
       history,
       onEvent,
       onProgress,
-      taskFocusId,
+      cardFocusId,
       attachments,
       view
     );
@@ -842,12 +842,12 @@ async function runChatTurnInner(
   history: { role: "user" | "assistant"; content: string }[],
   onEvent: (kind: ViewEvent) => void,
   onProgress?: (label: string) => void,
-  taskFocusId?: number,
+  cardFocusId?: number,
   attachments?: ChatAttachment[],
   view?: string
 ): Promise<ChatResult> {
   const t0 = Date.now();
-  const taskFocus = taskFocusId != null ? getTask(taskFocusId) : undefined;
+  const cardFocus = cardFocusId != null ? getCard(cardFocusId) : undefined;
   // #68: 添付はそのままコンテンツパートでLLMへ (画像=vision / PDF=file直投げ)。原本は保存しない
   const fileParts = attachments && attachments.length > 0 ? buildAttachmentParts(attachments) : [];
   // #14: 発言者の記名。「終わりました」等の曖昧参照を解決するためのメタ情報であって発言内容ではない。
@@ -862,7 +862,7 @@ async function runChatTurnInner(
   const userContent: OpenAI.Chat.Completions.ChatCompletionUserMessageParam["content"] =
     fileParts.length > 0 ? [{ type: "text", text: baseText }, ...fileParts] : baseText;
   const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
-    { role: "system", content: buildSystemPrompt(taskFocus, view) },
+    { role: "system", content: buildSystemPrompt(cardFocus, view) },
     ...history.slice(-20),
     { role: "user", content: userContent },
   ];

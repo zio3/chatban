@@ -1,12 +1,12 @@
 import {
-  createTask,
+  createCard,
   DONE_GATE_RULE,
   DUE_FORMAT_RULE,
-  getTask,
+  getCard,
   isDueDate,
-  restoreTask,
-  updateTask,
-  updateTasks,
+  restoreCard,
+  updateCard,
+  updateCards,
   type CardPatch,
 } from "./db.js";
 import { cleanAgentText } from "./text.js";
@@ -24,7 +24,7 @@ import type { CardStatus } from "./types.js";
 // Doneへ至る経路はどのプロジェクトでも1本(人間の検収UI)。プロジェクトごとに違うのは
 // 「いつ検収OKを付けるか」であって、経路そのものではない。
 
-export interface AgentTaskInput {
+export interface AgentCardInput {
   title: string;
   status?: string;
   context?: string;
@@ -33,7 +33,7 @@ export interface AgentTaskInput {
   blocked_by?: number[] | null;
 }
 
-export interface AgentTaskUpdate extends Partial<AgentTaskInput> {
+export interface AgentCardUpdate extends Partial<AgentCardInput> {
   id: number;
   rejected?: boolean;
   /** #112: 読んだ時点の経緯メモの版。context を書き換えるときは必須 */
@@ -96,7 +96,7 @@ function acceptableDue(due: string | null | undefined): { due?: string | null; b
   return isDueDate(due) ? { due, bad: false } : { bad: true };
 }
 
-export function createTasksAsAgent(cards: AgentTaskInput[]): {
+export function createCardsAsAgent(cards: AgentCardInput[]): {
   created: unknown[];
   note?: string;
   /** 期限の形が違って捨てたもの (タイトルで返す。作成時点ではIDを知らせても意味が薄い) */
@@ -108,7 +108,7 @@ export function createTasksAsAgent(cards: AgentTaskInput[]): {
     const { status, coerced } = coerceStatus(t.status);
     if (coerced) anyCoerced = true;
     const title = cleanAgentText(t.title);
-    const task = createTask(title, status ?? "todo");
+    const card = createCard(title, status ?? "todo");
     const due = acceptableDue(t.due);
     if (due.bad) badDue.push(title);
     const patch: CardPatch = {
@@ -117,7 +117,7 @@ export function createTasksAsAgent(cards: AgentTaskInput[]): {
       ...(due.due !== undefined ? { due: due.due } : {}),
       ...(t.blocked_by !== undefined ? { blockedBy: t.blocked_by } : {}),
     };
-    return Object.keys(patch).length > 0 ? updateTask(task.id, patch) : task;
+    return Object.keys(patch).length > 0 ? updateCard(card.id, patch) : card;
   });
   // 2つ重なったら両方言う。片方だけ返すと、もう片方は起きなかったことになる
   const notes = [anyCoerced ? DONE_NOTE : "", badDue.length > 0 ? BAD_DUE_NOTE : ""].filter(Boolean);
@@ -130,7 +130,7 @@ export function createTasksAsAgent(cards: AgentTaskInput[]): {
 
 /** #161: 復元の契約。**チャットとMCPで結果の読み方を揃えるために、ここに集約する。**
  *
- * 前の周までは各入口が restoreTask を直接呼んでいて、MCPは「1件でも戻せなければ ok:false」、
+ * 前の周までは各入口が restoreCard を直接呼んでいて、MCPは「1件でも戻せなければ ok:false」、
  * チャットは「常に ok:true」になっていた (Codexレビュー指摘)。**ok だけを見るエージェントは
  * 入口によって失敗を見落とす** — 同じ道具の名前で結果の意味が違うのが一番たちが悪い。
  *
@@ -141,7 +141,7 @@ export function createTasksAsAgent(cards: AgentTaskInput[]): {
  * 復元は検収の印を落とすので、**それを note で言う**。境界はコードで守られているが、
  * 戻したエージェントが「検収状態が変わった」ことを知る手段が無いと、
  * 「さっき検収されていたから確定できる」という前提のまま話を進めてしまう */
-export function restoreTasksAsAgent(ids: number[]): {
+export function restoreCardsAsAgent(ids: number[]): {
   ok: boolean;
   /** 戻したものの要点だけ。**Card をそのまま載せない** — `context` (1件1,000字超) が
    * 応答に乗り、チャットではそれが次のLLM入力とtraceへ再投入される (#108 と同じ無駄)。
@@ -151,12 +151,12 @@ export function restoreTasksAsAgent(ids: number[]): {
   note?: string;
 } {
   const unique = [...new Set(ids)];
-  const results = unique.map((id) => ({ id, task: restoreTask(id) }));
+  const results = unique.map((id) => ({ id, card: restoreCard(id) }));
   const restored = results
-    .map((r) => r.task)
+    .map((r) => r.card)
     .filter((t): t is NonNullable<typeof t> => !!t)
     .map((t) => ({ id: t.id, title: t.title, status: t.status }));
-  const notRestored = results.filter((r) => !r.task).map((r) => r.id);
+  const notRestored = results.filter((r) => !r.card).map((r) => r.id);
   const notes = [
     restored.length > 0 ? RESTORE_CHECKED_NOTE : "",
     notRestored.length > 0
@@ -177,7 +177,7 @@ export const RESTORE_CHECKED_NOTE =
 
 export const RESTORE_DESCRIPTION = `ゴミ箱に入れたカードを元に戻す(複数可)。**戻すと検収の印は外れる** — ${DONE_GATE_RULE}。戻せなかったIDは notRestored で名指しで返る`;
 
-export function updateTasksAsAgent(updates: AgentTaskUpdate[]): {
+export function updateCardsAsAgent(updates: AgentCardUpdate[]): {
   ok: boolean;
   /** #123: 全件通ったのか一部だけかを、配列を数えさせずに言う。
    * ok だけだと「全部失敗」と「一部だけ失敗」が同じ false になる */
@@ -199,7 +199,7 @@ export function updateTasksAsAgent(updates: AgentTaskUpdate[]): {
     // #87: 「差分だけ送る」モデルを前提にしない。全フィールドをエコーバックするモデル
     // (実測: gpt-5.6-terra) だと、変更していない値まで patch に載って既存値を壊す。
     // 現在値と突き合わせ、実際に変わったフィールドだけを通す
-    const cur = getTask(u.id);
+    const cur = getCard(u.id);
     // #123: 存在しないIDは名指しで返す。以前は updated に null が混ざるだけで、
     // ok:true / updated:[null, {...}] を見て「2件とも書けた」と読めてしまった。
     // エラーで全体を落とさないのは #120/#108 と同じ理由 (古い一覧を元に呼んだだけで
@@ -278,7 +278,7 @@ export function updateTasksAsAgent(updates: AgentTaskUpdate[]): {
   });
 
   // 一括更新は db 層でまとめて処理 (完了遷移の通知=要約再生成が1回で済む #60)
-  const updated = updateTasks(patches.filter((p): p is NonNullable<typeof p> => p !== null));
+  const updated = updateCards(patches.filter((p): p is NonNullable<typeof p> => p !== null));
   const notes = [
     // 件数を先に言う。「何件通って何件通らなかったか」を数えさせない
     ...(conflicts.length + notFound.length > 0

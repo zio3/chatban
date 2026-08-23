@@ -3,7 +3,7 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import cors from "cors";
 import express from "express";
 import { Server } from "socket.io";
-import { foldDoneColumn, foldedContainer, onTaskReopened } from "./archive.js";
+import { foldDoneColumn, foldedContainer, onCardReopened } from "./archive.js";
 import { generateSuggestions, runChatTurn } from "./chat.js";
 import { warnIfConfigNotIgnored } from "./config.js";
 import { hooks } from "./hooks.js";
@@ -34,19 +34,19 @@ import {
   withProject,
 } from "./store.js";
 import {
-  createTask,
+  createCard,
   setChecked,
-  listTrashedTasks,
-  purgeTask,
-  restoreTask,
-  trashTask,
+  listTrashedCards,
+  purgeCard,
+  restoreCard,
+  trashCard,
   getProjectContextRow,
-  getTask,
+  getCard,
   listChatMessages,
   listCards,
   saveChatMessage,
-  updateTask,
-  updateTasks,
+  updateCard,
+  updateCards,
   approveChecked,
   DONE_GATE_RULE,
   DUE_FORMAT_RULE,
@@ -253,14 +253,14 @@ function broadcastBoard(projectId = currentProjectId()) {
 // **同期で完結する**ので、以前あった実行中件数の通知 (archive:working / #56) と
 // 非同期スコープの入り直し (#98) は要らなくなった。LLMを待たないぶん、押した瞬間に board が確定する。
 if (process.env.AUTO_ARCHIVE !== "0") {
-  hooks.tasksCompleted = (taskIds) => {
+  hooks.cardsCompleted = (cardIds) => {
     const projectId = currentProjectId();
-    foldDoneColumn(projectId, taskIds);
+    foldDoneColumn(projectId, cardIds);
     broadcastBoard(projectId);
   };
-  hooks.taskReopened = (taskId) => {
+  hooks.cardReopened = (cardId) => {
     const projectId = currentProjectId();
-    onTaskReopened(projectId, taskId);
+    onCardReopened(projectId, cardId);
     broadcastBoard(projectId);
   };
 }
@@ -274,17 +274,17 @@ app.post("/api/cards", (req, res) => {
   if (!title) return res.status(400).json({ error: "title required" });
   const ng = badStatus(status) ?? badDue(req.body?.due);
   if (ng) return res.status(400).json({ error: ng });
-  const created = createTask(title, status ?? "todo");
+  const created = createCard(title, status ?? "todo");
   // #153: **検証だけ足して保存を忘れていた** (Codexレビュー指摘)。この口は title と status しか
   // 見ていないので、正しい形式の due を渡しても 200 のまま黙って捨てていた —
   // 「弾く」を足すときは「通ったものが効く」までを対で確かめる。
   // 不正な値は上で400にしているので、ここへ来るのは実在する日付か解除だけ
   const due = normalizeDue(req.body?.due);
-  const task = due === undefined ? created : (updateTask(created.id, { due }) ?? created);
+  const card = due === undefined ? created : (updateCard(created.id, { due }) ?? created);
   broadcastBoard();
   // 黙って別の列に入れない。指定と結果が違うことは必ず言う (#123と同じ形)
   res.json({
-    ...task,
+    ...card,
     ...(status === "done" ? { note: DONE_GATE_NOTE } : {}),
   });
 });
@@ -293,11 +293,11 @@ app.post("/api/cards", (req, res) => {
 // done は列が動いたこと、checked_at は検収が進んだこと。片方からもう片方を推測しない。
 // エージェントには読ませるが書かせない — この口はRESTにしか無い
 app.post("/api/cards/:id/checked", (req, res) => {
-  const { task, error } = setChecked(Number(req.params.id), !!req.body?.checked);
+  const { card, error } = setChecked(Number(req.params.id), !!req.body?.checked);
   if (error) return res.status(409).json({ error });
-  if (!task) return res.status(404).json({ error: "not found" });
+  if (!card) return res.status(404).json({ error: "not found" });
   broadcastBoard();
-  res.json(task);
+  res.json(card);
 });
 
 /** 外から来た列名を確かめる。TypeScriptの型は実行時には消えるので、RESTの入口で必ず通す。
@@ -354,9 +354,9 @@ app.post("/api/cards/approve", (req, res) => {
 
 // アーカイブ済み含む単一カード取得 (#59: 要約カードの#xxリンクから詳細を開く用)
 app.get("/api/cards/:id", (req, res) => {
-  const task = getTask(Number(req.params.id));
-  if (!task) return res.status(404).json({ error: "not found" });
-  res.json(task);
+  const card = getCard(Number(req.params.id));
+  if (!card) return res.status(404).json({ error: "not found" });
+  res.json(card);
 });
 
 app.patch("/api/cards/:id", (req, res) => {
@@ -364,12 +364,12 @@ app.patch("/api/cards/:id", (req, res) => {
   if (ng) return res.status(400).json({ error: ng });
   const body = req.body ?? {};
   // #153: 解除の "" は null に均してから渡す (空文字を保存しない)
-  const task = updateTask(Number(req.params.id), "due" in body ? { ...body, due: normalizeDue(body.due) } : body);
-  if (!task) return res.status(404).json({ error: "not found" });
+  const card = updateCard(Number(req.params.id), "due" in body ? { ...body, due: normalizeDue(body.due) } : body);
+  if (!card) return res.status(404).json({ error: "not found" });
   broadcastBoard();
   res.json({
-    ...task,
-    ...(req.body?.status === "done" && task.status !== "done" ? { note: DONE_GATE_NOTE } : {}),
+    ...card,
+    ...(req.body?.status === "done" && card.status !== "done" ? { note: DONE_GATE_NOTE } : {}),
   });
 });
 
@@ -379,33 +379,33 @@ app.delete("/api/cards/:id", (req, res) => {
   const id = Number(req.params.id);
   // アーカイブ済み (Doneへ確定して要約カードに畳まれたもの) は消せない。
   // 「見つからない」と返すと、実在するのに存在しないことになって混乱する
-  const cur = getTask(id);
+  const cur = getCard(id);
   if (cur && !cur.trashedAt && isArchived(id))
     return res.status(409).json({
       error: "Doneへ確定して要約カードに畳まれたカードは削除できません (要約から辿れなくなるため)",
     });
-  const ok = trashTask(id);
+  const ok = trashCard(id);
   if (!ok) return res.status(404).json({ error: "not found" });
   broadcastBoard();
   res.json({ ok: true });
 });
 
 app.get("/api/trash", (_req, res) => {
-  res.json({ cards: listTrashedTasks() });
+  res.json({ cards: listTrashedCards() });
 });
 
 app.post("/api/cards/:id/restore", (req, res) => {
   const id = Number(req.params.id);
-  const task = restoreTask(id);
-  // #161: restoreTask はゴミ箱に無ければ undefined を返す。**理由で応答を分ける** —
+  const card = restoreCard(id);
+  // #161: restoreCard はゴミ箱に無ければ undefined を返す。**理由で応答を分ける** —
   // 「そんなIDは無い」と「実在するがゴミ箱に無い」を同じ 404 にすると、
   // 実在するカードを不存在と報告することになる (Codexレビュー指摘)
-  if (!task) {
-    if (!getTask(id)) return res.status(404).json({ error: "not found" });
+  if (!card) {
+    if (!getCard(id)) return res.status(404).json({ error: "not found" });
     return res.status(409).json({ error: "ゴミ箱に無いので戻せません (すでにボード上にあります)" });
   }
   broadcastBoard();
-  res.json(task);
+  res.json(card);
 });
 
 // 実体の削除。人間のUI操作からのみ通す (チャット・MCPにはこの口を出さない)
@@ -413,12 +413,12 @@ app.delete("/api/trash/:id", (req, res) => {
   const id = Number(req.params.id);
   // 生きているカードを名指しされたら、消さずに理由を返す。
   // 「ゴミ箱に無い」と「そもそも存在しない」を区別する — 前者は操作ミス、後者は古い一覧
-  const alive = getTask(id);
+  const alive = getCard(id);
   if (alive && !alive.trashedAt)
     return res.status(409).json({
       error: "ゴミ箱にないカードは完全削除できません。先に削除 (ゴミ箱へ移動) してください",
     });
-  if (!purgeTask(id)) return res.status(404).json({ error: "not found" });
+  if (!purgeCard(id)) return res.status(404).json({ error: "not found" });
   // 消えたことを開いている画面へ伝える。以前は通知しておらず、DBから消えた後も
   // 次の更新までカードが残り、触って初めて404になった
   broadcastBoard();
@@ -494,11 +494,11 @@ app.post("/api/cards/:id/chat", async (req, res) => {
   // 黙って捨てない — 送ったのに読まれていない、が一番たちが悪い (#123 と同じ線)
   if (attachments?.length && !canAcceptAttachments())
     return res.status(400).json({ error: attachmentRefusal() });
-  // 対象が居ないなら、LLMを呼ぶ前に断る。以前は存在確認が無く、taskFocus が undefined のまま
+  // 対象が居ないなら、LLMを呼ぶ前に断る。以前は存在確認が無く、cardFocus が undefined のまま
   // 通常チャットに近い状態で有料の呼び出しが走り、存在しないIDの会話ログまで残っていた
   // (chat_messages.card_id に外部キーは無い。自動レビュー指摘)。
   // 削除・プロジェクト切替・古い画面から送ると踏むので、普通に起きる
-  if (!getTask(cardId)) return res.status(404).json({ error: `カード #${req.params.id} は見つかりません` });
+  if (!getCard(cardId)) return res.status(404).json({ error: `カード #${req.params.id} は見つかりません` });
   const id = ++chatSeq;
   const t0 = Date.now();
   log("chat", `#${id} CARD-CHAT(card=${cardId}) REQ "${String(message).slice(0, 120)}"`);

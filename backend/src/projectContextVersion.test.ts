@@ -66,3 +66,27 @@ test("断られた側は、返された版を添えれば書ける", () => {
   assert.equal(retry.ok, true);
   assert.equal(getProjectContextRow().text, "マージして再実行");
 });
+
+// **本文が来ていない書き込みも断る。**version の穴を塞いだ直後に見つかった同じ形 —
+// チャット側が `args.text ?? ""` と補っていたので、**欠落と null が「意図的な全消去」に化けた**。
+// 正しい版さえ添えれば前提情報が空になる (Codexレビュー4周目の指摘)。
+//
+// **受け側で塞ぐ。**呼び出し元で補わない約束にしても、入口が増えたら同じことが起きる
+test("本文が来ていなければ書けない (欠落・null が全消去に化けない)", () => {
+  const cur = getProjectContextRow();
+  for (const bad of [undefined, null]) {
+    const r = setProjectContext(bad as unknown as string, cur.version);
+    assert.equal(r.ok, false, `text=${String(bad)} が通っている`);
+    assert.equal(r.missingText, true, "本文が無いことを呼び出し側に伝える (版の競合と区別する)");
+    assert.equal(getProjectContextRow().text, cur.text, "前提情報が空にされた");
+  }
+});
+
+// **空文字そのものは禁じない。**全部消す操作と区別が付かなくなるため。
+// 「うっかり消える」を止めたいのであって、「消せない」ようにしたいのではない
+test("空文字を明示したときは、正しい版なら書ける (全消去は正当な操作)", () => {
+  const cur = getProjectContextRow();
+  const r = setProjectContext("", cur.version);
+  assert.equal(r.ok, true);
+  assert.equal(getProjectContextRow().text, "");
+});

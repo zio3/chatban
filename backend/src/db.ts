@@ -421,12 +421,20 @@ export function getProjectContextRow(): { text: string; updatedAt: string | null
  * スキーマを無視した値が届きえる (この文書自身が §1 で説明しているとおり。自動レビュー指摘)。
  *
  * 引数は省略可にしない (`?` を付けない)。**既定値を持たせると、渡し忘れが黙って通る形に戻る** */
-export function setProjectContext(rawText: string, version: number | undefined): { ok: boolean; current?: ReturnType<typeof getProjectContextRow> } {
+export function setProjectContext(
+  rawText: string,
+  version: number | undefined
+): { ok: boolean; missingText?: boolean; current?: ReturnType<typeof getProjectContextRow> } {
   // 実際にここが壊れた: project 9 の前提情報が全文 \uXXXX エスケープで保存されていて、
   // 296字が1,346字(トークンで3.2倍)に膨らみ、しかもLLMの読み取り精度も落ちていた。
   // 前提情報はシステムプロンプトに常時載るので、発言のたびに払い続けることになる
-  const text = decodeUnicodeEscapes(rawText);
   const cur = getProjectContextRow();
+  // **本文が来ていない書き込みは断る (#244)。**呼び出し元で `args.text ?? ""` のように
+  // 補ってしまうと、**欠落や null が「意図的な全消去」に化ける** — 正しい版さえ添えれば
+  // 前提情報が空になる。空文字そのものは禁じない (全部消す操作と区別が付かなくなる)。
+  // 型は string だが、チャットの引数はLLMが組み立てるJSONなのでここまで何でも届く
+  if (typeof rawText !== "string") return { ok: false, missingText: true, current: cur };
+  const text = decodeUnicodeEscapes(rawText);
   if (version === undefined || version !== cur.version) return { ok: false, current: cur };
   db().prepare(
     "INSERT INTO project_context (id, text, updated_at, version) VALUES (1, ?, datetime('now', 'localtime'), ?) ON CONFLICT(id) DO UPDATE SET text = excluded.text, updated_at = excluded.updated_at, version = excluded.version"

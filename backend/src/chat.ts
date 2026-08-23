@@ -468,7 +468,8 @@ async function execTool(name: string, args: any, events: Set<string>): Promise<u
       }
     }
     case "update_project_context": {
-      const r = setProjectContext(args.text ?? "", args.version);
+      // **`args.text ?? ""` にしない。**欠落や null を空文字に補うと、全消去に化ける (#244)
+      const r = setProjectContext(args.text, args.version);
       // 📋前提の画面は編集UIを持たず変更経路がチャットだけ (#73) なので、
       // ここで伝えないと**開いたまま古い本文を読み続ける** (レビュー指摘 2026-08-21)
       if (r.ok) events.add("context");
@@ -476,7 +477,9 @@ async function execTool(name: string, args: any, events: Set<string>): Promise<u
         return {
           ok: false,
           conflict: r.current,
-          note: "前提情報が他から更新されています。返した text に自分の変更をマージし、この version を添えて再実行してください",
+          note: r.missingText
+            ? "text (前提情報の全文) が届いていません。返した text に自分の変更をマージし、全文と version を添えて再実行してください。全部消したいときだけ空文字を明示してください"
+            : "前提情報が他から更新されています。返した text に自分の変更をマージし、この version を添えて再実行してください",
         };
       return { ok: true };
     }

@@ -104,7 +104,7 @@ export default function CardDetailPanel({
 
   return (
     <aside
-      data-testid="task-detail-panel"
+      data-testid="card-detail-panel"
       style={isWide ? { width } : undefined}
       className={
         isWide

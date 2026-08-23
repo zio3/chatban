@@ -212,11 +212,11 @@ export default function App() {
   // 詳細パネルの「ボードで表示」: パネルは開いたまま、スクロール→フラッシュ (Slackスレッド風の常駐)
   const jumpToBoard = useCallback((id: number) => {
     setTimeout(() => {
-      const el = document.querySelector(`[data-testid="task-card-${id}"]`);
+      const el = document.querySelector(`[data-testid="card-tile-${id}"]`);
       if (!el) return;
       el.scrollIntoView({ behavior: "smooth", block: "center" });
-      el.classList.add("task-flash");
-      setTimeout(() => el.classList.remove("task-flash"), 1700);
+      el.classList.add("card-flash");
+      setTimeout(() => el.classList.remove("card-flash"), 1700);
     }, 60);
   }, []);
 

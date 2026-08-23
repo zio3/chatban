@@ -27,9 +27,9 @@ export interface Suggestion {
   message: string;
 }
 
-/** #NN メンションをMarkdownリンクに変換 (リンク先は #task-NN、レンダラ側でクリックを拾う) */
+/** #NN メンションをMarkdownリンクに変換 (リンク先は #card-NN、レンダラ側でクリックを拾う) */
 function linkifyMentions(text: string): string {
-  return text.replace(/#(\d+)/g, "[#$1](#task-$1)");
+  return text.replace(/#(\d+)/g, "[#$1](#card-$1)");
 }
 
 /** ユーザー発話(プレーンテキスト)用: #NN をクリック可能なspanに分解 */
@@ -213,7 +213,7 @@ export default function Chat({
                               // **linkifyMentions が出すアンカーと対でしか意味がない。**
                               // 片方だけ改名すると #NN のクリックが黙って効かなくなる (#232 第3弾で踏んだ)。
                               // 正規表現リテラルの中なので、文字列リテラルの照合では拾えない
-                              const m = href?.match(/^#task-(\d+)$/);
+                              const m = href?.match(/^#card-(\d+)$/);
                               if (m) {
                                 return (
                                   <button

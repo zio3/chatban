@@ -132,3 +132,30 @@ test("3種の文言をどれも拾えている (集める側が壊れたら気�
   expect(says("畳んだ完了"), "JSX直書きの文言が拾えていない").toBe(true);
   expect(says("移動に失敗しました"), "テンプレート文言 (エラー表示) が拾えていない").toBe(true);
 });
+
+// #232: **`classList.add` で付けるクラスと、CSS の定義は対でしか意味がない。**
+//
+// 片方だけ改名すると、**アニメーションが黙って効かなくなる** — 例外も出ず、
+// E2E も通る (見た目の変化は誰も見ていない)。今日この形で3回踏んでいる:
+// `#task-NN` の生成側とレンダラ (PR #93)、移行の入口とスクリプト (PR #96)、
+// 番人と健全性テスト (PR #98)。**対になるものは、対であることをテストに書く。**
+test("classList.add で付けるクラスは CSS に定義がある", () => {
+  const css = readFileSync(join(SRC, "index.css"), "utf-8");
+  const used: { file: string; cls: string }[] = [];
+
+  for (const file of sourceFiles(SRC)) {
+    const src = readFileSync(file, "utf-8");
+    for (const m of src.matchAll(/classList\.(?:add|remove|toggle)\(\s*"([^"]+)"/g)) {
+      used.push({ file: file.slice(SRC.length + 1), cls: m[1] });
+    }
+  }
+
+  expect(used.length, "classList を使っている箇所が1つも見つからない").toBeGreaterThan(0);
+
+  // **前方一致では見逃す。**`.card-flash` を探すと `.card-flash-active` に当たってしまい、
+  // CSS側だけ改名した状態を通す (レビュー指摘 P3)。クラス名の直後がCSS識別子の文字で
+  // ないことまで見る = ちょうどそのセレクタが在ることを確かめる
+  const defined = (cls: string) => new RegExp(`\\.${cls}(?![-_a-zA-Z0-9])`).test(css);
+  const missing = used.filter(({ cls }) => !defined(cls));
+  expect(missing, missing.map(({ file, cls }) => `${file}: .${cls} が index.css に無い`).join("\n")).toHaveLength(0);
+});

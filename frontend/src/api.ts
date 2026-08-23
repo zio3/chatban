@@ -34,7 +34,7 @@ export interface Project {
   active: boolean;
   /** #107: 無効。ドロップダウンには出さないが設定画面には出る */
   archived: boolean;
-  openTasks: number;
+  openCards: number;
   /** #117: このプロジェクト用のMCP接続先 */
   mcpUrl: string;
   /** #19: 有効な任意レーン (0〜2本)。**空配列がふつう** */

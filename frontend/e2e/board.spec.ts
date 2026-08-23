@@ -1149,7 +1149,7 @@ test("知らないページからのSocket接続はハンドシェイクで断�
 test("ゴミ箱のタスクはプロジェクトの未完了件数に数えない", async () => {
   // ボードから消えているのに件数が減らないと、どれが残っているのか分からなくなる
   const before = await (await fetch(`${API}/api/projects`)).json();
-  const beforeCount = before.projects.find((p: any) => p.id === 1).openTasks as number;
+  const beforeCount = before.projects.find((p: any) => p.id === 1).openCards as number;
 
   const res = await fetch(`${API}/api/cards`, {
     method: "POST",
@@ -1162,7 +1162,7 @@ test("ゴミ箱のタスクはプロジェクトの未完了件数に数えな�
     const projects = await (await fetch(`${API}/api/projects`)).json();
     const board = await (await fetch(`${API}/api/board`)).json();
     return {
-      project: projects.projects.find((p: any) => p.id === 1).openTasks as number,
+      project: projects.projects.find((p: any) => p.id === 1).openCards as number,
       onBoard: board.cards.some((t: any) => t.id === id),
     };
   };

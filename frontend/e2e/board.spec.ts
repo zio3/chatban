@@ -2189,3 +2189,36 @@ test("AI応答の #NN をクリックすると、そのカードの詳細が開�
   await expect(page.getByTestId("card-detail-panel")).toBeVisible();
   await expect(page.getByTestId("card-detail-panel")).toContainText("メンションから開くカード");
 });
+
+// #242: **チャットの2つの入口は、中身を1つの関数に寄せた。**
+// 差分は cardId の有無だけなのに、以前は「入口ごとにズレると事故る」と書いた #213 の
+// 注意書きごと逐語で2箇所にあり、**実際ズレていた** (カード側だけ切断ログが無かった)。
+//
+// **ここで固定するのは、寄せたことで変わった/変わらなかった断り方。**
+// どれもLLMに届く前に返るので、E2E (LLM呼び出しなし) から確かめられる。
+test.describe("チャットの入口 (#242 で1つの関数に寄せた)", () => {
+  const post = (path: string, body: unknown) =>
+    fetch(`${API}${path}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+
+  test("本文が無ければ両方の入口が断る", async () => {
+    const id = await createCard("本文なしで投げる先");
+    expect((await post("/api/chat", {})).status).toBe(400);
+    expect((await post(`/api/cards/${id}/chat`, {})).status).toBe(400);
+  });
+
+  // **存在確認をルート側へ出したので、ここだけ挙動が変わった。**
+  // 以前は本文の検証が先だったので、居ないカードへ本文なしで投げると 400 だった。
+  // **居ないカードに「本文を書け」と返すのは案内として嘘**なので、404 を先に返す方を採った
+  test("居ないカードへは、本文の有無によらず404で断る", async () => {
+    const withBody = await post("/api/cards/999999/chat", { message: "やあ" });
+    expect(withBody.status).toBe(404);
+    expect((await withBody.json()).error).toContain("#999999");
+
+    // 以前は 400 "message required" が返っていた側
+    expect((await post("/api/cards/999999/chat", {})).status).toBe(404);
+  });
+});

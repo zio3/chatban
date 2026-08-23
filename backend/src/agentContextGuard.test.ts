@@ -28,8 +28,8 @@ process.env.AUTO_ARCHIVE = "0";
 const { ensureInitialProject } = await import("./store.js");
 ensureInitialProject();
 
-const { createCard, getCard } = await import("./db.js");
-const { updateCardsAsAgent } = await import("./agentWrite.js");
+const { createCard, getCard, trashCard } = await import("./db.js");
+const { createCardsAsAgent, restoreCardsAsAgent, updateCardsAsAgent } = await import("./agentWrite.js");
 
 /** 経緯メモを持つカードを1枚用意する */
 function cardWithContext(text: string): number {
@@ -185,4 +185,93 @@ test("summary は空文字なら消せる", () => {
   const r = updateCardsAsAgent([{ id, summary: "" }]);
   assert.equal(r.ok, true);
   assert.equal(getCard(id)!.summary, "");
+});
+
+// **#245 (2周目): 更新の非IDフィールドだけでは足りなかった。**
+// id・配列そのもの・作成・復元にも同じ穴が残っていた (Codexが実測で再現)。
+
+test("id が整数でなければ、カードを引く前に断る (例外を飛ばさない)", () => {
+  // `getCard()` を先に呼ぶと `Too few parameter values were provided` が未処理で飛ぶ
+  const r = updateCardsAsAgent([{ id: {} as any, title: "x" }]);
+  assert.equal(r.ok, false);
+  assert.match(r.invalid![0].reason, /id/);
+});
+
+test("updates が配列でなければ、1件も触らずに断る", () => {
+  for (const bad of [undefined, null, { id: 1 }, "1"]) {
+    const r = updateCardsAsAgent(bad as any);
+    assert.equal(r.ok, false, `${JSON.stringify(bad)} が通っている`);
+    assert.equal(r.status, "failed");
+    assert.match(r.note ?? "", /配列/);
+  }
+});
+
+// **「何もしていないのに成功」を作らない。**チャット側の `?? []` を外した分をここで固定する
+test("updates の欠落を空配列に補って成功と返さない", () => {
+  const r = updateCardsAsAgent(undefined as any);
+  assert.equal(r.ok, false, "何もしていないのに成功になっている");
+});
+
+// **未知の列は、黙って捨てずに理由を返す。**`status:null` と同じ偽成功が文字列値で残っていた
+test('status に "pending" (未知の列) を渡すと、成功と返さず理由を返す', () => {
+  const id = cardWithContext("経緯");
+  const before = getCard(id)!;
+  const r = updateCardsAsAgent([{ id, status: "pending" }]);
+  assert.equal(r.ok, false, "無視したのに成功と返している");
+  assert.equal(getCard(id)!.status, before.status);
+  assert.match(r.invalid![0].reason, /status/);
+});
+
+// done は矯正の対象 (#114)。塞ぎすぎて既存の道を壊していないこと
+test('status:"done" はこれまでどおり review に倒れる (塞ぎすぎていない)', () => {
+  const id = cardWithContext("経緯");
+  const r = updateCardsAsAgent([{ id, status: "done" }]);
+  assert.equal(r.ok, true, r.note ?? "");
+  assert.equal(getCard(id)!.status, "review");
+});
+
+// **件数の1行が嘘をつかないこと。**「配列を数えさせない」ための行なので、ここが狂うと再送が漏れる
+test("未適用が3種混ざっても、適用件数の1行が実際と合う", () => {
+  const okId = cardWithContext("通る行");
+  const conflictId = cardWithContext("版が合わない行");
+
+  const r = updateCardsAsAgent([
+    { id: okId, summary: "通る" },
+    { id: conflictId, context: "書き換える", context_version: 999 },
+    { id: 999999, summary: "存在しない" },
+    { id: cardWithContext("型が違う行"), summary: null as any },
+  ]);
+
+  assert.equal(r.updated.filter(Boolean).length, 1, "適用されたのは1件のはず");
+  assert.match(r.note ?? "", /4件のうち1件を適用しました/, `件数が合っていない: ${r.note}`);
+});
+
+test("作成は、1件も書く前に全行を検査する (途中で例外にして無応答にしない)", () => {
+  const r = createCardsAsAgent([{ title: "CREATED FIRST" }, { title: null as any }]);
+  assert.equal(r.created.length, 1, "通る行が作られていない");
+  assert.equal(r.invalid![0].at, 1, "何番目が駄目だったかを返していない");
+  assert.match(r.note ?? "", /2件のうち1件/);
+});
+
+// **これが一番危ない。**型違いが「失敗」ではなく「別カードへの操作」になる
+test('復元に文字列 "12" を渡しても、#1 と #2 を戻さない', () => {
+  const r = restoreCardsAsAgent("12" as any);
+  assert.equal(r.ok, false, "文字列を配列として扱っている");
+  assert.equal(r.restored.length, 0, "別のカードを復元した");
+  assert.match(r.note ?? "", /配列/);
+});
+
+// **「1件も戻さない」を、実際に戻せるカードで確かめる。**
+// ゴミ箱が空のまま試すと、ガードが無くても「0件」になって通ってしまう (最初こう書いていた)
+test("復元のIDに整数でないものが混ざっていたら、戻せるものも戻さない", () => {
+  const id = createCard("ゴミ箱にあるカード").id;
+  trashCard(id);
+
+  const r = restoreCardsAsAgent([id, "2"] as any);
+
+  assert.equal(r.ok, false);
+  assert.equal(r.restored.length, 0, "混ざっていたのに一部を処理している");
+  assert.match(r.note ?? "", /整数/);
+  // 戻っていないこと自体をDBで見る (応答だけ見ても、実際に触ったかは分からない)
+  assert.equal(restoreCardsAsAgent([id]).restored.length, 1, "まだゴミ箱に在るはず");
 });

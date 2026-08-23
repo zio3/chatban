@@ -2,6 +2,7 @@ import type OpenAI from "openai";
 import {
   CONTEXT_APPEND_DESCRIPTION,
   createCardsAsAgent,
+  idListArgError,
   RESTORE_DESCRIPTION,
   restoreCardsAsAgent,
   updateCardsAsAgent,
@@ -409,12 +410,13 @@ async function execTool(name: string, args: any, events: Set<string>): Promise<u
   switch (name) {
     case "create_cards": {
       // #114: 書き込みは agentWrite に集約 (チャットとMCPで同じガードを通す)
-      const r = createCardsAsAgent(args.cards ?? []);
+      // #245: **`?? []` にしない。**欠落を空配列に補うと「何もしていないのに成功」になる
+      const r = createCardsAsAgent(args.cards);
       events.add("board");
       return { ok: true, ...r };
     }
     case "update_cards": {
-      const { ok, status, updated, note, conflicts, notFound, badDue, invalid } = updateCardsAsAgent(args.updates ?? []);
+      const { ok, status, updated, note, conflicts, notFound, badDue, invalid } = updateCardsAsAgent(args.updates);
       events.add("board");
       // #112: 版が合わなかった経緯メモは適用していない。現在の全文を返すのでマージして再実行する
       // #153: badDue も返す。**列挙して返しているので、足し忘れると入口ごとにズレる** —
@@ -433,6 +435,10 @@ async function execTool(name: string, args: any, events: Set<string>): Promise<u
     }
     case "delete_cards": {
       // #102: 実データは消さずゴミ箱へ。誤解釈で消えても取り返しがつくようにする
+      // #245: 削除は agentWrite を通らないので、ここで型を見る (MCP側は Zod が弾く)。
+      // 文字列を配列として扱うと `"12"` が `"1"`,`"2"` に割れ、**別のカードを実際に消す**
+      const idsError = idListArgError("ids", args.ids);
+      if (idsError) return { ok: false, note: idsError };
       const results = (args.ids as number[]).map((id) => ({ id, trashed: trashCard(id) }));
       // 復元できることは毎回文章で説明しない (くどい)。#xx リンクから詳細パネルを開けば「戻す」がある
       events.add("board");
@@ -446,12 +452,14 @@ async function execTool(name: string, args: any, events: Set<string>): Promise<u
       // #161: 判定と報告は agentWrite に集約。以前はここだけ **常に ok:true** で、
       // MCPは「1件でも戻せなければ ok:false」だった — ok だけを見るエージェントは
       // 入口によって失敗を見落とす (Codexレビュー指摘)
-      const r = restoreCardsAsAgent(args.ids as number[]);
+      const r = restoreCardsAsAgent(args.ids as number[]); // 型は restoreCardsAsAgent が見る (#245)
       events.add("board");
       return r;
     }
     case "reorder_cards": {
-      const r = reorderCards(args.ids ?? [], args.status);
+      const reorderError = idListArgError("ids", args.ids);
+      if (reorderError) return { ok: false, note: reorderError };
+      const r = reorderCards(args.ids, args.status);
       events.add("board");
       return reorderResult(r);
     }

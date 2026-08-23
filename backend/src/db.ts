@@ -182,7 +182,7 @@ export function mayEnterDone(cur: Pick<Card, "status" | "checkedAt" | "trashedAt
   return cur.status === "review" && !!cur.checkedAt && !cur.trashedAt;
 }
 
-/** 複数カードの一括更新 (#60)。完了遷移はまとめて1回だけ通知する (要約再生成のバッチ化)。
+/** 複数カードの一括更新 (#60)。完了遷移はまとめて1回だけ通知する (Done列の畳み直しを1回に)。
  * 単一更新もこの関数の長さ1ケースとして扱う — Doneへ入るルートはここ1本 */
 export function updateCards(patches: { id: number; patch: CardPatch }[]): (Card | undefined)[] {
   const completed: number[] = [];

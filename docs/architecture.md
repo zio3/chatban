@@ -8,14 +8,14 @@
 ```
 ┌─ ブラウザ (React SPA) ─────────────────────────────────────┐
 │  /p/<projectId> が表示中のプロジェクトを持つ (#97)          │
-│  Board(かんばん4列) / Chat(常設) / TaskDetailPanel(カードチャット) │
+│  Board(かんばん4列) / Chat(常設) / CardDetailPanel(カードチャット) │
 │  📋前提 / 🗑ゴミ箱 / ⚙設定                                   │
 └──────┬────────────────────────────┬────────────────────────┘
        │ /api (REST)                │ /socket.io
        │ X-ChatBan-Project ヘッダ    │ ?project=<id> でroom参加
 ┌──────▼────────────────────────────▼────────────────────────┐
 │  backend: Express + Socket.IO (port 8787)                   │
-│  ├ chat.ts      LLM tool useループ (14ツール)                │
+│  ├ chat.ts      LLM tool useループ (下記「チャットのツール」)  │
 │  ├ promptState  イベントログ型プロンプト+TTL再ベースライン     │
 │  ├ archive.ts   Done列の畳み直し (バラバラ→箱→24hで降ろす)   │
 │  ├ store.ts     プロジェクト=SQLiteファイル / 処理単位スコープ │

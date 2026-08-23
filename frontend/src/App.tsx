@@ -113,7 +113,6 @@ export default function App() {
       setLlmRefused(!!p.llmRefused);
       setCanAttach(p.attachments !== false);
     };
-    // Done要約カードの非同期再生成中インジケータ (#56)
     // プロジェクトが切り替わったら全部読み直す (他のタブ/端末での切り替えにも追従する)
     const onProject = (p: { projects: Project[] }) => {
       setProjects(p.projects);

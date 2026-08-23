@@ -277,7 +277,7 @@ export default function App() {
     () => new Set(cards.filter((t) => t.checkedAt).map((t) => t.id)),
     [cards]
   );
-  // 他の更新と同じく楽観更新 (moveTaskと同じ形): 先に画面へ反映し、失敗したら戻す
+  // 他の更新と同じく楽観更新 (moveCardと同じ形): 先に画面へ反映し、失敗したら戻す
   const toggleApproved = useCallback((id: number) => {
     setCards((prev) => {
       const snapshot = prev;
@@ -371,7 +371,7 @@ export default function App() {
   // 後から増えたカードが埋もれるため (#41/#90 で気にしていた「隠れたものが無いことになる」)
   const visibleCards = [...cards].sort((a, b) => a.sort - b.sort || a.id - b.id);
 
-  // パネルで開いているカードが完了→アーカイブでtasksから消えても、パネルは最後のスナップショットで
+  // パネルで開いているカードが完了→アーカイブでcardsから消えても、パネルは最後のスナップショットで
   // 開き続ける (#53: AIの「完了にしました」返答が見えないまま消えるのを防ぐ)。閉じるのは✕のみ
   const foundDetailCard = detailCardId !== null ? cards.find((t) => t.id === detailCardId) : undefined;
   const lastDetailCardRef = useRef<Card | undefined>(undefined);

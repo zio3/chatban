@@ -210,7 +210,10 @@ export default function Chat({
                           remarkPlugins={[remarkGfm]}
                           components={{
                             a: ({ href, children }) => {
-                              const m = href?.match(/^#card-(\d+)$/);
+                              // **linkifyMentions が出すアンカーと対でしか意味がない。**
+                              // 片方だけ改名すると #NN のクリックが黙って効かなくなる (#232 第3弾で踏んだ)。
+                              // 正規表現リテラルの中なので、文字列リテラルの照合では拾えない
+                              const m = href?.match(/^#task-(\d+)$/);
                               if (m) {
                                 return (
                                   <button

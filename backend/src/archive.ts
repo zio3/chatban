@@ -28,9 +28,16 @@ export type FoldedCard = { id: number; title: string; foldedAt: number };
 // プロジェクトごとに1個。**増えない**ので、上限も掃除の引き金も要らない
 const containers = new Map<number, FoldedCard[]>();
 
-/** 期限内のものだけ。**純粋関数**にしてあるのが要点 (下の foldedContainer を見る) */
-function fresh(items: FoldedCard[] | undefined): FoldedCard[] {
-  const limit = Date.now() - CONTAINER_HOURS * 3600_000;
+/** 期限内のものだけ。**純粋関数**にしてあるのが要点 (下の foldedContainer を見る)。
+ *
+ * #236: 「純粋関数」と書いてありながら、中で `Date.now()` を読んでいた。
+ * **いまの時刻は呼び出し側が渡す。**既定値は持たせない — 持たせると渡し忘れたときに
+ * 同じ隠れた依存が黙って復活する (#94 で `suggestSkipReason` の猶予を引数にしたのと同じ形)。
+ *
+ * 時計を外に出すと、24時間の境目を**その日いつ走らせても同じ結果**で確かめられる。
+ * それまでは「畳んだ時刻を25時間前にする (時計を進める代わり)」と書いて回り込んでいた。 */
+export function fresh(items: FoldedCard[] | undefined, now: number): FoldedCard[] {
+  const limit = now - CONTAINER_HOURS * 3600_000;
   return (items ?? []).filter((t) => t.foldedAt > limit);
 }
 
@@ -42,7 +49,8 @@ function fresh(items: FoldedCard[] | undefined): FoldedCard[] {
  * 板を眺めているだけで中身が消える (自動レビュー指摘)。
  * 実際に捨てるのは次に畳むときで、それまで残っていても読み手には見えない */
 export function foldedContainer(projectId: number): FoldedCard[] | undefined {
-  const kept = fresh(containers.get(projectId));
+  // 時計を読むのはここ (外に出せない端っこ)。判定そのものは fresh に閉じている
+  const kept = fresh(containers.get(projectId), Date.now());
   return kept.length === 0 ? undefined : kept;
 }
 
@@ -59,7 +67,10 @@ export function foldDoneColumn(projectId: number, justApproved: number[]): void 
 
   // 期限切れを捨てるのはここ (書くのはこの経路だけ、という不変条件を保つため)
   const now = Date.now();
-  containers.set(projectId, [...fresh(containers.get(projectId)), ...folded.map((t) => ({ ...t, foldedAt: now }))]);
+  containers.set(
+    projectId,
+    [...fresh(containers.get(projectId), now), ...folded.map((t) => ({ ...t, foldedAt: now }))]
+  );
   log("archive", `#${folded.map((t) => t.id).join(", #")} を畳みました`);
 }
 

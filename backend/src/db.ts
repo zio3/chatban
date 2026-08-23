@@ -451,7 +451,7 @@ export function saveChatMessage(
     );
 }
 
-/** taskId未指定=メインチャット(card_id IS NULL)、指定=そのカード専用の会話 */
+/** cardId未指定=メインチャット(card_id IS NULL)、指定=そのカード専用の会話 */
 export function listChatMessages(limit = 50, cardId?: number): {
   role: "user" | "assistant";
   content: string;

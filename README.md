@@ -95,7 +95,8 @@ MCPで繋いだとき、ChatBanは**エージェントの外部記憶**として
 | 外部連携 | MCPサーバー内蔵 (Claude Code等からボードを直接操作可能) |
 | テスト | Playwright E2E + backendのユニットテスト (`node:test`) |
 
-アーキテクチャの全体像は [docs/architecture.md](docs/architecture.md)、コンセプトと現在地は [docs/product-overview.md](docs/product-overview.md)。
+アーキテクチャの全体像は [docs/architecture.md](docs/architecture.md)。
+提出時点 (2026-08-17) のコンセプト説明は [docs/product-overview.md](docs/product-overview.md) に記録として残してあります (現行仕様ではありません)。
 AIに何をさせないか (権限境界) と、割り切った部分は [docs/security.md](docs/security.md)。
 
 ## 起動方法

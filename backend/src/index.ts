@@ -2,6 +2,7 @@ import http from "node:http";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import cors from "cors";
 import express from "express";
+import type { Request, Response } from "express";
 import { Server } from "socket.io";
 import { foldDoneColumn, foldedContainer, onCardReopened } from "./archive.js";
 import { generateSuggestions, runChatTurn } from "./chat.js";
@@ -431,7 +432,16 @@ app.delete("/api/trash/:id", (req, res) => {
 let chatSeq = 0;
 
 
-app.post("/api/chat", async (req, res) => {
+/** チャット1往復。**メインとカード専用で入口は2つだが、中身は1つ。**
+ *
+ * 以前は2つのルートにまるごと同じ処理が並んでいた (検証・呼び出し・進捗・保存・
+ * 変化通知・ログ・エラー応答)。差分は `cardId` の有無だけなのに、
+ * **「入口ごとにズレると事故る」と書いた #213 の注意書き自体が逐語で2箇所にあった** (#242)。
+ * 実際ズレていて、**カード側にはクライアント切断のログが無かった。**
+ *
+ * `cardId` が付くと、ログの印・進捗の宛先・会話の保存先が変わる。それだけ。
+ * **対象が居るかの確認はルート側に残す** — メイン側には確認する対象が無いため */
+async function handleChat(req: Request, res: Response, cardId?: number) {
   const { message, history, attachments, view } = req.body ?? {};
   if (!message) return res.status(400).json({ error: "message required" });
   // #213: **入口ごとにズレると事故る。**画面の「+」を隠しても curl では通るので、ここで断る。
@@ -440,13 +450,14 @@ app.post("/api/chat", async (req, res) => {
     return res.status(400).json({ error: attachmentRefusal() });
   const id = ++chatSeq;
   const t0 = Date.now();
+  const where = cardId != null ? ` CARD-CHAT(card=${cardId})` : "";
   log(
     "chat",
-    `#${id} REQ "${String(message).slice(0, 120)}" (history=${history?.length ?? 0}${attachments?.length ? ` attachments=${attachments.length}` : ""})`
+    `#${id}${where} REQ "${String(message).slice(0, 120)}" (history=${history?.length ?? 0}${attachments?.length ? ` attachments=${attachments.length}` : ""})`
   );
   // クライアント切断もログに残す (再起動巻き添え・ブラウザ側中断の追跡用)
   res.on("close", () => {
-    if (!res.writableEnded) log("chat", `#${id} CLIENT DISCONNECTED after ${Date.now() - t0}ms`);
+    if (!res.writableEnded) log("chat", `#${id}${where} CLIENT DISCONNECTED after ${Date.now() - t0}ms`);
   });
   // #212: 断られた/直った の**変化があったときだけ**板に流す。
   // 直った側を流さないと、成功しても板が変わらない応答 (ツールを呼ばない会話) では
@@ -457,30 +468,38 @@ app.post("/api/chat", async (req, res) => {
       message,
       history ?? [],
       (kind) => notifyView(kind),
-      (label) => io.to(room(currentProjectId())).emit("chat:progress", { label }), // 応答完了前の逐次フィードバック
-      undefined,
+      // 応答完了前の逐次フィードバック。カード専用チャットはそのカードの面だけに出す
+      (label) => io.to(room(currentProjectId())).emit("chat:progress", { label, ...(cardId != null ? { cardId } : {}) }),
+      cardId,
       attachments,
       view
     );
     // 会話ログはサーバーに永続化する (添付は原本を保存せず名前だけ記録 #68)
     saveChatMessage(
       "user",
-      message + (attachments?.length ? ` [添付: ${attachments.map((a: any) => a.name).join(", ")}]` : "")
+      message + (attachments?.length ? ` [添付: ${attachments.map((a: any) => a.name).join(", ")}]` : ""),
+      undefined,
+      undefined,
+      cardId
     );
-    saveChatMessage("assistant", result.reply, result.trace, result.usage);
+    saveChatMessage("assistant", result.reply, result.trace, result.usage, cardId);
     log(
       "chat",
-      `#${id} OK ${Date.now() - t0}ms rounds=${result.usage.rounds} tools=[${result.trace.map((t) => t.tool).join(",")}] reply=${result.reply.length}ch`
+      `#${id}${where} OK ${Date.now() - t0}ms rounds=${result.usage.rounds} tools=[${result.trace.map((t) => t.tool).join(",")}] reply=${result.reply.length}ch`
     );
     if (wasRefused !== upstreamRefused()) broadcastBoard();
     res.json(result);
   } catch (e: any) {
-    log("chat", `#${id} FAILED ${Date.now() - t0}ms: ${e?.message ?? e}`);
+    log("chat", `#${id}${where} FAILED ${Date.now() - t0}ms: ${e?.message ?? e}`);
     // #212: 上流に断られたことを板にも流す。**失敗そのものは板を変えない**ので、
     // ここで流さないと画面は次のリロードまで気づけない (E2Eで実際に踏んだ)
     if (wasRefused !== upstreamRefused()) broadcastBoard();
     res.status(500).json({ error: e?.message ?? "chat failed" });
   }
+}
+
+app.post("/api/chat", async (req, res) => {
+  await handleChat(req, res);
 });
 
 app.get("/api/chat/log", (req, res) => {
@@ -491,52 +510,12 @@ app.get("/api/chat/log", (req, res) => {
 // カード専用チャット (#24): 対象カードの全詳細をシステムプロンプトに注入し、会話はcard_id付きで分離保存
 app.post("/api/cards/:id/chat", async (req, res) => {
   const cardId = Number(req.params.id);
-  const { message, history, attachments, view } = req.body ?? {};
-  if (!message) return res.status(400).json({ error: "message required" });
-  // #213: **入口ごとにズレると事故る。**画面の「+」を隠しても curl では通るので、ここで断る。
-  // 黙って捨てない — 送ったのに読まれていない、が一番たちが悪い (#123 と同じ線)
-  if (attachments?.length && !canAcceptAttachments())
-    return res.status(400).json({ error: attachmentRefusal() });
   // 対象が居ないなら、LLMを呼ぶ前に断る。以前は存在確認が無く、cardFocus が undefined のまま
   // 通常チャットに近い状態で有料の呼び出しが走り、存在しないIDの会話ログまで残っていた
   // (chat_messages.card_id に外部キーは無い。自動レビュー指摘)。
   // 削除・プロジェクト切替・古い画面から送ると踏むので、普通に起きる
   if (!getCard(cardId)) return res.status(404).json({ error: `カード #${req.params.id} は見つかりません` });
-  const id = ++chatSeq;
-  const t0 = Date.now();
-  log("chat", `#${id} CARD-CHAT(card=${cardId}) REQ "${String(message).slice(0, 120)}"`);
-  // #212: 断られた/直った の**変化があったときだけ**板に流す。
-  // 直った側を流さないと、成功しても板が変わらない応答 (ツールを呼ばない会話) では
-  // バナーが出たまま残る — 「通れば false が飛んでくる」が嘘になる
-  const wasRefused = upstreamRefused();
-  try {
-    const result = await runChatTurn(
-      message,
-      history ?? [],
-      (kind) => notifyView(kind),
-      (label) => io.to(room(currentProjectId())).emit("chat:progress", { label, cardId }),
-      cardId,
-      attachments,
-      view
-    );
-    saveChatMessage(
-      "user",
-      message + (attachments?.length ? ` [添付: ${attachments.map((a: any) => a.name).join(", ")}]` : ""),
-      undefined,
-      undefined,
-      cardId
-    );
-    saveChatMessage("assistant", result.reply, result.trace, result.usage, cardId);
-    log("chat", `#${id} OK ${Date.now() - t0}ms rounds=${result.usage.rounds} tools=[${result.trace.map((t) => t.tool).join(",")}]`);
-    if (wasRefused !== upstreamRefused()) broadcastBoard();
-    res.json(result);
-  } catch (e: any) {
-    log("chat", `#${id} FAILED ${Date.now() - t0}ms: ${e?.message ?? e}`);
-    // #212: 上流に断られたことを板にも流す。**失敗そのものは板を変えない**ので、
-    // ここで流さないと画面は次のリロードまで気づけない (E2Eで実際に踏んだ)
-    if (wasRefused !== upstreamRefused()) broadcastBoard();
-    res.status(500).json({ error: e?.message ?? "chat failed" });
-  }
+  await handleChat(req, res, cardId);
 });
 
 // #181: 計測系と監査ログのAPIを撤去した。ここにあったもの:

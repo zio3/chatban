@@ -151,6 +151,11 @@ test("classList.add で付けるクラスは CSS に定義がある", () => {
   }
 
   expect(used.length, "classList を使っている箇所が1つも見つからない").toBeGreaterThan(0);
-  const missing = used.filter(({ cls }) => !css.includes(`.${cls}`));
+
+  // **前方一致では見逃す。**`.card-flash` を探すと `.card-flash-active` に当たってしまい、
+  // CSS側だけ改名した状態を通す (レビュー指摘 P3)。クラス名の直後がCSS識別子の文字で
+  // ないことまで見る = ちょうどそのセレクタが在ることを確かめる
+  const defined = (cls: string) => new RegExp(`\\.${cls}(?![-_a-zA-Z0-9])`).test(css);
+  const missing = used.filter(({ cls }) => !defined(cls));
   expect(missing, missing.map(({ file, cls }) => `${file}: .${cls} が index.css に無い`).join("\n")).toHaveLength(0);
 });

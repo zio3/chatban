@@ -123,39 +123,34 @@ CREATE TABLE IF NOT EXISTS settings (
 // コスト分析のSQL窓口 (query_log の scope='cost') 専用だったので、計測系の撤去で用途を失った。
 // **プロジェクト側の readonly 接続 (projectReadonly) は残る** — 安全境界そのものは変わらない
 
-/** #215: `tasks` → `cards` の改名。**スキーマ生成より先に流すこと** —
- * 順序を逆にすると `CREATE TABLE IF NOT EXISTS cards` が空のテーブルを作ってしまい、
- * 既存データの入った `tasks` が取り残されて、板が空になったように見える。
+/** #232: **旧スキーマのDBを黙って受け入れない。**
  *
- * 名前を変えるだけで、列も行もIDも動かさない (`#112` は `#112` のまま)。
- * **外部キー制約が無い**ので RENAME が安全に効く — `chat_messages.card_id` は
- * REFERENCES を持たない裸の INTEGER で、こちらは列名だけ別に付け替える。
+ * `tasks` → `cards` の改名 (#215) は移行コードで吸収していたが、2026-08-23 に
+ * ローカルの全DB (稼働中10件 + ゴミ箱22件) を移行し切ったので、動く相手がいなくなった。
+ * VPSは使い捨ての1台なので数えない。
  *
- * 両方が在る状態は起こりえないが、もし在れば `cards` を正として何もしない
- * (人が手で作った `cards` を、古い `tasks` で上書きしないため) */
-function renameTasksToCards(db: Database.Database) {
+ * **撤去するだけだと、いちばん気付きにくい形で壊れる。**下の
+ * `CREATE TABLE IF NOT EXISTS cards` が空のテーブルを作り、データの入った `tasks` が
+ * 取り残されて、**板が空になったように見える**。エラーは出ない。
+ * だから「移行しない」ではなく「**移行が要るなら開かずに止める**」にする。
+ *
+ * 後方互換を持たない方針 (2026-08-17 合意) を、**捨てたことが分かる形**で実装したもの。 */
+function refuseLegacySchema(db: Database.Database) {
   const has = (name: string) =>
     !!db.prepare("SELECT name FROM sqlite_master WHERE type IN ('table','view') AND name = ?").get(name);
   if (has("tasks") && !has("cards")) {
-    // ビューは参照先の改名に追随しない (SQLiteはビュー本文を書き換えない)。
-    // 壊れたビューを残すと次の SELECT で初めて落ちるので、**先に落としてから**改名する。
-    // 新しい名前のビューは、このあとスキーマ生成側が作り直す
-    db.exec("DROP VIEW IF EXISTS live_tasks; DROP VIEW IF EXISTS done_tasks;");
-    db.exec("ALTER TABLE tasks RENAME TO cards");
-    log("schema", "tasks を cards へ改名しました (#215 語彙の統一)");
-  }
-  try {
-    db.exec("ALTER TABLE chat_messages RENAME COLUMN task_id TO card_id");
-    log("schema", "chat_messages.task_id を card_id へ改名しました (#215)");
-  } catch {
-    /* 改名済み、または chat_messages がまだ無い */
+    throw new Error(
+      "このDBは `tasks` 時代のスキーマです (#215 以前)。開く前に移行してください: " +
+        "backend で `node scripts/migrate-cards.mjs` (下見) → `--apply` (実行)。" +
+        "**そのまま開くと空の cards が作られ、板が空になったように見えます。**"
+    );
   }
 }
 
 /** プロジェクトDBのスキーマ。DBを開くたびに流すので、新規作成と既存の移行が同じ経路になる
  * (EF Migration不使用の流儀: CREATE IF NOT EXISTS + ALTER の失敗は適用済みとして無視) */
 export function ensureProjectSchema(db: Database.Database) {
-  renameTasksToCards(db);
+  refuseLegacySchema(db);
   db.exec(`
 CREATE TABLE IF NOT EXISTS cards (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -231,7 +226,7 @@ CREATE TABLE IF NOT EXISTS chat_messages (
     if (cols.includes("summary_card_id")) {
       // ビューが列を参照していると DROP COLUMN が拒否される (`error in view done_cards`)。
       // 下でどちらも作り直すので、ここで落としてよい
-      db.exec("DROP VIEW IF EXISTS done_tasks; DROP VIEW IF EXISTS done_cards; DROP VIEW IF EXISTS live_tasks; DROP VIEW IF EXISTS live_cards;");
+      db.exec("DROP VIEW IF EXISTS done_cards; DROP VIEW IF EXISTS live_cards;");
       db.exec("ALTER TABLE cards DROP COLUMN summary_card_id");
       log("schema", "summary_cards と cards.summary_card_id を撤去しました (#200)");
     }
@@ -267,11 +262,10 @@ CREATE TABLE IF NOT EXISTS chat_messages (
   //
   // ビューを増やすほど「どれを使うか」の判断が増えるので、2本(生きている/終わった)で止める
   //
-  // #215: **古い名前 (done_tasks / live_tasks) も無条件に落とす。**改名は tasks が在るときにしか
-  // 走らないので、先に改名だけ済んだDBには、中身の `FROM tasks` を解決できない壊れたビューが
-  // 取り残される (実測: プロジェクト#21)。ここで毎回落とせば、開いた時点で自然に直る
+  // #232: 古い名前 (done_tasks / live_tasks) を落とす行がここに在ったが、
+  // 全DBを移行し切ったので相手がいなくなった。旧スキーマは refuseLegacySchema が入口で止める
   db.exec(`
-DROP VIEW IF EXISTS done_tasks; DROP VIEW IF EXISTS done_cards;
+DROP VIEW IF EXISTS done_cards;
 CREATE VIEW done_cards AS
   SELECT id, title, summary, rejected, checked_at, done_at,
          date(done_at) AS done_day, archived, created_at
@@ -280,7 +274,7 @@ CREATE VIEW done_cards AS
    ORDER BY done_at DESC;`);
 
   db.exec(`
-DROP VIEW IF EXISTS live_tasks; DROP VIEW IF EXISTS live_cards;
+DROP VIEW IF EXISTS live_cards;
 CREATE VIEW live_cards AS
   SELECT id, status, title, summary, context, context_version,
          due, blocked_by, rejected, checked_at, done_at, sort, COALESCE(sort, id) AS sort_key,

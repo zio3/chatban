@@ -243,7 +243,8 @@ function boardPayload(projectId: number) {
 }
 
 function broadcastBoard(projectId = currentProjectId()) {
-  // 中身の取得もそのプロジェクトのスコープで行う (非同期フックから呼ばれる場合があるため)
+  // **引数で別のプロジェクトを名指しできる**ので、中身の取得もそのスコープに入り直して行う
+  // (#200 以前は非同期フックがリクエストの外で走るためにも必要だった。そちらは撤去済み)
   withProject(projectId, () => io.to(room(projectId)).emit("board:changed", boardPayload(projectId)));
 }
 

@@ -234,6 +234,22 @@ export function updateCardsAsAgent(updates: AgentCardUpdate[]): {
     // (#114のdone→reviewと同じ「拒否ではなく情報を返す」形。LLMは読み直して考え直せる)
     // 追記は「既存の末尾に足す」だけなので版で守る必要がない。
     // 全文置換と併用されたら、置換後の全文の末尾に足す (自然な読み方。片方を黙って捨てない)
+    // #244: **型だけに頼らない。**チャットのツール引数はLLMが組み立てるJSONなので、
+    // スキーマが string でも `null` や数値が届きうる。`null` は `undefined` と違って
+    // **「全文置換あり」と読まれる**ので、版さえ合っていれば経緯メモが丸ごと消える
+    // (Codexが再現: `context:"KEEP"` / 版2 のカードに `{context:null, context_version:2}` を
+    // 渡すと ok:true、保存後は context:null / 版3)。
+    // **空文字は禁じない** — 正当な全消去と区別が付かなくなる。弾くのは「文字列でないもの」だけ。
+    // 共有入口に置くのは、チャットとMCPで同じガードを通すため (#114 と同じ理由)
+    if (u.context !== undefined && typeof u.context !== "string") {
+      conflicts.push({
+        id: u.id,
+        contextVersion: cur.contextVersion ?? 1,
+        context: cur.context ?? null,
+        note: `context は文字列で渡してください (届いたのは ${u.context === null ? "null" : typeof u.context})。返した context に自分の追記をマージし、この contextVersion を添えて再実行してください。全部消したいときだけ空文字を明示してください`,
+      });
+      return null;
+    }
     const appended = typeof u.context_append === "string" ? cleanAgentText(u.context_append).trim() : "";
     const baseContext = u.context !== undefined ? u.context : cur?.context ?? null;
     const nextContext = appended

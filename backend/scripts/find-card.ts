@@ -1,4 +1,4 @@
-// タスクのタイトルで全プロジェクトを横断検索する。どのプロジェクトの話か分からなくなったとき用。
+// カードのタイトルで全プロジェクトを横断検索する。どのプロジェクトの話か分からなくなったとき用。
 //   npx tsx scripts/find-card.ts "外部FAQ"
 import { listProjects, withProject } from "../src/store.js";
 import { queryProjectData } from "../src/db.js";
@@ -13,7 +13,7 @@ for (const p of listProjects()) {
   try {
     withProject(p.id, () => {
       const r = queryProjectData(
-        `SELECT id, title, status, archived, substr(COALESCE(context,''),1,60) ctx FROM tasks WHERE title LIKE '%${needle.replace(/'/g, "''")}%' ORDER BY id`
+        `SELECT id, title, status, archived, substr(COALESCE(context,''),1,60) ctx FROM cards WHERE title LIKE '%${needle.replace(/'/g, "''")}%' ORDER BY id`
       );
       if (r.rows.length > 0) {
         console.log(`\n=== project ${p.id} (${p.name}) — ${r.rows.length}件`);

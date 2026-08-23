@@ -604,7 +604,10 @@ export function searchCards(terms: string[], limit = 10) {
       return {
         role: r.role,
         at: r.created_at,
-        ...(r.card_id ? { cardId: r.card_id } : {}),
+        // **外に出るキーなので改名しない** (#232 第2弾は内部識別子だけが範囲)。
+        // search_cards の応答としてチャットとMCPへそのまま出る。#215 の取りこぼしで
+        // `taskId` のままなのは事実だが、直すなら利用側を確かめる契約変更として別に立てる
+        ...(r.card_id ? { taskId: r.card_id } : {}),
         matched,
         snippet: String(r.content).slice(Math.max(0, at - 60), at + 140).replace(/\s+/g, " "),
       };

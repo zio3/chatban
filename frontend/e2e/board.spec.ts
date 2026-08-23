@@ -5,20 +5,20 @@ import path from "node:path";
 
 const API = "http://localhost:8799";
 
-async function createTask(title: string, status = "todo"): Promise<number> {
+async function createCard(title: string, status = "todo"): Promise<number> {
   const res = await fetch(`${API}/api/cards`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ title, status }),
   });
-  const task = await res.json();
-  return task.id;
+  const card = await res.json();
+  return card.id;
 }
 
 /** Doneのタスクを用意する。POST /api/cards に status:"done" を渡しても通らないので
  * (Doneへの扉は検収だけ)、本番と同じ道を通す: review → 検収チェック → 確定 */
-async function createDoneTask(title: string): Promise<number> {
-  const id = await createTask(title, "review");
+async function createDoneCard(title: string): Promise<number> {
+  const id = await createCard(title, "review");
   await fetch(`${API}/api/cards/${id}/checked`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -32,7 +32,7 @@ async function createDoneTask(title: string): Promise<number> {
   return id;
 }
 
-async function getTaskStatus(id: number): Promise<string | undefined> {
+async function getCardStatus(id: number): Promise<string | undefined> {
   const res = await fetch(`${API}/api/board`);
   const board = await res.json();
   return board.cards.find((t: any) => t.id === id)?.status;
@@ -62,22 +62,22 @@ test("ボードが4列+件数バッジで表示される", async ({ page }) => {
 });
 
 test("D&Dで列間移動しstatusが即時更新・リロード後も維持", async ({ page }) => {
-  const id = await createTask("E2E: 列間移動テスト");
+  const id = await createCard("E2E: 列間移動テスト");
   await page.goto("/");
   const card = page.getByTestId(`task-card-${id}`);
   await expect(card).toBeVisible();
 
   await drag(page, card, page.getByTestId("column-review"));
   await expect(page.getByTestId("column-review").getByTestId(`task-card-${id}`)).toBeVisible();
-  await expect.poll(() => getTaskStatus(id)).toBe("review");
+  await expect.poll(() => getCardStatus(id)).toBe("review");
 
   await page.reload();
   await expect(page.getByTestId("column-review").getByTestId(`task-card-${id}`)).toBeVisible();
 });
 
 test("列内並び替えがリロード後も維持される", async ({ page }) => {
-  const a = await createTask("E2E: 並び替えA");
-  const b = await createTask("E2E: 並び替えB");
+  const a = await createCard("E2E: 並び替えA");
+  const b = await createCard("E2E: 並び替えB");
   await page.goto("/");
   const cardA = page.getByTestId(`task-card-${a}`);
   const cardB = page.getByTestId(`task-card-${b}`);
@@ -101,7 +101,7 @@ test("列内並び替えがリロード後も維持される", async ({ page }) 
 });
 
 test("更新失敗時はロールバックしトースト表示、リトライで復帰", async ({ page }) => {
-  const id = await createTask("E2E: 失敗リトライテスト");
+  const id = await createCard("E2E: 失敗リトライテスト");
   await page.goto("/");
   const card = page.getByTestId(`task-card-${id}`);
   await expect(card).toBeVisible();
@@ -115,18 +115,18 @@ test("更新失敗時はロールバックしトースト表示、リトライ�
   await expect(page.getByTestId("toast")).toBeVisible();
   // ロールバックでtodo列に戻っている + サーバー側は未変更
   await expect(page.getByTestId("column-todo").getByTestId(`task-card-${id}`)).toBeVisible();
-  expect(await getTaskStatus(id)).toBe("todo");
+  expect(await getCardStatus(id)).toBe("todo");
 
   // 障害解除してリトライ → 移動が成立しトーストが消える
   await page.unroute(`**/api/cards/${id}`);
   await page.getByTestId("toast").getByRole("button", { name: "リトライ" }).click();
   await expect(page.getByTestId("toast")).toBeHidden();
   await expect(page.getByTestId("column-review").getByTestId(`task-card-${id}`)).toBeVisible();
-  await expect.poll(() => getTaskStatus(id)).toBe("review");
+  await expect.poll(() => getCardStatus(id)).toBe("review");
 });
 
 test("DoneへはD&Dで移動できない (検収ボタン経由のみ) (#57)", async ({ page }) => {
-  const id = await createTask("E2E: Doneドロップ禁止テスト");
+  const id = await createCard("E2E: Doneドロップ禁止テスト");
   await page.goto("/");
   const card = page.getByTestId(`task-card-${id}`);
   await expect(card).toBeVisible();
@@ -134,27 +134,27 @@ test("DoneへはD&Dで移動できない (検収ボタン経由のみ) (#57)", a
   // Done列へドラッグしても動かない
   await drag(page, card, page.getByTestId("column-done"));
   await expect(page.getByTestId("column-todo").getByTestId(`task-card-${id}`)).toBeVisible();
-  expect(await getTaskStatus(id)).toBe("todo");
+  expect(await getCardStatus(id)).toBe("todo");
 });
 
 test("Review列: 検収OKチェック→一括確定でdoneになる (チェックだけでは動かない) (#57)", async ({ page }) => {
-  const id = await createTask("E2E: 検収テスト", "review");
+  const id = await createCard("E2E: 検収テスト", "review");
   await page.goto("/");
   await expect(page.getByTestId("column-review").getByTestId(`task-card-${id}`)).toBeVisible();
 
   // チェックはマーキングのみ (Reviewに留まる)
   await page.getByTestId(`approve-${id}`).check();
   await expect(page.getByTestId("column-review").getByTestId(`task-card-${id}`)).toBeVisible();
-  expect(await getTaskStatus(id)).toBe("review");
+  expect(await getCardStatus(id)).toBe("review");
 
   // 一括確定ボタンでdoneへ
   await page.getByTestId("approve-commit").click();
   await expect(page.getByTestId("column-done").getByTestId(`task-card-${id}`)).toBeVisible();
-  await expect.poll(() => getTaskStatus(id)).toBe("done");
+  await expect.poll(() => getCardStatus(id)).toBe("done");
 });
 
 test("プロジェクト: 切り替えるとボードが入れ替わり、#IDは1から振り直される (#86)", async ({ page }) => {
-  const inFirst = await createTask("E2E: 元プロジェクトのタスク");
+  const inFirst = await createCard("E2E: 元プロジェクトのタスク");
 
   // 新規プロジェクトを作って切り替える
   const created = await (
@@ -195,7 +195,7 @@ test("プロジェクト: 切り替えるとボードが入れ替わり、#IDは
 });
 
 test("削除はゴミ箱行きで復元できる。実体を消せるのはゴミ箱からだけ (#102)", async ({ page }) => {
-  const id = await createTask("E2E: ゴミ箱テスト");
+  const id = await createCard("E2E: ゴミ箱テスト");
   await page.goto("/");
   await expect(page.getByTestId(`task-card-${id}`)).toBeVisible();
 
@@ -243,7 +243,7 @@ test("配信はプロジェクト単位のroomへ届く (#99)", async () => {
   await new Promise<void>((r) => sock.on("connect", () => r()));
 
   // プロジェクト1への変更は届く
-  await createTask("E2E: room検証(プロジェクト1)");
+  await createCard("E2E: room検証(プロジェクト1)");
   await expect.poll(() => received.length).toBeGreaterThan(0);
   const afterFirst = received.length;
 
@@ -295,7 +295,7 @@ test("タブごとに別プロジェクトを開ける。片方の更新はも�
 });
 
 test("Done列のカードはドラッグで持ち出せない (#105)", async ({ page }) => {
-  const id = await createDoneTask("E2E: Doneから持ち出し禁止");
+  const id = await createDoneCard("E2E: Doneから持ち出し禁止");
   await page.goto("/");
   const card = page.getByTestId("column-done").getByTestId(`task-card-${id}`);
   await expect(card).toBeVisible();
@@ -304,7 +304,7 @@ test("Done列のカードはドラッグで持ち出せない (#105)", async ({ 
   // あとから走るアーカイブ処理が archived=1 にして幽霊タスクになる)
   await drag(page, card, page.getByTestId("column-todo"));
   await expect(page.getByTestId("column-done").getByTestId(`task-card-${id}`)).toBeVisible();
-  expect(await getTaskStatus(id)).toBe("done");
+  expect(await getCardStatus(id)).toBe("done");
 });
 
 // MCP (Streamable HTTP) をエージェントと同じ経路で叩く。SSEで返るので最後のJSONを拾う
@@ -339,7 +339,7 @@ async function mcpToolList(): Promise<any[]> {
 }
 
 test("経緯メモの上書きは版が合うときだけ通る。状態変更は版に縛られない (#112)", async () => {
-  const id = await createTask("楽観ロックの検証");
+  const id = await createCard("楽観ロックの検証");
 
   // 版を添えないと適用されない (「必須」がプロンプトではなく契約で効いている)
   const noVersion = await mcp("update_cards", { updates: [{ id, context: "版なしで書く" }] });
@@ -368,7 +368,7 @@ test("経緯メモの上書きは版が合うときだけ通る。状態変更�
 });
 
 test("検収の印はDBに残り、AIは読めるが付けられない (#108)", async () => {
-  const id = await createTask("検収フラグの検証", "review");
+  const id = await createCard("検収フラグの検証", "review");
 
   // 人間の経路(REST)でだけ付く
   await fetch(`${API}/api/cards/${id}/checked`, {
@@ -383,8 +383,8 @@ test("検収の印はDBに残り、AIは読めるが付けられない (#108)", 
   const read = await mcp("query_log", { sql: `SELECT checked_at FROM cards WHERE id = ${id}` });
   expect(read.rows[0].checked_at).toBeTruthy();
 
-  // 書く口はどこにも無い: SQL窓口は読み取り専用、update_tasks のスキーマにも無い
-  const write = await mcp("query_log", { sql: `UPDATE tasks SET checked_at = NULL WHERE id = ${id}` });
+  // 書く口はどこにも無い: SQL窓口は読み取り専用、update_cards のスキーマにも無い
+  const write = await mcp("query_log", { sql: `UPDATE cards SET checked_at = NULL WHERE id = ${id}` });
   expect(write.ok).toBe(false);
   await mcp("update_cards", { updates: [{ id, checked_at: null, checkedAt: null }] });
   const afterAgent = await (await fetch(`${API}/api/cards/${id}`)).json();
@@ -410,7 +410,7 @@ test("sync_board: 同期トークンで差分が返り、他所の変更も拾�
   expect(full.projectContext).toBeUndefined();
 
   // **自分以外の経路**で動かす。差分の値打ちは「自分が見ていない間に何が動いたか」にある
-  const id = await createTask("E2E: 差分で拾われるタスク");
+  const id = await createCard("E2E: 差分で拾われるタスク");
   await fetch(`${API}/api/cards/${id}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
@@ -433,9 +433,9 @@ test("sync_board: 同期トークンで差分が返り、他所の変更も拾�
 });
 
 test("MCPの読み取りはSQL窓口1本。落とした一覧ツールは同じ内容を引ける (#108)", async () => {
-  const id = await createTask("SQL窓口の検証", "review");
+  const id = await createCard("SQL窓口の検証", "review");
 
-  // 読み取り専用ツールは query_log と search_tasks だけ (list_* は無い)
+  // 読み取り専用ツールは query_log と search_cards だけ (list_* は無い)
   const res = await fetch(`${API}/mcp/1`, {
     method: "POST",
     headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream" },
@@ -468,7 +468,7 @@ test("MCPの読み取りはSQL窓口1本。落とした一覧ツールは同じ�
 });
 
 test("done_at は完了に入った瞬間だけ打刻され、その後の編集では動かない (#108)", async () => {
-  const id = await createTask("done_atの検証", "review");
+  const id = await createCard("done_atの検証", "review");
   const patch = (body: unknown) =>
     fetch(`${API}/api/cards/${id}`, {
       method: "PATCH",
@@ -506,8 +506,8 @@ test("done_at は完了に入った瞬間だけ打刻され、その後の編集
 });
 
 test("依存チップをクリックすると依存先の詳細が開く (カード自体のクリックと取り合わない) (#111)", async ({ page }) => {
-  const depId = await createTask("依存先のタスク", "inprogress");
-  const id = await createTask("依存元のタスク");
+  const depId = await createCard("依存先のタスク", "inprogress");
+  const id = await createCard("依存元のタスク");
   await fetch(`${API}/api/cards/${id}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
@@ -528,8 +528,8 @@ test("依存チップをクリックすると依存先の詳細が開く (カー
 });
 
 test("パネルから依存を双方向に辿れる (これ待ち → 待ち) (#111)", async ({ page }) => {
-  const depId = await createTask("先に終わらせるタスク", "inprogress");
-  const id = await createTask("それを待っているタスク");
+  const depId = await createCard("先に終わらせるタスク", "inprogress");
+  const id = await createCard("それを待っているタスク");
   await fetch(`${API}/api/cards/${id}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
@@ -569,9 +569,9 @@ test("前提情報は版が合うときだけ上書きできる (読まずに書
 });
 
 test("並べ替えの母集団はサーバー側で絞る。対象外のIDは無視して報告する (#108)", async () => {
-  const a = await createTask("並べ替えA");
-  const b = await createTask("並べ替えB");
-  const gone = await createTask("アーカイブ行き", "review");
+  const a = await createCard("並べ替えA");
+  const b = await createCard("並べ替えB");
+  const gone = await createCard("アーカイブ行き", "review");
   await fetch(`${API}/api/cards/approve`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -606,7 +606,7 @@ test("設定のプロジェクト一覧からMCP接続先をコピーできる (
 });
 
 test("版が合わない更新は、同じ行の他のフィールドも保存しない (#120)", async () => {
-  const id = await createTask("部分適用しないことの検証");
+  const id = await createCard("部分適用しないことの検証");
   const before = (await (await fetch(`${API}/api/cards/${id}`)).json()) as any;
 
   // context と summary を一緒に送り、context の版だけ古い
@@ -624,7 +624,7 @@ test("版が合わない更新は、同じ行の他のフィールドも保存�
 });
 
 test("存在しないIDは notFound で名指しし、成功と混ぜない (#123 #124)", async () => {
-  const id = await createTask("実在するタスク");
+  const id = await createCard("実在するタスク");
 
   // 一部だけ失敗 = partial。適用できた行だけが updated に入り、null は混ざらない
   const partial = await mcp("update_cards", {
@@ -652,7 +652,7 @@ test("存在しないIDは notFound で名指しし、成功と混ぜない (#12
 });
 
 test("経緯メモは版なしで追記でき、追記どうしは互いを消さない", async () => {
-  const id = await createTask("追記の検証");
+  const id = await createCard("追記の検証");
 
   // 全文上書きは版が要る (既存の守り)。追記は要らない — 足すだけなので他人の追記を消さない
   const a = await mcp("update_cards", { updates: [{ id, context_append: "1件目の追記" }] });
@@ -674,8 +674,8 @@ test("経緯メモは版なしで追記でき、追記どうしは互いを消�
 });
 
 test("生きているタスクは live_cards ビューで引ける (母集団の条件を毎回書かせない)", async () => {
-  const alive = await createTask("生きているタスク");
-  const trashed = await createTask("ゴミ箱行きのタスク");
+  const alive = await createCard("生きているタスク");
+  const trashed = await createCard("ゴミ箱行きのタスク");
   await mcp("delete_cards", { ids: [trashed] });
 
   // **この2件に絞って引く。**母集団を全件取ると query_log の上限 (200行) で切られ、
@@ -688,7 +688,7 @@ test("生きているタスクは live_cards ビューで引ける (母集団の
   expect(ids).toContain(alive);
   expect(ids).not.toContain(trashed); // 条件を書かなくてもゴミ箱は混ざらない
 
-  // tasks を直に引けばゴミ箱も見える (見たいときは見られる)
+  // cards を直に引けばゴミ箱も見える (見たいときは見られる)
   const raw = await mcp("query_log", {
     sql: `SELECT id FROM cards WHERE id=${trashed} AND trashed_at IS NOT NULL`,
   });
@@ -793,7 +793,7 @@ test("summary の契約はチャットとMCPで同じ文言になっている (�
 });
 
 test("完了は done_cards ビューで引ける。登録日と取り違えようがない", async () => {
-  const id = await createTask("完了ビューの検証", "review");
+  const id = await createCard("完了ビューの検証", "review");
   // 検収 → Done。done_at はこの瞬間に打刻される
   await fetch(`${API}/api/cards/${id}/checked`, {
     method: "POST",
@@ -814,7 +814,7 @@ test("完了は done_cards ビューで引ける。登録日と取り違えよ�
   expect((r.rows[0] as any).done_day).toBe((r.rows[0] as any).done_at.slice(0, 10));
 
   // 終わっていないものは入らない (created_at を完了日と取り違える余地がない)
-  const alive = await createTask("まだ終わっていない");
+  const alive = await createCard("まだ終わっていない");
   const none = await mcp("query_log", {
     sql: `SELECT id FROM done_cards WHERE id=${alive}`,
   });
@@ -846,7 +846,7 @@ test("SQLが失敗したら、直せる材料を一緒に返す (説明を厚く
 });
 
 test("エラーにならない間違いには、結果と一緒に一言添える", async () => {
-  // tasks 直引き = ゴミ箱もアーカイブも混ざる。エラーにならないので気づけない
+  // cards 直引き = ゴミ箱もアーカイブも混ざる。エラーにならないので気づけない
   const raw = await mcp("query_log", { sql: "SELECT id, title FROM cards LIMIT 3" });
   expect(raw.rows.length).toBeGreaterThan(0); // 結果は普通に返る
   expect(raw.note).toContain("live_cards");
@@ -865,9 +865,9 @@ test("エラーにならない間違いには、結果と一緒に一言添え�
 test("検収の確定はサーバー側で条件を確かめる (UIのフィルタに依存しない)", async () => {
   // Doneへ至る唯一の扉。以前は ids をそのまま done にしていて、直接叩けば
   // Todoのタスクもゴミ箱の中のタスクもDoneにできた (実測で3ケースとも通った)
-  const todo = await createTask("検収ガード: Todoのまま");
-  const unchecked = await createTask("検収ガード: Review未検収", "review");
-  const trashed = await createTask("検収ガード: ゴミ箱");
+  const todo = await createCard("検収ガード: Todoのまま");
+  const unchecked = await createCard("検収ガード: Review未検収", "review");
+  const trashed = await createCard("検収ガード: ゴミ箱");
   await fetch(`${API}/api/cards/${trashed}`, { method: "DELETE" });
 
   const ng = await (
@@ -885,11 +885,11 @@ test("検収の確定はサーバー側で条件を確かめる (UIのフィル�
   expect(JSON.stringify(ng.skipped)).toContain("検収チェックが付いていません");
   expect(JSON.stringify(ng.skipped)).toContain("ゴミ箱");
 
-  expect(await getTaskStatus(todo)).toBe("todo");
-  expect(await getTaskStatus(unchecked)).toBe("review");
+  expect(await getCardStatus(todo)).toBe("todo");
+  expect(await getCardStatus(unchecked)).toBe("review");
 
   // 正常系: Review + 検収済み は通る
-  const ok = await createTask("検収ガード: 正しく検収済み", "review");
+  const ok = await createCard("検収ガード: 正しく検収済み", "review");
   await fetch(`${API}/api/cards/${ok}/checked`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -904,14 +904,14 @@ test("検収の確定はサーバー側で条件を確かめる (UIのフィル�
   ).json();
   expect(r.ok).toBe(true);
   expect(r.skipped).toBeUndefined();
-  await expect.poll(() => getTaskStatus(ok)).toBe("done");
+  await expect.poll(() => getCardStatus(ok)).toBe("done");
 });
 
 test("検収APIを通らないRESTからもDoneには入れない (扉は1つ)", async () => {
   // 検収APIだけを厳しくしても、PATCH /api/cards/:id に status:"done" を投げれば素通りしていた
   // (自動レビュー指摘)。フロントは Board.tsx の handleDragEnd で Done列へのD&Dを禁止しているが、
   // その禁止がクライアント側にしか無く、PR #1 で塞いだのとまったく同じ形の穴だった。
-  // 条件そのもの (Review列 + 検収済み) を updateTasks の不変条件にしたので、入口を問わない
+  // 条件そのもの (Review列 + 検収済み) を updateCards の不変条件にしたので、入口を問わない
   const patch = async (id: number, body: unknown) =>
     (
       await fetch(`${API}/api/cards/${id}`, {
@@ -921,14 +921,14 @@ test("検収APIを通らないRESTからもDoneには入れない (扉は1つ)",
       })
     ).json();
 
-  const todo = await createTask("扉は1つ: Todoから直接Done");
+  const todo = await createCard("扉は1つ: Todoから直接Done");
   const r1 = await patch(todo, { status: "done" });
   expect(r1.status).toBe("todo");
   expect(r1.note).toContain("Doneへは移していません"); // 黙って無視しない
-  expect(await getTaskStatus(todo)).toBe("todo");
+  expect(await getCardStatus(todo)).toBe("todo");
 
   // 同じ patch に入っている他のフィールドは保存する (status だけ戻す)
-  const unchecked = await createTask("扉は1つ: Review未検収", "review");
+  const unchecked = await createCard("扉は1つ: Review未検収", "review");
   const r2 = await patch(unchecked, { status: "done", summary: "この一行は残る" });
   expect(r2.status).toBe("review");
   expect(r2.summary).toBe("この一行は残る");
@@ -945,7 +945,7 @@ test("検収APIを通らないRESTからもDoneには入れない (扉は1つ)",
   expect(created.note).toContain("Doneへは移していません");
 
   // 正常系: 検収を通ればこの経路でも入る (条件を満たすかどうかだけを見ている)
-  const ok = await createTask("扉は1つ: 検収済みならPATCHでも通る", "review");
+  const ok = await createCard("扉は1つ: 検収済みならPATCHでも通る", "review");
   await fetch(`${API}/api/cards/${ok}/checked`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -968,14 +968,14 @@ test("入口で確かめる: 知らない列・居ないタスク・居ないプ
   expect(created.status).toBe(400);
   expect((await created.json()).error).toContain("todo / inprogress / review / done");
 
-  const id = await createTask("入口の検証");
+  const id = await createCard("入口の検証");
   const patched = await fetch(`${API}/api/cards/${id}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ status: "banana" }),
   });
   expect(patched.status).toBe(400);
-  expect(await getTaskStatus(id)).toBe("todo"); // 何も書き換わっていない
+  expect(await getCardStatus(id)).toBe("todo"); // 何も書き換わっていない
 
   // 居ないタスクの専用チャットは、LLMを呼ぶ前に断る (呼んでから気づくと課金だけ発生する)
   const ghost = await fetch(`${API}/api/cards/999999/chat`, {
@@ -1005,7 +1005,7 @@ test("検収の印を付けられるのはReview列だけ (順序を飛ばして
       body: JSON.stringify({ checked }),
     });
 
-  const todo = await createTask("順序飛ばし: Todoで印を付ける");
+  const todo = await createCard("順序飛ばし: Todoで印を付ける");
   const ng = await check(todo);
   expect(ng.status).toBe(409);
   expect((await ng.json()).error).toContain("Review 列のカードだけ");
@@ -1027,12 +1027,12 @@ test("検収の印を付けられるのはReview列だけ (順序を飛ばして
   expect(r.ok).toBe(true);
 
   // ゴミ箱のタスクにも付けられない
-  const trashed = await createTask("順序飛ばし: ゴミ箱", "review");
+  const trashed = await createCard("順序飛ばし: ゴミ箱", "review");
   await fetch(`${API}/api/cards/${trashed}`, { method: "DELETE" });
   expect((await check(trashed)).status).toBe(409);
 
   // 外すのはいつでもよい (印を消す方向は安全)
-  const plain = await createTask("順序飛ばし: 印を外すのは自由");
+  const plain = await createCard("順序飛ばし: 印を外すのは自由");
   expect((await check(plain, false)).status).toBe(200);
 });
 
@@ -1058,7 +1058,7 @@ test("存在しないプロジェクトを指定したSocketは、既定プロ�
   await new Promise<void>((r) => ghost.on("connect", () => r()));
 
   // 既定プロジェクトを動かしても届かない
-  await createTask("E2E: 存在しないプロジェクト指定の検証");
+  await createCard("E2E: 存在しないプロジェクト指定の検証");
   await new Promise((r) => setTimeout(r, 600));
   expect(received).toHaveLength(0);
 
@@ -1069,7 +1069,7 @@ test("存在しないプロジェクトを指定したSocketは、既定プロ�
   const got: unknown[] = [];
   ok.on("board:changed", (p) => got.push(p));
   await new Promise<void>((r) => ok.on("connect", () => r()));
-  await createTask("E2E: 実在プロジェクト指定の対照");
+  await createCard("E2E: 実在プロジェクト指定の対照");
   await expect.poll(() => got.length).toBeGreaterThan(0);
   ok.close();
 });
@@ -1179,13 +1179,13 @@ test("完全削除はゴミ箱を通ったものだけ (取り返しのつく形
   // #102 で「間違えないようにするのではなく、間違えても取り返しがつく形にする」と決めたのに、
   // DELETE /api/trash/:id が id しか見ておらず、ボード上の生タスクのIDを直接投げると
   // ゴミ箱を経由せず実体が消えた (自動レビュー指摘)。二段構えの二段目が無条件では意味がない
-  const alive = await createTask("完全削除: 生きているタスク");
+  const alive = await createCard("完全削除: 生きているタスク");
   const purge = (id: number) => fetch(`${API}/api/trash/${id}`, { method: "DELETE" });
 
   const ng = await purge(alive);
   expect(ng.status).toBe(409);
   expect((await ng.json()).error).toContain("ゴミ箱にないカード");
-  expect(await getTaskStatus(alive)).toBe("todo"); // 消えていない
+  expect(await getCardStatus(alive)).toBe("todo"); // 消えていない
 
   // ゴミ箱へ移してからなら通る
   await fetch(`${API}/api/cards/${alive}`, { method: "DELETE" });
@@ -1240,7 +1240,7 @@ test("既定プロジェクトは無効にできない (見えない・消せな
 test("同じIDを2回渡しても1件として確定する (#157)", async () => {
   // 判定も更新も2度走り、updated に同じタスクが2件載って「2件確定しました」に見えていた。
   // 押した数と通った数を突き合わせられるようにしてあるのに、その数字が水増しされては意味がない
-  const id = await createTask("重複ID: 1件として数える", "review");
+  const id = await createCard("重複ID: 1件として数える", "review");
   await fetch(`${API}/api/cards/${id}/checked`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -1299,7 +1299,7 @@ test("無効化したプロジェクトは既定にできない (順序を変え
 test("Doneから差し戻すと検収の印は消える (確認し直さずに戻せない)", async () => {
   // approveChecked が checked_at を「人が確かめた唯一の証拠」にしたので、
   // 差し戻しで印が残ると、確認し直さずにもう一度Doneへ通せてしまう
-  const id = await createTask("差し戻しで印が消える検証", "review");
+  const id = await createCard("差し戻しで印が消える検証", "review");
   const check = (checked: boolean) =>
     fetch(`${API}/api/cards/${id}/checked`, {
       method: "POST",
@@ -1318,7 +1318,7 @@ test("Doneから差し戻すと検収の印は消える (確認し直さずに�
 
   await check(true);
   expect((await approve()).ok).toBe(true);
-  await expect.poll(() => getTaskStatus(id)).toBe("done");
+  await expect.poll(() => getCardStatus(id)).toBe("done");
   expect((await get()).checkedAt).toBeTruthy(); // Doneでは検収の結果として残る
 
   // Doneから差し戻す (チャットの「戻して」やD&Dで起きる)
@@ -1333,12 +1333,12 @@ test("Doneから差し戻すと検収の印は消える (確認し直さずに�
   const again = await approve();
   expect(again.ok).toBe(false);
   expect(JSON.stringify(again.skipped)).toContain("検収チェックが付いていません");
-  expect(await getTaskStatus(id)).toBe("review");
+  expect(await getCardStatus(id)).toBe("review");
 
   // 付け直せば通る
   await check(true);
   expect((await approve()).ok).toBe(true);
-  await expect.poll(() => getTaskStatus(id)).toBe("done");
+  await expect.poll(() => getCardStatus(id)).toBe("done");
 });
 
 test("存在しないプロジェクトを指定した操作は既定へ落とさず拒否する (#125)", async () => {
@@ -1362,7 +1362,7 @@ test("存在しないプロジェクトを指定した操作は既定へ落と�
 });
 
 test("MCPは接続URLのプロジェクトしか触れない (#125)", async () => {
-  const id = await createTask("project1のタスク");
+  const id = await createCard("project1のタスク");
 
   // project2 のエンドポイントから project1 のIDを更新しようとしても届かない
   const res = await fetch(`${API}/mcp/2`, {
@@ -1496,7 +1496,7 @@ test("チャットの処理中は提案チップを生成しない (#162)", asyn
   // 上流が遅いときに並走するとTTFTが悪化する (実測: 単独12秒 → 3本並走で30〜55秒)。
   // しかもチップは会話が始まる前にしか出ないので、送信した瞬間から表示される余地が無い。
   // ここではLLMを呼ばずに、抑止のフラグが立っている間だけ空になることを確かめる
-  const id = await createTask("チャット中の抑止を確かめる");
+  const id = await createCard("チャット中の抑止を確かめる");
 
   // 応答が返る前に叩きたいので、待たずに走らせる。E2E環境のLLMは失敗してよい
   // (成否によらず runChatTurn には入るので、その間フラグは立つ)
@@ -1531,14 +1531,14 @@ test("先に始まっていた提案生成は、チャットが始まったら�
     return fs.readFileSync(file, "utf-8").split("\n").filter((l) => l.includes("ABORTED")).length;
   };
 
-  const id = await createTask("suggest先行の中断を確かめる");
+  const id = await createCard("suggest先行の中断を確かめる");
 
   // 狙いたいのは「suggestが走っている最中にchatが来る」状態。
   // suggestが先に終わってしまうと中断する相手がいないので、その回は検証にならない
   let observed = false;
   for (let attempt = 0; attempt < 3 && !observed; attempt++) {
     // ボードを変えて提案キャッシュを外す。同じ状態だとLLMを呼ばずに即返る
-    await createTask(`suggest先行の中断を確かめる (${attempt})`);
+    await createCard(`suggest先行の中断を確かめる (${attempt})`);
     const before = abortLines();
 
     // suggestを先に始める。待たない
@@ -1574,7 +1574,7 @@ test("先に始まっていた提案生成は、チャットが始まったら�
 
 test("ゴミ箱に入れると検収の印が落ちる (古い確認のままDoneへ通せない) (#161)", async () => {
   // 検収まで済ませる (人間のUI操作と同じ道)
-  const id = await createTask("検収済みだがゴミ箱を通ったタスク", "review");
+  const id = await createCard("検収済みだがゴミ箱を通ったタスク", "review");
   await fetch(`${API}/api/cards/${id}/checked`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -1597,7 +1597,7 @@ test("ゴミ箱に入れると検収の印が落ちる (古い確認のままDon
   // **落とすのは復元のとき**。この形なら、変更前からゴミ箱にある行にも効く
 
   // **やっていないことを報告しない。**ゴミ箱に無いタスクを restore しても成功にしない
-  // (以前は更新0件でも getTask を返していたので「復元しました」と言えてしまった)
+  // (以前は更新0件でも getCard を返していたので「復元しました」と言えてしまった)
   const again = await mcp("restore_cards", { ids: [id] });
   expect(again.ok, "ゴミ箱に無いのに復元成功として返っている").toBe(false);
   expect(again.notRestored).toContain(id);
@@ -1610,7 +1610,7 @@ test("ゴミ箱に入れると検収の印が落ちる (古い確認のままDon
   expect(missing.status).toBe(404);
 
   // 同じIDを2つ渡しても、片方が成功・片方が失敗にならない (先に重複を落とす)
-  const dupTarget = await createTask("重複指定で戻すタスク");
+  const dupTarget = await createCard("重複指定で戻すタスク");
   await mcp("delete_cards", { ids: [dupTarget] });
   const dup = await mcp("restore_cards", { ids: [dupTarget, dupTarget] });
   expect(dup.ok, "同じIDが成功と失敗の両方になっている").toBe(true);
@@ -1635,7 +1635,7 @@ test("ゴミ箱に入れると検収の印が落ちる (古い確認のままDon
 
 test("期限は登録時にも保存される (弾くだけ足して保存を忘れない) (#153)", async () => {
   // **「検証を足したら、通ったものが効くこと」まで確かめる。**
-  // 検証だけ足して createTask に渡し忘れ、正しい due が200のまま黙って捨てられていた
+  // 検証だけ足して createCard に渡し忘れ、正しい due が200のまま黙って捨てられていた
   const res = await fetch(`${API}/api/cards`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -1670,7 +1670,7 @@ test("期限は登録時にも保存される (弾くだけ足して保存を忘
 
 test("期限の形式が違うとその指定だけ捨てて名指しで返す (#153)", async () => {
   // REST は 400 で断る
-  const id = await createTask("期限を入れたいタスク");
+  const id = await createCard("期限を入れたいタスク");
   const bad = await fetch(`${API}/api/cards/${id}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
@@ -1699,15 +1699,15 @@ test("期限の形式が違うとその指定だけ捨てて名指しで返す (
 });
 
 test("検索の絞り込みは引数ではなくSQLへ案内する (#176)", async () => {
-  const hit = await createTask("スクリーンショットを撮り直す");
-  const noise = await createTask("ダークモードの検討");
+  const hit = await createCard("スクリーンショットを撮り直す");
+  const noise = await createCard("ダークモードの検討");
   // 経緯メモに語が入っているだけのタスク (#130 で実際に起きた形)。
   // context の全文上書きは版が要るので、版の要らない context_append で足す
   await mcp("update_cards", {
     updates: [{ id: noise, context_append: "提出前に見た目を揃えるかどうか。スクリーンショットの見え方も含む" }],
   });
 
-  // search_tasks は広く当てる道具のまま (本文で当たるものも返る)
+  // search_cards は広く当てる道具のまま (本文で当たるものも返る)
   const wide = await mcp("search_cards", { terms: ["スクリーンショット"] });
   const wideIds = wide.hits.map((h: any) => h.id);
   expect(wideIds).toContain(hit);
@@ -1740,9 +1740,9 @@ test("live_cards と done_cards に何が入るかは、契約に書いてある
   // 入るかどうかが契約に書いていない」ために誤報 (「live_cards に review が出ないバグ」) が
   // 起きた札。ビューは status ではなく archived / trashed_at / done_at で定義されているので、
   // 説明のほうを実物に合わせたうえで、その説明をここで固定する
-  const todo = await createTask("live: todoのもの", "todo");
-  const inprogress = await createTask("live: inprogressのもの", "inprogress");
-  const review = await createTask("live: reviewのもの", "review");
+  const todo = await createCard("live: todoのもの", "todo");
+  const inprogress = await createCard("live: inprogressのもの", "inprogress");
+  const review = await createCard("live: reviewのもの", "review");
 
   const live = await mcp("query_log", {
     scope: "audit",
@@ -1795,8 +1795,8 @@ test("live_cards と done_cards に何が入るかは、契約に書いてある
 test("チャットに番号だけ打つと、LLMを呼ばずにそのタスクを開く (#197)", async ({ page }) => {
   // 「検索窓が欲しい、とくに番号でアクセスしたいケースが増えてきた」への答え。
   // 専用の検索窓は作らず、常設のチャット (#74) を入口にした。
-  // 開く仕掛け (openTask / jumpToBoard) は #59 / #111 で既に在ったので、足したのは入口だけ
-  const id = await createTask("番号ジャンプの的");
+  // 開く仕掛け (openCard / jumpToBoard) は #59 / #111 で既に在ったので、足したのは入口だけ
+  const id = await createCard("番号ジャンプの的");
   await page.goto("/");
   const input = page.getByPlaceholder("ボードに話しかける…", { exact: false });
 
@@ -1891,11 +1891,11 @@ test.describe("任意レーン (#19)", () => {
 
   test("レーンを畳むと、そこにあったタスクはTodoへ戻る (消えない)", async () => {
     await setLanes("素材");
-    const id = await createTask("素材に置いたもの", "custom1");
-    expect(await getTaskStatus(id)).toBe("custom1");
+    const id = await createCard("素材に置いたもの", "custom1");
+    expect(await getCardStatus(id)).toBe("custom1");
 
     await setLanes(""); // 名前を消す = 畳む
-    expect(await getTaskStatus(id)).toBe("todo");
+    expect(await getCardStatus(id)).toBe("todo");
   });
 
   // レビュー指摘 (2026-08-21): **レーンが「作業中の列」に入っていなかった。**
@@ -1904,7 +1904,7 @@ test.describe("任意レーン (#19)", () => {
   // #161 (ゴミ箱) と #57 (Doneからの差し戻し) と同じ穴の3回目
   test("レーンを経由しても古い検収の印は残らない (遠回りでDoneへ通せない)", async () => {
     await setLanes("素材");
-    const id = await createTask("検収済みだがレーンを通ったタスク", "review");
+    const id = await createCard("検収済みだがレーンを通ったタスク", "review");
     await fetch(`${API}/api/cards/${id}/checked`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -1926,10 +1926,10 @@ test.describe("任意レーン (#19)", () => {
     // 戻しても再検収なしではDoneへ行けない
     await move("review");
     await move("done");
-    expect(await getTaskStatus(id)).toBe("review");
+    expect(await getCardStatus(id)).toBe("review");
   });
 
-  // 畳む処理も updateTasks を通すようにした (以前は生SQLで status だけ書き換えていた)。
+  // 畳む処理も updateCards を通すようにした (以前は生SQLで status だけ書き換えていた)。
   //
   // **このテストは畳む処理を単独では捕まえられない。**setChecked が Review 列でしか印を
   // 付けさせないので、印を持ったままレーンに居るカードは上の修正後は作れず、
@@ -1937,7 +1937,7 @@ test.describe("任意レーン (#19)", () => {
   // ここで見ているのは**畳んで戻ってきたカードが未検収で todo に居る**という結果のほう */
   test("レーンを畳むと todo へ戻り、検収の印は付いていない", async () => {
     await setLanes("素材");
-    const id = await createTask("検収済みのままレーンで畳まれたタスク", "review");
+    const id = await createCard("検収済みのままレーンで畳まれたタスク", "review");
     await fetch(`${API}/api/cards/${id}/checked`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -1949,21 +1949,21 @@ test.describe("任意レーン (#19)", () => {
       body: JSON.stringify({ status: "custom1" }),
     });
     await setLanes(""); // 畳む → todo へ退避
-    expect(await getTaskStatus(id)).toBe("todo");
+    expect(await getCardStatus(id)).toBe("todo");
     const row = (await mcp("query_log", { sql: `SELECT checked_at FROM cards WHERE id=${id}` })).rows[0];
     expect(row.checked_at, "畳んで戻したカードに古い印が残っている").toBeFalsy();
   });
 
   test("レーンからDoneへは直接行けない (退場はreviewを通る)", async () => {
     await setLanes("素材");
-    const id = await createTask("素材から直行を試す", "custom1");
+    const id = await createCard("素材から直行を試す", "custom1");
     const res = await fetch(`${API}/api/cards/${id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ status: "done" }),
     });
     // mayEnterDone は変えていないので、検収を通っていないものは弾かれる
-    expect(await getTaskStatus(id)).toBe("custom1");
+    expect(await getCardStatus(id)).toBe("custom1");
     expect(res.status).toBeLessThan(500);
   });
 });
@@ -1972,7 +1972,7 @@ test.describe("任意レーン (#19)", () => {
 // 見た目の違いではなく情報量の違いなので、パネル側を固定する。
 // 「1か所に置く」は types.ts の statusLabel に書いてある教訓で、期限には適用されていなかった
 test("期限切れは詳細パネルでも超過として出る (#228)", async ({ page }) => {
-  const id = await createTask("期限を過ぎたタスク");
+  const id = await createCard("期限を過ぎたタスク");
   await fetch(`${API}/api/cards/${id}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
@@ -1990,7 +1990,7 @@ test("期限切れは詳細パネルでも超過として出る (#228)", async (
 // 版が上がったら取り直す経路も見る — 配信に載るのは版だけなので、そこが切れると
 // 「パネルを開きっぱなしで古い本文を読み続ける」が起きる (画面もテストも落ちない形で)
 test("経緯メモは板の配信に載らないが、パネルを開くと読める (#226)", async ({ page }) => {
-  const id = await createTask("経緯メモを持つタスク");
+  const id = await createCard("経緯メモを持つタスク");
   await fetch(`${API}/api/cards/${id}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
@@ -2026,8 +2026,8 @@ test("経緯メモは板の配信に載らないが、パネルを開くと読�
 // LLMを呼ばずに確かめるため、**同じ持ち越しが起きる下書き**で見る。
 // 直っていれば下書きは残らず、直っていなければ残る (どちらも同じ「作り直されたか」を見ている)
 test("カードを切り替えるとパネルは作り直される (前のカードの状態を持ち越さない)", async ({ page }) => {
-  const a = await createTask("先に開くカード");
-  const b = await createTask("次に開くカード");
+  const a = await createCard("先に開くカード");
+  const b = await createCard("次に開くカード");
   await page.goto("/");
 
   const panel = page.getByTestId("task-detail-panel");
@@ -2047,7 +2047,7 @@ test("カードを切り替えるとパネルは作り直される (前のカー
 // 板の配信を差し替えて「添付を受けない構成」を作る。**サーバーの環境変数を触らない**ので、
 // 他のテストと同じ1台のまま確かめられる (apiStyle: messages を再現する必要もない)
 test("添付を受けない板では、2つあるチャット面の両方で入口が閉じる", async ({ page }) => {
-  const id = await createTask("添付の入口を確かめるカード");
+  const id = await createCard("添付の入口を確かめるカード");
 
   await page.route("**/api/board", async (route) => {
     const res = await route.fetch();
@@ -2171,7 +2171,7 @@ test.describe("失敗のあとに再送を出してよいか (#123 の線)", () 
 // アンカーは data-testid と同じ**契約**なので、片方だけ動かせないことをここで固定する。
 // LLMは呼ばない (page.route でチャットの応答を作る)。
 test("AI応答の #NN をクリックすると、そのカードの詳細が開く", async ({ page }) => {
-  const id = await createTask("メンションから開くカード");
+  const id = await createCard("メンションから開くカード");
   await page.route("**/api/chat", (route) =>
     route.fulfill({
       json: { reply: `確認先は #${id} です`, trace: [], uiActions: [], usage: { rounds: 1, elapsedMs: 1 } },

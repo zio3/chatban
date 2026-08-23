@@ -4,13 +4,11 @@ import {
   DUE_FORMAT_RULE,
   getCard,
   isDueDate,
-  isUsableStatus,
   restoreCard,
   updateCard,
   updateCards,
   type CardPatch,
 } from "./db.js";
-import { customLanes } from "./store.js";
 import { cleanAgentText } from "./text.js";
 import type { CardStatus } from "./types.js";
 
@@ -82,118 +80,13 @@ const BAD_DUE_NOTE = `期限の形式が違うため、その指定だけ適用�
 const NOT_FOUND_NOTE =
   "は存在しません。IDを確認してください (古い一覧を見ている可能性があります)。この指定は何も適用していません。その旨をユーザーにも伝えてください";
 
-/** #245: **契約どおりの実行時型でなければ、その行は触らない。**
+/** #245 以前、ここには「LLMが返す値の型を1項目ずつ検査する」コードがあった。
+ * **入口 (toolArgs.ts) で Zod を通すようにしたので消した** —
+ * 検査を (入口 × ツール × 項目) の数だけ書くのは、面を1マスずつ埋める作業だった。
  *
- * チャットのツール引数はLLMが組み立てるJSONで、**実行時検証をしていない** —
- * ツール定義で string と宣言してあっても `null` や数値が届く。しかも
- * **`undefined` (触らない) と `null` (置換する) は意味が逆**なので、静かにデータが消える。
- * Codexが実測で再現した壊れ方 (#244 のレビュー):
- *
- *   - `summary: null`     → 要約が消える
- *   - `blocked_by: false` → 依存が解除される (DB側の `?.length` が偽になり null 保存)
- *   - `rejected: "false"` → `!!` で **true に反転**する
- *   - `title: null`       → `NOT NULL constraint failed` が未処理で飛ぶ
- *   - `context_append: null` / `status: null` → 無視されるのに `ok:true` が返り、**再試行されない**
- *
- * MCPは Zod が先に弾くので、抜けているのはチャット経路だけ。
- * **共有入口に置く**のは、入口ごとにガードがズレないため (#114)。
- *
- * 値の中身は見ない (期限の形は `acceptableDue()`、列の妥当性は `isUsableStatus()` が
- * それぞれ理由付きで扱う)。ここで見るのは**型だけ**。 */
-function typeErrors(u: AgentCardUpdate): string[] {
-  const bad: string[] = [];
-  const got = (v: unknown) => (v === null ? "null" : Array.isArray(v) ? "配列" : typeof v);
-  // **行そのものを先に見る。**`updates:[null]` は配列としては正しいので入口を通り、
-  // 直後の `u.title` で `Cannot read properties of null` が未処理で飛ぶ (Codex実測)。
-  // ここで打ち切らないと、**fail-closed のはずが例外でラウンドごと落ちる**
-  if (u === null || typeof u !== "object" || Array.isArray(u))
-    return [`1件ぶんはオブジェクトで渡してください (届いたのは ${got(u)})`];
-  // **id を最初に見る。**`getCard()` より前でないと、`id:{}` で
-  // `Too few parameter values were provided` が未処理で飛ぶ (Codexが実測)
-  if (!Number.isInteger(u?.id)) bad.push(`id はカードID (整数) で渡してください (届いたのは ${got(u?.id)})`);
-  const str = (k: string, v: unknown) => {
-    if (v !== undefined && typeof v !== "string") bad.push(`${k} は文字列で渡してください (届いたのは ${got(v)})`);
-  };
-  str("title", u.title);
-  str("summary", u.summary);
-  str("context", u.context);
-  str("context_append", u.context_append);
-  str("status", u.status);
-  if (u.rejected !== undefined && typeof u.rejected !== "boolean")
-    bad.push(`rejected は true / false で渡してください (届いたのは ${got(u.rejected)})`);
-  if (u.due !== undefined && u.due !== null && typeof u.due !== "string")
-    bad.push(`due は文字列か null で渡してください (届いたのは ${got(u.due)})`);
-  if (u.context_version !== undefined && !Number.isInteger(u.context_version))
-    bad.push(`context_version は整数で渡してください (届いたのは ${got(u.context_version)})`);
-  if (
-    u.blocked_by !== undefined &&
-    u.blocked_by !== null &&
-    !(Array.isArray(u.blocked_by) && u.blocked_by.every((n) => Number.isInteger(n)))
-  )
-    bad.push(`blocked_by はカードIDの配列か null で渡してください (届いたのは ${got(u.blocked_by)})`);
-  // **文字列でありさえすればよい、ではない。**未知の列はDB層が黙って捨てるが、
-  // 捨てたことが応答に戻らないので **`status:"pending"` が `ok:true` で成功に見える** (Codex実測)。
-  // `status:null` を塞いだのと同じ偽成功が、文字列値では残っていた。
-  // **値の判定はDB層の `isUsableStatus` に任せ、結果だけここで受ける** (判定を二重に持たない)
-  if (typeof u.status === "string" && u.status !== "done" && !isUsableStatus(u.status, customLanes()))
-    bad.push(`status に ${JSON.stringify(u.status)} は置けません (使えるのは todo / inprogress / review と、このプロジェクトの任意レーン)`);
-  return bad;
-}
-
-/** 配列で来るはずの引数。**入口で配列かどうかを見る。**
- * チャット側で `args.updates ?? []` のように補うと、**何もしていないのに成功**になり、
- * オブジェクトが届けば `updates.map is not a function` が未処理で飛ぶ (Codex実測) */
-function notAnArray(kind: string, v: unknown): string | null {
-  if (Array.isArray(v)) return null;
-  const got = v === null ? "null" : v === undefined ? "未指定" : Array.isArray(v) ? "配列" : typeof v;
-  return `${kind} は配列で渡してください (届いたのは ${got})。1件だけのときも配列に入れてください`;
-}
-
-/** ゴミ箱から戻す対象のID。**整数以外を弾く。**
- * 文字列 `"12"` をそのまま繰り返すと `"1"` と `"2"` に割れ、
- * **意図と違うカードを実際に復元する** (Codexが実測: #12 のつもりで #1 と #2 が戻った)。
- * 型違いが「失敗」ではなく「別カードへの操作」になるので、ここは特に固く断る */
-function idListErrors(kind: string, ids: unknown): string | null {
-  const notArray = notAnArray(kind, ids);
-  if (notArray) return notArray;
-  const bad = (ids as unknown[]).filter((n) => !Number.isInteger(n));
-  return bad.length > 0
-    ? `${kind} にカードID (整数) でないものが混ざっています: ${bad.map((b) => JSON.stringify(b)).join(", ")}。1件も処理していません`
-    : null;
-}
-
-/** 配列そのものが契約と違うときの返し方は入口ごとに違うので、文面だけ共有する */
-export { notAnArray as arrayArgError, idListErrors as idListArgError };
-
-/** 作成で使えるキー。**更新用の検査を流用しない。**
- * `context_append` や `rejected` は型としては正しいので更新側の検査は通るが、
- * **作成の patch は読まないので黙って捨てられる** (Codex実測: 決定事項を書いたのに記録されず、
- * それでも成功に見えた)。`context_append:null` の偽成功を塞いだのと同じことが、
- * **型の正しい未対応キー**では残っていた */
-const CREATE_KEYS = ["title", "status", "context", "summary", "due", "blocked_by"] as const;
-
-function createErrors(t: AgentCardInput, ): string[] {
-  const got = (v: unknown) => (v === null ? "null" : Array.isArray(v) ? "配列" : typeof v);
-  if (t === null || typeof t !== "object" || Array.isArray(t))
-    return [`1件ぶんはオブジェクトで渡してください (届いたのは ${got(t)})`];
-
-  const bad = typeErrors({ ...(t as object), id: 1 } as AgentCardUpdate).filter((m) => !m.startsWith("id "));
-  if (typeof t.title !== "string" || cleanAgentText(t.title).trim() === "")
-    bad.unshift("title は空でない文字列で渡してください");
-
-  const unknown = Object.keys(t).filter((k) => !(CREATE_KEYS as readonly string[]).includes(k));
-  if (unknown.length > 0)
-    bad.push(
-      `${unknown.join(", ")} は create_cards では使えません (使えるのは ${CREATE_KEYS.join(" / ")})。` +
-        "作ったあとに update_cards で足してください"
-    );
-  return bad;
-}
-
-/** 型が契約と違った行の断り文。**版の競合とは別の失敗**なので、文言も分ける —
- * 「版が合わない」と案内すると、**LLMは版だけ差し替えて同じ不正な値で再実行する** */
-const INVALID_NOTE =
-  "指定された値の型または値が契約と違うため、この行の更新は一切適用していません (他のフィールドも保存されていません)。**invalid の reason を読んで、そこに書かれた型で送り直してください** (項目ごとに違います。summary や context のような本文を消すときは null ではなく空文字、blocked_by の解除は null です)";
+ * ここに残っているのは**意味の判定**だけ (版の一致 / done の矯正 / 期限の形)。
+ * 型は「もう検証済みのものしか来ない」という前提でよい。
+ * その前提を保つのは `toolArgs.test.ts` の「execTool の全ツールに契約がある」テスト。 */
 
 const CONFLICT_NOTE =
   "経緯メモの版が合わないため、この行の更新は一切適用していません (他のフィールドも保存されていません)。conflicts の context に自分の追記をマージし、その contextVersion を添えて再実行してください。上書きに失敗したことをユーザーにも伝えてください";
@@ -220,26 +113,10 @@ export function createCardsAsAgent(cards: AgentCardInput[]): {
   note?: string;
   /** 期限の形が違って捨てたもの (タイトルで返す。作成時点ではIDを知らせても意味が薄い) */
   badDue?: string[];
-  /** #245: 型が契約と違って作らなかったもの。何番目かで指す (まだIDが無いため) */
-  invalid?: { at: number; reason: string }[];
 } {
-  const argError = notAnArray("cards", cards);
-  if (argError) return { ok: false, status: "failed", created: [], note: argError };
-
-  // #245: **1件も書く前に、全行を検査する。**途中で例外が飛ぶと
-  // **前の行は作成済みなのに応答が返らない** (Codex実測: `[{title:"CREATED FIRST"},{title:null}]` で
-  // 1件目を作った後に `NOT NULL constraint failed` が未処理で送出された)。
-  // 更新側と違って作成は取り消せないので、**書き始める前に決める**
-  const invalid: { at: number; reason: string }[] = [];
-  const usable = cards.filter((t, at) => {
-    const bad = createErrors(t);
-    if (bad.length > 0) invalid.push({ at, reason: bad.join(" / ") });
-    return bad.length === 0;
-  });
-
   let anyCoerced = false;
   const badDue: string[] = [];
-  const created = usable.map((t) => {
+  const created = cards.map((t) => {
     const { status, coerced } = coerceStatus(t.status);
     if (coerced) anyCoerced = true;
     const title = cleanAgentText(t.title);
@@ -258,17 +135,13 @@ export function createCardsAsAgent(cards: AgentCardInput[]): {
   const notes = [
     anyCoerced ? DONE_NOTE : "",
     badDue.length > 0 ? BAD_DUE_NOTE : "",
-    invalid.length > 0
-      ? `${cards.length}件のうち${created.length}件を作りました。${invalid.length}件は指定された値の型が契約と違うので作っていません — invalid の reason を読んで送り直してください`
-      : "",
   ].filter(Boolean);
   return {
-    ok: invalid.length === 0,
-    status: invalid.length === 0 ? "ok" : created.length > 0 ? "partial" : "failed",
+    ok: true,
+    status: "ok",
     created,
     ...(notes.length > 0 ? { note: notes.join(" / ") } : {}),
     ...(badDue.length > 0 ? { badDue } : {}),
-    ...(invalid.length > 0 ? { invalid } : {}),
   };
 }
 
@@ -294,12 +167,6 @@ export function restoreCardsAsAgent(ids: number[]): {
   notRestored?: number[];
   note?: string;
 } {
-  // #245: **文字列を配列として扱わない。**`"12"` をそのまま繰り返すと `"1"` と `"2"` に割れ、
-  // **意図と違うカードを実際に復元する** (Codex実測: #12 のつもりで #1 と #2 が戻った)。
-  // 型違いが「失敗」ではなく「別カードへの操作」になるので、1件も触らずに断る
-  const argError = idListErrors("ids", ids);
-  if (argError) return { ok: false, restored: [], note: argError };
-
   const unique = [...new Set(ids)];
   const results = unique.map((id) => ({ id, card: restoreCard(id) }));
   const restored = results
@@ -338,17 +205,11 @@ export function updateCardsAsAgent(updates: AgentCardUpdate[]): {
   notFound?: number[];
   /** #153: 期限の形が違って、その指定だけ捨てたカードID */
   badDue?: number[];
-  /** #245: 値の型が契約と違って、行ごと適用しなかったもの。版の競合とは別の失敗 */
-  invalid?: { id: number; reason: string }[];
   note?: string;
 } {
   const coerced: number[] = [];
   const conflicts: ContextConflict[] = [];
-  /** #245: 型が契約と違って、行ごと適用しなかったもの */
-  const invalid: { id: number; reason: string }[] = [];
 
-  const argError = notAnArray("updates", updates);
-  if (argError) return { ok: false, status: "failed", updated: [], coerced: [], note: argError };
   const notFound: number[] = [];
   const badDue: number[] = [];
 
@@ -356,14 +217,6 @@ export function updateCardsAsAgent(updates: AgentCardUpdate[]): {
     // #87: 「差分だけ送る」モデルを前提にしない。全フィールドをエコーバックするモデル
     // (実測: gpt-5.6-terra) だと、変更していない値まで patch に載って既存値を壊す。
     // 現在値と突き合わせ、実際に変わったフィールドだけを通す
-    // #245: **型を見てから引く。**`id:{}` で `getCard()` を呼ぶと
-    // `Too few parameter values were provided` が未処理で飛ぶ (Codex実測)
-    const badTypes = typeErrors(u);
-    if (badTypes.length > 0) {
-      invalid.push({ id: typeof u?.id === "number" ? u.id : -1, reason: badTypes.join(" / ") });
-      return null;
-    }
-
     const cur = getCard(u.id);
     // #123: 存在しないIDは名指しで返す。以前は updated に null が混ざるだけで、
     // ok:true / updated:[null, {...}] を見て「2件とも書けた」と読めてしまった。
@@ -447,17 +300,12 @@ export function updateCardsAsAgent(updates: AgentCardUpdate[]): {
   const notes = [
     // 件数を先に言う。「何件通って何件通らなかったか」を数えさせない
     // **未適用は3種ある (版の競合 / 存在しない / 型が違う)。**どれかを引き忘れると
-    // 「配列を数えさせない」ための1行が嘘になり、**再送が漏れる** (Codex実測: 3件中1件しか
-    // 保存していないのに「2件を適用しました」と返っていた)
-    ...(conflicts.length + notFound.length + invalid.length > 0
-      ? [
-          `${updates.length}件のうち${updates.length - conflicts.length - notFound.length - invalid.length}件を適用しました`,
-        ]
+    // 「配列を数えさせない」ための1行が嘘になり、**再送が漏れる**
+    ...(conflicts.length + notFound.length > 0
+      ? [`${updates.length}件のうち${updates.length - conflicts.length - notFound.length}件を適用しました`]
       : []),
     ...(coerced.length > 0 ? [`#${coerced.join(", #")} は${DONE_NOTE}`] : []),
     ...(conflicts.length > 0 ? [`#${conflicts.map((c) => c.id).join(", #")} は${CONFLICT_NOTE}`] : []),
-    // **版の競合とは別の行に出す。**混ぜると「版を直せば通る」と読まれる (#245)
-    ...(invalid.length > 0 ? [`#${invalid.map((v) => v.id).join(", #")} は${INVALID_NOTE}`] : []),
     ...(notFound.length > 0 ? [`#${notFound.join(", #")} ${NOT_FOUND_NOTE}`] : []),
     // #153: 期限だけ捨てた行。**rejected には数えない** — 他の項目は保存できているので、
     // ここで ok:false にすると「1件も書けなかった」と読まれて全部送り直される
@@ -465,7 +313,7 @@ export function updateCardsAsAgent(updates: AgentCardUpdate[]): {
   ];
   // #124: 適用できた行だけが入る。undefined/null は混ざらない (内部事情を漏らさない)
   const applied = updated.filter((t): t is NonNullable<typeof t> => t != null);
-  const rejected = conflicts.length + notFound.length + invalid.length;
+  const rejected = conflicts.length + notFound.length;
   return {
     // 部分成功を ok:true と返すと、多くのエージェントはここで分岐して先へ進む。
     // 1件でも適用できなかったなら false にして、中身を読ませる (#120/#123)
@@ -476,7 +324,6 @@ export function updateCardsAsAgent(updates: AgentCardUpdate[]): {
     ...(conflicts.length > 0 ? { conflicts } : {}),
     ...(notFound.length > 0 ? { notFound } : {}),
     ...(badDue.length > 0 ? { badDue } : {}),
-    ...(invalid.length > 0 ? { invalid } : {}),
     ...(notes.length > 0 ? { note: notes.join(" / ") } : {}),
   };
 }

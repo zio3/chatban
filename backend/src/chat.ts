@@ -2,7 +2,6 @@ import type OpenAI from "openai";
 import {
   CONTEXT_APPEND_DESCRIPTION,
   createCardsAsAgent,
-  idListArgError,
   RESTORE_DESCRIPTION,
   restoreCardsAsAgent,
   updateCardsAsAgent,
@@ -20,6 +19,7 @@ import {
   setProjectContext,
 } from "./db.js";
 import { currentProjectId, customLanes } from "./store.js";
+import { agentStatusValues, parseToolArgs, reorderableStatuses } from "./toolArgs.js";
 import { chatCompletion } from "./llm.js";
 import { getModel } from "./config.js";
 import { foldedContainer } from "./archive.js";
@@ -51,18 +51,15 @@ export interface ChatResult {
  * review へ倒していたが、それは「押せるボタンを押した後で断る」形だった。
  * 「プロンプトは漏れるが、経路が無いことは漏れない」— 選べないものは選ばれない。
  *
- * coerceStatus は残す。チャットのツール呼び出しはLLMが組み立てるJSONで、
- * enum を無視した値が届きうる (MCPはzodで弾くが、こちらに検証は無い) */
-export const AGENT_STATUS_VALUES = ["todo", "inprogress", "review"] as const;
+ * coerceStatus は残す。done を review へ倒すのは**型ではなく意味の話**で、
+ * 入口の検査 (toolArgs.ts) を通ったあとに効かせたいため。
+ * (#245 以前はここに「こちらに検証は無い」と書いてあった。いまは両入口とも Zod を通る) */
 
 /** #19: この接続のプロジェクトで選べる列。任意レーンを**有効なものだけ**足す。
  * 「選べないものは選ばれない」— 無効なレーンを enum に出さないので、そこへ置く経路が無い。
  * db.ts の isUsableStatus が最後の砦だが、そこまで届かせないほうがよい (done を enum から外したのと同じ形)。
  *
  * **チャットとMCPで同じ関数を使う。**同じ一覧を2か所に書くと必ず片方だけ直る (#92 #108 #114) */
-export function agentStatusValues(lanes: CustomLane[]): string[] {
-  return [...AGENT_STATUS_VALUES, ...lanes.map((l) => l.key)];
-}
 
 /** 任意レーンの意味を契約に差し込む。**表示名は必須**なので、custom1 が説明の無い箱になることはない。
  * 人が前提情報に運用ルールを書くのは任意だが、`custom1 = 素材` の対応だけは待たずに自動で出す */
@@ -72,13 +69,6 @@ export function statusDescription(lanes: CustomLane[]): string {
   return `${STATUS_DESCRIPTION}。このプロジェクトには任意レーンがある: ${map}。ボードでは Review と Done の間に並ぶ。何を置く列かはプロジェクトの前提情報を読むこと`;
 }
 
-/** 並べ替えられる列 (任意レーン込み)。Todo/Inprogress と同じ緩い箱なので、並べ替えも同じに扱う */
-export function reorderableStatuses(lanes: CustomLane[]): string[] {
-  return [...REORDERABLE_STATUSES, ...lanes.map((l) => l.key)];
-}
-/** 並べ替えられる列。done は人が並べる列ではない (検収の結果が並ぶだけで、いずれ箱に畳まれる) ので対象にしない (#105)。
- * これもチャットとMCPで共有する — 同じ一覧を2か所に書くと必ず片方だけ直る */
-export const REORDERABLE_STATUSES = ["todo", "inprogress", "review"] as const;
 
 /** #106/#108: 記録へのSQL窓口の説明。チャットとMCPで同じものを使う。
  * 入口ごとに書き分けると必ずズレる (#92 #108 #114 で3回起きた) */
@@ -409,7 +399,16 @@ export function buildTools(lanes: CustomLane[]): OpenAI.Chat.Completions.ChatCom
 /** #245: **テストから入口の配線を叩けるようにしてある。**
  * `delete_cards` / `reorder_cards` は agentWrite を通らず、ガードがここにしか無い。
  * ヘルパ単体のテストでは**配線を消しても気づけない** (Codexレビュー指摘) */
-export async function execTool(name: string, args: any, events: Set<string>): Promise<unknown> {
+export async function execTool(name: string, rawArgs: any, events: Set<string>): Promise<unknown> {
+  // #245: **ここから先は検証済みの値しか流れない。**
+  // 以前はここに検査が無く、モデルの出力が揺れるだけで実データが消えた
+  // (`context:null` で経緯メモが消える / `ids:"12"` が `"1"`,`"2"` に割れて別のカードを復元する等)。
+  // MCPは同じことを SDK の Zod がやっていたので踏んでいない — **穴は入口が1つ無検査だった点**だった。
+  // 項目ごと・ツールごとに塞ぐと (入口 × ツール × 項目) の面を1マスずつ埋めることになる
+  const parsed = parseToolArgs(name, rawArgs, customLanes());
+  if (!parsed.ok) return { ok: false, note: parsed.note };
+  const args = parsed.args;
+
   switch (name) {
     case "create_cards": {
       // #114: 書き込みは agentWrite に集約 (チャットとMCPで同じガードを通す)
@@ -421,7 +420,7 @@ export async function execTool(name: string, args: any, events: Set<string>): Pr
       return r;
     }
     case "update_cards": {
-      const { ok, status, updated, note, conflicts, notFound, badDue, invalid } = updateCardsAsAgent(args.updates);
+      const { ok, status, updated, note, conflicts, notFound, badDue } = updateCardsAsAgent(args.updates);
       events.add("board");
       // #112: 版が合わなかった経緯メモは適用していない。現在の全文を返すのでマージして再実行する
       // #153: badDue も返す。**列挙して返しているので、足し忘れると入口ごとにズレる** —
@@ -433,17 +432,11 @@ export async function execTool(name: string, args: any, events: Set<string>): Pr
         ...(conflicts ? { conflicts } : {}),
         ...(notFound ? { notFound } : {}),
         ...(badDue ? { badDue } : {}),
-        // #245: 型が契約と違って行ごと適用しなかったもの。**版の競合と混ぜない**
-        ...(invalid ? { invalid } : {}),
         ...(note ? { note } : {}),
       };
     }
     case "delete_cards": {
       // #102: 実データは消さずゴミ箱へ。誤解釈で消えても取り返しがつくようにする
-      // #245: 削除は agentWrite を通らないので、ここで型を見る (MCP側は Zod が弾く)。
-      // 文字列を配列として扱うと `"12"` が `"1"`,`"2"` に割れ、**別のカードを実際に消す**
-      const idsError = idListArgError("ids", args.ids);
-      if (idsError) return { ok: false, note: idsError };
       const results = (args.ids as number[]).map((id) => ({ id, trashed: trashCard(id) }));
       // 復元できることは毎回文章で説明しない (くどい)。#xx リンクから詳細パネルを開けば「戻す」がある
       events.add("board");
@@ -462,21 +455,12 @@ export async function execTool(name: string, args: any, events: Set<string>): Pr
       return r;
     }
     case "reorder_cards": {
-      const reorderError = idListArgError("ids", args.ids);
-      if (reorderError) return { ok: false, note: reorderError };
-      // #245: **列も見る。**未知の列だと対象が0件になるだけで `ok:true` が返り、
-      // 「並べ替えたつもり」とズレる (更新側で塞いだ偽成功が、ここに残っていた)
-      if (!reorderableStatuses(customLanes()).includes(args.status))
-        return {
-          ok: false,
-          note: `${JSON.stringify(args.status)} は並べ替えできる列ではありません (${reorderableStatuses(customLanes()).join(" / ")})。1件も動かしていません`,
-        };
       const r = reorderCards(args.ids, args.status);
       events.add("board");
       return reorderResult(r);
     }
     case "search_cards": {
-      const r = searchCards(args.terms ?? []);
+      const r = searchCards(args.terms);
       return searchResult(r);
     }
     case "query_log": {

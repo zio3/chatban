@@ -17,8 +17,6 @@ import {
   REORDER_DESCRIPTION,
   reorderResult,
   searchResult,
-  agentStatusValues,
-  reorderableStatuses,
   statusDescription,
   SUMMARY_DESCRIPTION,
   UPDATE_TASKS_DESCRIPTION,
@@ -36,6 +34,8 @@ import {
   setProjectContext,
 } from "./db.js";
 import { boardDelta, formatBoardUpdate } from "./boardState.js";
+// #245: 列の一覧と引数の契約は toolArgs.ts が唯一の置き場 (チャットと同じものを指す)
+import { agentStatusValues, reorderableStatuses } from "./toolArgs.js";
 import { contextReference, contextTemplateHint } from "./contextTemplate.js";
 import { currentProjectId, customLanes, getProject } from "./store.js";
 import type { CardStatus, ViewEvent } from "./types.js";
@@ -117,6 +117,11 @@ export function buildMcpServer(onEvent: (kind: ViewEvent) => void): McpServer {
       description: "カードをボードに追加する(複数可)。UIにはリアルタイム反映される",
       inputSchema: {
         cards: z.array(
+          // #245: **`.passthrough()` にしてある。**Zod の既定は未知キーを *strip* するので、
+          // `context_append` のような「型は正しいが作成では使えないキー」が
+          // **共有検査に届く前に消え、タイトルだけのカードが ok:true で作られる** —
+          // チャット側で塞いだ「黙って捨てて成功」が、MCPにだけ残っていた (Codexレビュー指摘)。
+          // 入口で弾かず通すのは、**断り方を1箇所 (createCardsAsAgent) に保つため**
           z.object({
             title: z.string(),
             status: STATUS.optional().describe(`省略時はtodo。${STATUS_DESC}`),
@@ -124,7 +129,7 @@ export function buildMcpServer(onEvent: (kind: ViewEvent) => void): McpServer {
             summary: z.string().optional().describe(SUMMARY_DESCRIPTION),
             due: z.string().optional().describe(DUE_DESCRIPTION),
             blocked_by: z.array(z.number().int()).optional().describe(BLOCKED_BY_DESCRIPTION),
-          })
+          }).passthrough()
         ),
         sync_token: SYNC_TOKEN_ON_WRITE,
       },
@@ -141,8 +146,6 @@ export function buildMcpServer(onEvent: (kind: ViewEvent) => void): McpServer {
         created: (r.created as any[]).map((t: any) => brief(t)),
         // #153: 期限の形が違って捨てたものは名指しで返す (保存されたつもりにさせない)
         ...(r.badDue ? { badDue: r.badDue } : {}),
-        // #245: 型または値が契約と違って作らなかったもの
-        ...(r.invalid ? { invalid: r.invalid } : {}),
         ...(r.note ? { note: r.note } : {}),
         ...boardUpdate(sync_token),
       });
@@ -179,7 +182,7 @@ export function buildMcpServer(onEvent: (kind: ViewEvent) => void): McpServer {
       },
     },
     async ({ updates, sync_token }) => {
-      const { ok, status, updated, note, conflicts, notFound, badDue, invalid } = updateCardsAsAgent(updates as any);
+      const { ok, status, updated, note, conflicts, notFound, badDue } = updateCardsAsAgent(updates as any);
       onEvent("board");
       return text({
         // #120/#123: 1件でも適用できなければ ok:false。
@@ -193,8 +196,6 @@ export function buildMcpServer(onEvent: (kind: ViewEvent) => void): McpServer {
         // #153: 期限だけ捨てた行。**フィールドを列挙して返しているので、増やしたら
         // ここも足さないと入口ごとにズレる** (#92 #108 #114 と同じ形で、実際にズレた)
         ...(badDue ? { badDue } : {}),
-        // #245: 型が契約と違って行ごと適用しなかったもの。**版の競合と混ぜない**
-        ...(invalid ? { invalid } : {}),
         ...(note ? { note } : {}),
         ...boardUpdate(sync_token),
       });

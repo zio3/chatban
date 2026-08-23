@@ -74,12 +74,16 @@ function cardSchemas(lanes: CustomLane[]) {
   const status = z.enum(agentStatusValues(lanes) as [string, ...string[]]);
 
   const create = z.strictObject({
-    title: z.string(),
+    // **空のタイトルは断る。**型ではなく**作成の意味**の制約だが、契約の側に置く —
+    // タイトルはカードを識別する唯一の常時表示項目で、空だと板に「無題の何か」が残る。
+    // #245 の途中で型検査ごと剥がしてしまい、空白だけのカードが作れる状態にした (Codexレビュー指摘)
+    title: z.string().refine((v) => v.trim() !== "", { message: "空でない文字列で渡してください" }),
     status: status.optional(),
     context: z.string().optional(),
     summary: z.string().optional(),
-    due: z.string().nullable().optional(),
-    blocked_by: ids.nullable().optional(),
+    // 作成では null を許さない。**解除する対象がまだ無い** (更新側だけが null で外せる)
+    due: z.string().optional(),
+    blocked_by: ids.optional(),
   });
 
   const update = z.strictObject({

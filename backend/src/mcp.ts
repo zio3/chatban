@@ -35,7 +35,7 @@ import {
 } from "./db.js";
 import { boardDelta, formatBoardUpdate } from "./boardState.js";
 // #245: 列の一覧と引数の契約は toolArgs.ts が唯一の置き場 (チャットと同じものを指す)
-import { agentStatusValues, reorderableStatuses } from "./toolArgs.js";
+import { agentStatusValues, parseToolArgs, reorderableStatuses } from "./toolArgs.js";
 import { contextReference, contextTemplateHint } from "./contextTemplate.js";
 import { currentProjectId, customLanes, getProject } from "./store.js";
 import type { CardStatus, ViewEvent } from "./types.js";
@@ -135,6 +135,12 @@ export function buildMcpServer(onEvent: (kind: ViewEvent) => void): McpServer {
       },
     },
     async ({ cards, sync_token }) => {
+      // #245: **チャットと同じ関門を通す。**MCPのZodは型を見るが、
+      // 「契約に無いキー」「空のタイトル」といった契約そのものは共通の定義が持っている。
+      // ここを通さないと入口ごとに通る値が違う (#114 と同じ形)
+      const gate = parseToolArgs("create_cards", { cards }, LANES);
+      if (!gate.ok) return text({ ok: false, note: gate.note });
+      cards = gate.args.cards;
       // #114: 書き込みは agentWrite に集約。以前はMCP側にガードが無く、
       // done指定がそのまま通って「AIが自主的にDoneへ移動」する事故が起きた
       const r = createCardsAsAgent(cards as any);
@@ -176,12 +182,17 @@ export function buildMcpServer(onEvent: (kind: ViewEvent) => void): McpServer {
             due: z.string().nullable().optional().describe(`${DUE_DESCRIPTION}。解除はnull`),
             blocked_by: z.array(z.number().int()).nullable().optional().describe(`${BLOCKED_BY_DESCRIPTION}。全置換で、解除はnull`),
             rejected: flexBool.describe(REJECTED_DESCRIPTION),
-          })
+          // #245: **未知キーを削らない。**既定の strip だと共通の契約に届く前に消え、
+          // 「指定したのに保存されず、それでも成功」になる
+          }).passthrough()
         ),
         sync_token: SYNC_TOKEN_ON_WRITE,
       },
     },
     async ({ updates, sync_token }) => {
+      const gate = parseToolArgs("update_cards", { updates }, LANES);
+      if (!gate.ok) return text({ ok: false, note: gate.note });
+      updates = gate.args.updates;
       const { ok, status, updated, note, conflicts, notFound, badDue } = updateCardsAsAgent(updates as any);
       onEvent("board");
       return text({
@@ -241,7 +252,11 @@ export function buildMcpServer(onEvent: (kind: ViewEvent) => void): McpServer {
       description: SEARCH_DESCRIPTION,
       inputSchema: { terms: z.array(z.string()).describe("検索語(最大10)。言い換え・英日表記を並べる") },
     },
-    async ({ terms }) => text(searchResult(searchCards(terms)))
+    async ({ terms }) => {
+      const gate = parseToolArgs("search_cards", { terms }, LANES);
+      if (!gate.ok) return text({ ok: false, note: gate.note });
+      return text(searchResult(searchCards(gate.args.terms)));
+    }
   );
 
   // #108: 記録へのSQL窓口。チャットにしか無く、MCP越しの外部エージェントからは引けなかった。
@@ -278,6 +293,9 @@ export function buildMcpServer(onEvent: (kind: ViewEvent) => void): McpServer {
       },
     },
     async ({ status, ids, sync_token }) => {
+      const gate = parseToolArgs("reorder_cards", { status, ids }, LANES);
+      if (!gate.ok) return text({ ok: false, note: gate.note });
+      ({ status, ids } = gate.args);
       const r = reorderCards(ids, status as CardStatus);
       onEvent("board");
       return text({ ...reorderResult(r), ...boardUpdate(sync_token) });
@@ -335,6 +353,9 @@ export function buildMcpServer(onEvent: (kind: ViewEvent) => void): McpServer {
       },
     },
     async ({ text: t, version }) => {
+      const gate = parseToolArgs("update_project_context", { text: t, version }, LANES);
+      if (!gate.ok) return text({ ok: false, note: gate.note });
+      ({ text: t, version } = gate.args);
       const r = setProjectContext(t, version);
       // 外部エージェントが書き換えたときも、開いている画面に伝える (入口で挙動を変えない)
       if (r.ok) onEvent("context");

@@ -242,7 +242,8 @@ test("create_cards: 契約どおりなら作れる", async () => {
   assert.equal(r.created.length, 1);
 });
 
-// ---- **入口が増えたら気づく。**#114 で「MCPが増えて素通り」を踏んでいる ----
+// ---- ツール名の抜けを見る。**入口が増えたことは検出しない** ----
+// (それは toolGate.test.ts の仕事。ここで担保しているつもりだったのが誤りだった #245)
 
 test("チャットが宣言している全ツールに、引数の契約がある", () => {
   const declared = new Set(buildTools([]).map((t: any) => t.function.name));

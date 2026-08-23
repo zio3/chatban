@@ -259,6 +259,10 @@ export function buildTools(lanes: CustomLane[]): OpenAI.Chat.Completions.ChatCom
               type: "object",
               properties: {
                 title: { type: "string" },
+                // #245: status と summary はMCPだけが出していた。**内蔵チャットは作成時に置けると知らず**、
+                // 作ってから update_cards で直す往復をしていた (Codexレビュー指摘)
+                status: { type: "string", enum: STATUS_VALUES, description: `省略時はtodo。${STATUS_DESC}` },
+                summary: { type: "string", description: SUMMARY_DESCRIPTION },
                 context: { type: "string", description: "登録に至った経緯・会話で出た論点・決まったこと。相談や議論の流れから登録するときは必ず書く (タイトルだけでは背景が失われる)" },
                 due: { type: "string", description: DUE_DESCRIPTION },
                 blocked_by: { type: "array", items: { type: "integer" }, description: BLOCKED_BY_DESCRIPTION },

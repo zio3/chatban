@@ -128,7 +128,7 @@ function CardTile({
   const depsUnresolved = card.blockedBy?.some((id) => openIds?.has(id)) ?? false;
   return (
     <div
-      data-testid={`task-card-${card.id}`}
+      data-testid={`card-tile-${card.id}`}
       onClick={() => onOpen?.(card.id)}
       className={`rounded-lg border bg-white p-2.5 shadow-sm ${approved ? "border-emerald-400 ring-1 ring-emerald-300" : "border-slate-200"} ${overlay ? "rotate-2 shadow-lg" : ""} ${onOpen ? "cursor-pointer hover:border-indigo-300" : ""}`}
     >

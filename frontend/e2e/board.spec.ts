@@ -64,23 +64,23 @@ test("ボードが4列+件数バッジで表示される", async ({ page }) => {
 test("D&Dで列間移動しstatusが即時更新・リロード後も維持", async ({ page }) => {
   const id = await createCard("E2E: 列間移動テスト");
   await page.goto("/");
-  const card = page.getByTestId(`task-card-${id}`);
+  const card = page.getByTestId(`card-tile-${id}`);
   await expect(card).toBeVisible();
 
   await drag(page, card, page.getByTestId("column-review"));
-  await expect(page.getByTestId("column-review").getByTestId(`task-card-${id}`)).toBeVisible();
+  await expect(page.getByTestId("column-review").getByTestId(`card-tile-${id}`)).toBeVisible();
   await expect.poll(() => getCardStatus(id)).toBe("review");
 
   await page.reload();
-  await expect(page.getByTestId("column-review").getByTestId(`task-card-${id}`)).toBeVisible();
+  await expect(page.getByTestId("column-review").getByTestId(`card-tile-${id}`)).toBeVisible();
 });
 
 test("列内並び替えがリロード後も維持される", async ({ page }) => {
   const a = await createCard("E2E: 並び替えA");
   const b = await createCard("E2E: 並び替えB");
   await page.goto("/");
-  const cardA = page.getByTestId(`task-card-${a}`);
-  const cardB = page.getByTestId(`task-card-${b}`);
+  const cardA = page.getByTestId(`card-tile-${a}`);
+  const cardB = page.getByTestId(`card-tile-${b}`);
   await expect(cardB).toBeVisible();
 
   // B を A の位置(上)へドラッグ → B, A の順になる
@@ -89,8 +89,8 @@ test("列内並び替えがリロード後も維持される", async ({ page }) 
   async function orderInTodo(): Promise<number[]> {
     const ids = await page
       .getByTestId("column-todo")
-      .locator("[data-testid^='task-card-']")
-      .evaluateAll((els) => els.map((el) => Number(el.getAttribute("data-testid")!.replace("task-card-", ""))));
+      .locator("[data-testid^='card-tile-']")
+      .evaluateAll((els) => els.map((el) => Number(el.getAttribute("data-testid")!.replace("card-tile-", ""))));
     return ids.filter((id) => id === a || id === b);
   }
   await expect.poll(orderInTodo).toEqual([b, a]);
@@ -103,7 +103,7 @@ test("列内並び替えがリロード後も維持される", async ({ page }) 
 test("更新失敗時はロールバックしトースト表示、リトライで復帰", async ({ page }) => {
   const id = await createCard("E2E: 失敗リトライテスト");
   await page.goto("/");
-  const card = page.getByTestId(`task-card-${id}`);
+  const card = page.getByTestId(`card-tile-${id}`);
   await expect(card).toBeVisible();
 
   // PATCH を強制失敗させる
@@ -114,42 +114,42 @@ test("更新失敗時はロールバックしトースト表示、リトライ�
 
   await expect(page.getByTestId("toast")).toBeVisible();
   // ロールバックでtodo列に戻っている + サーバー側は未変更
-  await expect(page.getByTestId("column-todo").getByTestId(`task-card-${id}`)).toBeVisible();
+  await expect(page.getByTestId("column-todo").getByTestId(`card-tile-${id}`)).toBeVisible();
   expect(await getCardStatus(id)).toBe("todo");
 
   // 障害解除してリトライ → 移動が成立しトーストが消える
   await page.unroute(`**/api/cards/${id}`);
   await page.getByTestId("toast").getByRole("button", { name: "リトライ" }).click();
   await expect(page.getByTestId("toast")).toBeHidden();
-  await expect(page.getByTestId("column-review").getByTestId(`task-card-${id}`)).toBeVisible();
+  await expect(page.getByTestId("column-review").getByTestId(`card-tile-${id}`)).toBeVisible();
   await expect.poll(() => getCardStatus(id)).toBe("review");
 });
 
 test("DoneへはD&Dで移動できない (検収ボタン経由のみ) (#57)", async ({ page }) => {
   const id = await createCard("E2E: Doneドロップ禁止テスト");
   await page.goto("/");
-  const card = page.getByTestId(`task-card-${id}`);
+  const card = page.getByTestId(`card-tile-${id}`);
   await expect(card).toBeVisible();
 
   // Done列へドラッグしても動かない
   await drag(page, card, page.getByTestId("column-done"));
-  await expect(page.getByTestId("column-todo").getByTestId(`task-card-${id}`)).toBeVisible();
+  await expect(page.getByTestId("column-todo").getByTestId(`card-tile-${id}`)).toBeVisible();
   expect(await getCardStatus(id)).toBe("todo");
 });
 
 test("Review列: 検収OKチェック→一括確定でdoneになる (チェックだけでは動かない) (#57)", async ({ page }) => {
   const id = await createCard("E2E: 検収テスト", "review");
   await page.goto("/");
-  await expect(page.getByTestId("column-review").getByTestId(`task-card-${id}`)).toBeVisible();
+  await expect(page.getByTestId("column-review").getByTestId(`card-tile-${id}`)).toBeVisible();
 
   // チェックはマーキングのみ (Reviewに留まる)
   await page.getByTestId(`approve-${id}`).check();
-  await expect(page.getByTestId("column-review").getByTestId(`task-card-${id}`)).toBeVisible();
+  await expect(page.getByTestId("column-review").getByTestId(`card-tile-${id}`)).toBeVisible();
   expect(await getCardStatus(id)).toBe("review");
 
   // 一括確定ボタンでdoneへ
   await page.getByTestId("approve-commit").click();
-  await expect(page.getByTestId("column-done").getByTestId(`task-card-${id}`)).toBeVisible();
+  await expect(page.getByTestId("column-done").getByTestId(`card-tile-${id}`)).toBeVisible();
   await expect.poll(() => getCardStatus(id)).toBe("done");
 });
 
@@ -167,19 +167,19 @@ test("プロジェクト: 切り替えるとボードが入れ替わり、#IDは
   const pid = created.project.id as number;
 
   await page.goto("/");
-  await expect(page.getByTestId(`task-card-${inFirst}`)).toBeVisible();
+  await expect(page.getByTestId(`card-tile-${inFirst}`)).toBeVisible();
 
   // 詳細パネルを開いたまま切り替える (前プロジェクトのタスクが残ると危険)
-  await page.getByTestId(`task-card-${inFirst}`).click();
-  await expect(page.getByTestId("task-detail-panel")).toBeVisible();
+  await page.getByTestId(`card-tile-${inFirst}`).click();
+  await expect(page.getByTestId("card-detail-panel")).toBeVisible();
 
   await page.getByTestId("project-select").selectOption(String(pid));
   await expect(page).toHaveURL(new RegExp(`/p/${pid}$`)); // #97: 表示中のプロジェクトはURLが持つ
 
   // ページ遷移なのでパネルは残らない
-  await expect(page.getByTestId("task-detail-panel")).toBeHidden();
+  await expect(page.getByTestId("card-detail-panel")).toBeHidden();
   // 元プロジェクトのタスクは見えない (ファイルごと別なので混ざらない)
-  await expect(page.getByTestId(`task-card-${inFirst}`)).toBeHidden();
+  await expect(page.getByTestId(`card-tile-${inFirst}`)).toBeHidden();
   // 新プロジェクトの最初のタスクは #1 (対象プロジェクトはヘッダで明示する #97)
   const res = await fetch(`${API}/api/cards`, {
     method: "POST",
@@ -191,17 +191,17 @@ test("プロジェクト: 切り替えるとボードが入れ替わり、#IDは
   // 元へ戻すと元のタスクが復活する
   await page.getByTestId("project-select").selectOption("1");
   await expect(page).toHaveURL(/\/p\/1$/);
-  await expect(page.getByTestId(`task-card-${inFirst}`)).toBeVisible();
+  await expect(page.getByTestId(`card-tile-${inFirst}`)).toBeVisible();
 });
 
 test("削除はゴミ箱行きで復元できる。実体を消せるのはゴミ箱からだけ (#102)", async ({ page }) => {
   const id = await createCard("E2E: ゴミ箱テスト");
   await page.goto("/");
-  await expect(page.getByTestId(`task-card-${id}`)).toBeVisible();
+  await expect(page.getByTestId(`card-tile-${id}`)).toBeVisible();
 
   // チャット/MCPと同じ経路 (DELETE /api/cards/:id) はゴミ箱行き
   await fetch(`${API}/api/cards/${id}`, { method: "DELETE" });
-  await expect(page.getByTestId(`task-card-${id}`)).toBeHidden();
+  await expect(page.getByTestId(`card-tile-${id}`)).toBeHidden();
 
   // 実体は残っている
   const trashed = await (await fetch(`${API}/api/trash`)).json();
@@ -211,7 +211,7 @@ test("削除はゴミ箱行きで復元できる。実体を消せるのはゴ�
   await page.getByRole("button", { name: "🗑 ゴミ箱" }).click();
   await page.getByRole("button", { name: "戻す" }).first().click();
   await page.getByRole("button", { name: "ボード" }).click();
-  await expect(page.getByTestId(`task-card-${id}`)).toBeVisible();
+  await expect(page.getByTestId(`card-tile-${id}`)).toBeVisible();
 
   // 完全削除は二段階 (押し間違いで消えない)
   await fetch(`${API}/api/cards/${id}`, { method: "DELETE" });
@@ -297,13 +297,13 @@ test("タブごとに別プロジェクトを開ける。片方の更新はも�
 test("Done列のカードはドラッグで持ち出せない (#105)", async ({ page }) => {
   const id = await createDoneCard("E2E: Doneから持ち出し禁止");
   await page.goto("/");
-  const card = page.getByTestId("column-done").getByTestId(`task-card-${id}`);
+  const card = page.getByTestId("column-done").getByTestId(`card-tile-${id}`);
   await expect(card).toBeVisible();
 
   // Todo列へドラッグしても動かない (検収後アーカイブ完了までの間に持ち出せると
   // あとから走るアーカイブ処理が archived=1 にして幽霊タスクになる)
   await drag(page, card, page.getByTestId("column-todo"));
-  await expect(page.getByTestId("column-done").getByTestId(`task-card-${id}`)).toBeVisible();
+  await expect(page.getByTestId("column-done").getByTestId(`card-tile-${id}`)).toBeVisible();
   expect(await getCardStatus(id)).toBe("done");
 });
 
@@ -515,14 +515,14 @@ test("依存チップをクリックすると依存先の詳細が開く (カー
   });
 
   await page.goto("/");
-  const chip = page.getByTestId(`task-card-${id}`).getByTestId(`dep-chip-${depId}`);
+  const chip = page.getByTestId(`card-tile-${id}`).getByTestId(`dep-chip-${depId}`);
   await expect(chip).toBeVisible();
   // ホバーで中身が読める (標準のツールチップ。レイアウトを覆わない)
   await expect(chip).toHaveAttribute("title", /依存先のタスク/);
 
   // クリックで開くのは依存「先」。依存元(カード自体)ではない
   await chip.click();
-  const panel = page.getByTestId("task-detail-panel");
+  const panel = page.getByTestId("card-detail-panel");
   await expect(panel).toContainText("依存先のタスク");
   await expect(panel).not.toContainText("依存元のタスク");
 });
@@ -537,10 +537,10 @@ test("パネルから依存を双方向に辿れる (これ待ち → 待ち) (#
   });
 
   await page.goto("/");
-  const panel = page.getByTestId("task-detail-panel");
+  const panel = page.getByTestId("card-detail-panel");
 
   // 依存先を開くと「これ待ち」に依存元が出る (逆引き。片方向だと行き止まりになる)
-  await page.getByTestId(`task-card-${depId}`).click();
+  await page.getByTestId(`card-tile-${depId}`).click();
   await expect(panel).toContainText("これ待ち");
   await panel.getByTestId(`dep-chip-${id}`).click();
 
@@ -1803,7 +1803,7 @@ test("チャットに番号だけ打つと、LLMを呼ばずにそのタスク�
   // `#<id>` で開く
   await input.fill(`#${id}`);
   await input.press("Enter");
-  await expect(page.getByTestId("task-detail-panel")).toBeVisible();
+  await expect(page.getByTestId("card-detail-panel")).toBeVisible();
   await expect(page.getByText(`#${id} をひらきます。`)).toBeVisible();
   // 番号ジャンプはLLMへ行く手前で横取りするので、応答待ちの「考え中…」は出ない。
   //
@@ -1817,11 +1817,11 @@ test("チャットに番号だけ打つと、LLMを呼ばずにそのタスク�
   await expect(page.getByText("考え中…")).toBeHidden();
 
   // 井桁なしの数字だけでも開く (パネルを閉じてから確かめる)
-  await page.getByTestId("task-detail-panel").getByTitle("閉じる").click();
-  await expect(page.getByTestId("task-detail-panel")).toBeHidden();
+  await page.getByTestId("card-detail-panel").getByTitle("閉じる").click();
+  await expect(page.getByTestId("card-detail-panel")).toBeHidden();
   await input.fill(String(id));
   await input.press("Enter");
-  await expect(page.getByTestId("task-detail-panel")).toBeVisible();
+  await expect(page.getByTestId("card-detail-panel")).toBeVisible();
 });
 
 test("存在しない番号は横取りせず、普通の発言としてLLMへ渡す (#197)", async ({ page }) => {
@@ -1839,7 +1839,7 @@ test("存在しない番号は横取りせず、普通の発言としてLLMへ�
   // 残しているのは、横取りしない経路がチャットへ流れることを端から端まで見たいため。
   // **コメントで「無駄」と書いても課金は止まらない** — 止めるならテスト設計を変える
   // (番号ジャンプの分岐だけを見る形にする)。それは別の判断なのでここではやらない
-  await expect(page.getByTestId("task-detail-panel")).toBeHidden();
+  await expect(page.getByTestId("card-detail-panel")).toBeHidden();
   await expect(page.getByText("999999")).toBeVisible();
 });
 
@@ -1980,9 +1980,9 @@ test("期限切れは詳細パネルでも超過として出る (#228)", async (
   });
 
   await page.goto("/");
-  await expect(page.getByTestId(`task-card-${id}`)).toContainText("超過");
-  await page.getByTestId(`task-card-${id}`).click();
-  await expect(page.getByTestId("task-detail-panel")).toContainText("超過");
+  await expect(page.getByTestId(`card-tile-${id}`)).toContainText("超過");
+  await page.getByTestId(`card-tile-${id}`).click();
+  await expect(page.getByTestId("card-detail-panel")).toContainText("超過");
 });
 
 // #226: 経緯メモの本文は板の配信に載せていない (ペイロードの大半を占めていた)。
@@ -2005,8 +2005,8 @@ test("経緯メモは板の配信に載らないが、パネルを開くと読�
 
   // 開けば読める (アーカイブ済みカードと同じ GET /api/cards/:id を通る)
   await page.goto("/");
-  await page.getByTestId(`task-card-${id}`).click();
-  const panel = page.getByTestId("task-detail-panel");
+  await page.getByTestId(`card-tile-${id}`).click();
+  const panel = page.getByTestId("card-detail-panel");
   await expect(panel).toContainText("最初に決めたこと");
 
   // 開いたまま他所から書き換えられても、版が上がるので取り直す
@@ -2030,13 +2030,13 @@ test("カードを切り替えるとパネルは作り直される (前のカー
   const b = await createCard("次に開くカード");
   await page.goto("/");
 
-  const panel = page.getByTestId("task-detail-panel");
-  await page.getByTestId(`task-card-${a}`).click();
+  const panel = page.getByTestId("card-detail-panel");
+  await page.getByTestId(`card-tile-${a}`).click();
   const input = panel.locator("textarea");
   await expect(input).toHaveAttribute("placeholder", new RegExp(`#${a}`));
   await input.fill("#Aに向けて書きかけた文");
 
-  await page.getByTestId(`task-card-${b}`).click();
+  await page.getByTestId(`card-tile-${b}`).click();
   await expect(input).toHaveAttribute("placeholder", new RegExp(`#${b}`));
   await expect(input, "前のカードの入力が持ち越されている (パネルが作り直されていない)").toHaveValue("");
 });
@@ -2062,8 +2062,8 @@ test("添付を受けない板では、2つあるチャット面の両方で入�
   await expect(page.getByPlaceholder(/スクショやPDFも貼れます/)).toHaveCount(0);
 
   // 2. カード専用チャット (ここが届いていなかった側)
-  await page.getByTestId(`task-card-${id}`).click();
-  const panel = page.getByTestId("task-detail-panel");
+  await page.getByTestId(`card-tile-${id}`).click();
+  const panel = page.getByTestId("card-detail-panel");
   await expect(panel).toBeVisible();
   await expect(panel.getByTitle(/画像\/PDFを添付/), "カード専用チャットに能力フラグが届いていない").toHaveCount(0);
 });
@@ -2164,9 +2164,10 @@ test.describe("失敗のあとに再送を出してよいか (#123 の線)", () 
 });
 
 // #232 第3弾のレビュー指摘 (2026-08-23): **AI応答の #NN をクリックして詳細が開く経路に番人が無かった。**
-// linkifyMentions は `[#NN](#task-NN)` を作り、レンダラが `/^#task-(\d+)$/` で拾う。
-// **この2つは対でしか意味がない**のに、識別子の一括改名でレンダラ側だけ `#card-` に変わり、
-// クリックが黙って効かなくなった。既存76本は全部通ったまま素通りしている。
+// linkifyMentions は `[#NN](#card-NN)` を作り、レンダラが `/^#card-(\d+)$/` で拾う。
+// **この2つは対でしか意味がない。**当時アンカーは `#task-NN` で、識別子の一括改名で
+// レンダラ側だけが `#card-` に変わり、クリックが黙って効かなくなった
+// (既存76本は全部通ったまま素通りしていた)。アンカー自体は #232 の最後に両側そろえて改名した。
 //
 // アンカーは data-testid と同じ**契約**なので、片方だけ動かせないことをここで固定する。
 // LLMは呼ばない (page.route でチャットの応答を作る)。
@@ -2185,6 +2186,6 @@ test("AI応答の #NN をクリックすると、そのカードの詳細が開�
   // 素の <a> ではなくボタンとして描かれていること自体が、レンダラが拾えている証拠
   // 発言者の吹き出しは複数あるので、AI応答の中に絞る
   await page.locator(".chat-md").last().getByRole("button", { name: `#${id}` }).click();
-  await expect(page.getByTestId("task-detail-panel")).toBeVisible();
-  await expect(page.getByTestId("task-detail-panel")).toContainText("メンションから開くカード");
+  await expect(page.getByTestId("card-detail-panel")).toBeVisible();
+  await expect(page.getByTestId("card-detail-panel")).toContainText("メンションから開くカード");
 });

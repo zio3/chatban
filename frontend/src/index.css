@@ -5,12 +5,12 @@ html, body, #root {
 }
 
 /* ボードカードのハイライトフラッシュ (詳細パネルの「ボードで表示」) */
-@keyframes task-flash-kf {
+@keyframes card-flash-kf {
   0%, 100% { box-shadow: 0 0 0 0 rgba(99, 102, 241, 0); }
   25%, 75% { box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.8); }
 }
-.task-flash {
-  animation: task-flash-kf 1.6s ease-in-out;
+.card-flash {
+  animation: card-flash-kf 1.6s ease-in-out;
 }
 
 /* チャット内のMarkdown表示 (吹き出しに収まる控えめなスタイル) */

@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import Database from "better-sqlite3";
-import { existsSync, mkdirSync, readdirSync, renameSync, unlinkSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, renameSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { log } from "./log.js";
 import { CONTEXT_TEMPLATE } from "./contextTemplate.js";

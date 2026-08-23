@@ -23,11 +23,6 @@ function facts(over: Partial<CardFacts> = {}): CardFacts {
   };
 }
 
-/** 本番の cardIndex と同じ表現。区切り文字での連結にすると要素の中身と衝突する */
-function card(title: string, elements: string[]): string {
-  return JSON.stringify([title, elements]);
-}
-
 function board(cards: [number, CardFacts][] = [], projectContextVersion = 1) {
   return { cards: new Map(cards), projectContextVersion };
 }

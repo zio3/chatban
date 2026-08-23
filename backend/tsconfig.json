@@ -4,6 +4,11 @@
     "module": "ESNext",
     "moduleResolution": "bundler",
     "strict": true,
+    // #240: 未使用のまま溜まるのを止める。撤去した機能の import が残ると、
+    // 「まだ使っている」ように読めて撤去の判断を鈍らせる (#189 の逆で、
+    // 使っていないものが使っているように見える形)
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
     "types": ["node"],

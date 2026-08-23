@@ -1,6 +1,6 @@
 import { hooks } from "./hooks.js";
 import { log } from "./log.js";
-import { admin, currentProjectId, customLanes, db, projectReadonly } from "./store.js";
+import { customLanes, db, projectReadonly } from "./store.js";
 import { decodeUnicodeEscapes } from "./text.js";
 import type { CustomLane, Card, CardStatus } from "./types.js";
 

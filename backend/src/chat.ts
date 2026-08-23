@@ -6,10 +6,8 @@ import {
   restoreCardsAsAgent,
   updateCardsAsAgent,
 } from "./agentWrite.js";
-import { cleanAgentText } from "./text.js";
 import { getBoardPromptSection } from "./promptState.js";
 import {
-  createCard,
   trashCard,
   getCard,
   listCards,
@@ -19,8 +17,6 @@ import {
   reorderCards,
   searchCards,
   setProjectContext,
-  updateCard,
-  updateCards,
 } from "./db.js";
 import { currentProjectId, customLanes } from "./store.js";
 import { chatCompletion } from "./llm.js";
@@ -28,7 +24,7 @@ import { getModel } from "./config.js";
 import { foldedContainer } from "./archive.js";
 import { suggestBootGraceMs } from "./demoMode.js";
 import { log } from "./log.js";
-import type { CustomLane, CardStatus, UiAction, ViewEvent } from "./types.js";
+import type { CustomLane, UiAction, ViewEvent } from "./types.js";
 
 export interface ToolTrace {
   tool: string;
@@ -409,7 +405,7 @@ export function buildTools(lanes: CustomLane[]): OpenAI.Chat.Completions.ChatCom
 // プロンプトのバイト列が揺れる余地 (キャッシュが外れる原因) も1つ減っている
 
 
-async function execTool(name: string, args: any, uiActions: UiAction[], events: Set<string>): Promise<unknown> {
+async function execTool(name: string, args: any, events: Set<string>): Promise<unknown> {
   switch (name) {
     case "create_cards": {
       // #114: 書き込みは agentWrite に集約 (チャットとMCPで同じガードを通す)
@@ -896,7 +892,7 @@ async function runChatTurnInner(
         }
         log("tool", `${tc.function.name} ${tc.function.arguments?.slice(0, 200)}`);
         onProgress?.(TOOL_LABELS[tc.function.name] ?? tc.function.name);
-        const result = await execTool(tc.function.name, args, uiActions, events as Set<string>);
+        const result = await execTool(tc.function.name, args, events as Set<string>);
         trace.push({ tool: tc.function.name, input: args, result });
         messages.push({ role: "tool", tool_call_id: tc.id, content: JSON.stringify(result) });
       }

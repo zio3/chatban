@@ -113,8 +113,11 @@ for (const { word, why, allow } of REMOVED_UI) {
 // 集めた文言が空だと、上のテストは全部素通りして「守っている」ように見える
 // (rows をループするだけで rows が空でも通るテストを実際に消した経緯がある — #180 の教訓)。
 //
-// **3種それぞれについて実在の文言を名指しで確かめる。**1周目は placeholder (引用符付き属性) しか
-// 見ておらず、**JSX直書きを1つも拾えていないのにこの健全性テストが通っていた** (レビュー指摘 P2)。
+// **3種それぞれについて、件数と実在の文言を名指しで確かめる。**ここは2回甘かった:
+// 1周目は placeholder (引用符付き属性) しか見ておらず、**JSX直書きを1つも拾えていないのに通っていた**
+// (レビュー指摘 P2)。2周目は「3種」と名乗りながら、確かめていたのは文字列とJSXの2種だけで、
+// **テンプレートの分岐が壊れても10本とも通る**状態だった (レビュー指摘 P3)。
+// 番人の健全性テストは、番人本体より甘くなりやすい。
 test("3種の文言をどれも拾えている (集める側が壊れたら気づく)", () => {
   const copy = uiCopy();
   expect(copy.length, "日本語の文言が1つも拾えていない").toBeGreaterThan(50);
@@ -122,8 +125,10 @@ test("3種の文言をどれも拾えている (集める側が壊れたら気�
   const kinds = (k: string) => copy.filter((c) => c.kind === k);
   expect(kinds("文字列").length, "文字列リテラルを拾えていない").toBeGreaterThan(10);
   expect(kinds("JSX").length, "JSXのテキストノードを拾えていない").toBeGreaterThan(10);
+  expect(kinds("テンプレート").length, "テンプレートリテラルの地の文を拾えていない").toBeGreaterThan(0);
 
   const says = (t: string) => copy.some((c) => c.text.includes(t));
   expect(says("ボードに話しかける"), "属性の文言 (placeholder) が拾えていない").toBe(true);
   expect(says("畳んだ完了"), "JSX直書きの文言が拾えていない").toBe(true);
+  expect(says("移動に失敗しました"), "テンプレート文言 (エラー表示) が拾えていない").toBe(true);
 });

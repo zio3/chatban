@@ -277,7 +277,7 @@ export function updateCardsAsAgent(updates: AgentCardUpdate[]): {
     };
   });
 
-  // 一括更新は db 層でまとめて処理 (完了遷移の通知=要約再生成が1回で済む #60)
+  // 一括更新は db 層でまとめて処理 (完了遷移の通知=Done列の畳み直しが1回で済む #60)
   const updated = updateCards(patches.filter((p): p is NonNullable<typeof p> => p !== null));
   const notes = [
     // 件数を先に言う。「何件通って何件通らなかったか」を数えさせない

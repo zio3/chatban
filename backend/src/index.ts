@@ -350,7 +350,7 @@ app.post("/api/cards/approve", (req, res) => {
   });
 });
 
-// アーカイブ済み含む単一カード取得 (#59: 要約カードの#xxリンクから詳細を開く用)
+// アーカイブ済み含む単一カード取得 (#59: 「畳んだ完了」の箱の行や #xx リンクから詳細を開く用)
 app.get("/api/cards/:id", (req, res) => {
   const card = getCard(Number(req.params.id));
   if (!card) return res.status(404).json({ error: "not found" });

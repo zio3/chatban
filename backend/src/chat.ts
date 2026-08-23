@@ -75,7 +75,7 @@ export function statusDescription(lanes: CustomLane[]): string {
 export function reorderableStatuses(lanes: CustomLane[]): string[] {
   return [...REORDERABLE_STATUSES, ...lanes.map((l) => l.key)];
 }
-/** 並べ替えられる列。done は検収後すぐ要約カードへ畳まれて一覧から消えるので対象にしない (#105)。
+/** 並べ替えられる列。done は人が並べる列ではない (検収の結果が並ぶだけで、いずれ箱に畳まれる) ので対象にしない (#105)。
  * これもチャットとMCPで共有する — 同じ一覧を2か所に書くと必ず片方だけ直る */
 export const REORDERABLE_STATUSES = ["todo", "inprogress", "review"] as const;
 
@@ -505,7 +505,7 @@ export function buildSystemPrompt(cardFocus?: ReturnType<typeof getCard>, view?:
     "- create_cards / update_cards の報告では、必ず割り当てられたカードID を「#12として登録しました」の形式で明記する (ユーザーは以後この番号で参照する)。",
     "- 相談・議論の流れからカードを登録するときは、create_cards の context に登録に至った経緯を要約して入れる。経緯のない単発の明確な依頼では省略可。",
     "- ただし判断材料が足りないときや、影響が大きいと感じたときは、実行する前にチャットで案を出して聞く。どちらにするかは文脈で決めてよい。",
-    "- 「終わりました」等の完了報告は status=review に置き、「Reviewに置いたので確認OKなら承認を」と一言返す。勝手に done にしない (doneは検収済みの意味で、即アーカイブされる)。",
+    "- 「終わりました」等の完了報告は status=review に置き、「Reviewに置いたので確認OKなら承認を」と一言返す。勝手に done にしない (doneは人間の検収済みという意味。確定したカードはしばらく個別に残り、次の検収のときに「畳んだ完了」の箱へ入る)。",
     "- あなたは done に変更できない (ツールが受け付けず review に置き換わる)。完了・却下・承認はすべて status=review に置き、done への確定はボードのReview列の検収チェック(人間の操作)だけが行う。「doneにして」「まとめて承認」と言われたら review に置いた上で「確定はReview列の検収チェックからお願いします」と案内する。",
     "- 共通の前提・決まりごと(締切、方針、用語など)を伝えられたら update_project_context で前提情報に反映する。",
     "- 特定カードの経緯・決定事項・補足(「#22は◯◯方式でいくことにした」等)は update_cards の context_append でそのカードの経緯メモに1行足す。",

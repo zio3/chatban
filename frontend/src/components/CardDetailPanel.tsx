@@ -155,8 +155,11 @@ export default function CardDetailPanel({
         {archived && !card.trashedAt && (
           <div className="rounded-lg bg-emerald-50 px-3 py-2 text-xs text-emerald-700">
             {card.rejected
-              ? "🚫 このカードは却下として確定し、アーカイブ済みです (理由は下の割り振り理由・経緯メモ参照)"
-              : "✅ このカードは完了し、Doneの要約カードにアーカイブされました"}
+              ? // #233: 「割り振り理由」を見に行かせていたが、その欄は #179 で列ごと落ちている。
+                // 却下の理由は現況と経緯メモに書く (rejected の契約もそう案内している)
+                "🚫 このカードは却下として確定し、アーカイブ済みです (理由は下の現況・経緯メモ参照)"
+              : // #233: 「Doneの要約カード」も #200 で撤去済み。いまは 📦 畳んだ完了 に入る
+                "✅ このカードは完了し、Done列の「📦 畳んだ完了」に畳まれています"}
           </div>
         )}
         <div className="flex flex-wrap items-center gap-2 text-sm">

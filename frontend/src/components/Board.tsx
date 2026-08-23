@@ -4,9 +4,9 @@ import { SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-
 import { CSS } from "@dnd-kit/utilities";
 import { useState } from "react";
 import { dueBadge, statusLabel } from "../types";
-import type { CustomLane, FoldedTask, Task, TaskStatus } from "../types";
+import type { CustomLane, FoldedCard, Card, CardStatus } from "../types";
 
-type Column = { key: TaskStatus; label: string; accent: string };
+type Column = { key: CardStatus; label: string; accent: string };
 
 /** 列数ごとの grid 指定。**クラス名を `grid-cols-${n}` で組み立てない** —
  * Tailwind はソースを文字列として走査するので、実行時に作った名前はCSSが生成されず無効になる */
@@ -37,7 +37,7 @@ function columnsFor(lanes: CustomLane[]): Column[] {
 
 export interface MovePayload {
   id: number;
-  status: TaskStatus;
+  status: CardStatus;
   /** 列内の挿入先index (末尾ならその列の件数) */
   index: number;
 }
@@ -66,7 +66,7 @@ export function DepChip({
   lanes = [],
 }: {
   id: number;
-  dep?: Task;
+  dep?: Card;
   unresolved: boolean;
   onOpen?: (id: number) => void;
   /** #19: 依存先が任意レーンに居るとき、吹き出しに表示名を出すため。
@@ -102,17 +102,17 @@ ${dep.summary}` : ""}
   );
 }
 
-function TaskCard({
-  task,
+function CardTile({
+  card,
   overlay = false,
   onOpen,
   approved,
   onToggleApproved,
   openIds,
-  taskById,
+  cardById,
   lanes = [],
 }: {
-  task: Task;
+  card: Card;
   overlay?: boolean;
   onOpen?: (id: number) => void;
   /** Review列のみ: 検収OKマーク状態 (#57)。Doneへの確定は列ヘッダーの一括ボタンで行う */
@@ -121,15 +121,15 @@ function TaskCard({
   /** 未完了カードIDの集合 (#41: 依存バッジの未解決判定用) */
   openIds?: Set<number>;
   /** 依存先の中身を引くための索引 (#111)。アーカイブ済みは載らない */
-  taskById?: Map<number, Task>;
+  cardById?: Map<number, Card>;
   /** #19: 依存バッジの吹き出しに任意レーンの表示名を出すため */
   lanes?: CustomLane[];
 }) {
-  const depsUnresolved = task.blockedBy?.some((id) => openIds?.has(id)) ?? false;
+  const depsUnresolved = card.blockedBy?.some((id) => openIds?.has(id)) ?? false;
   return (
     <div
-      data-testid={`task-card-${task.id}`}
-      onClick={() => onOpen?.(task.id)}
+      data-testid={`task-card-${card.id}`}
+      onClick={() => onOpen?.(card.id)}
       className={`rounded-lg border bg-white p-2.5 shadow-sm ${approved ? "border-emerald-400 ring-1 ring-emerald-300" : "border-slate-200"} ${overlay ? "rotate-2 shadow-lg" : ""} ${onOpen ? "cursor-pointer hover:border-indigo-300" : ""}`}
     >
       {/* 1行目: ID + タイトル。以前はここに却下/期限/依存のバッジも混ざっていて、
@@ -139,19 +139,19 @@ function TaskCard({
           IDの周りの空きが変わるのが気になる、として不採用 (zio判断) */}
       <div className="flex items-start justify-between gap-2">
         <span className="min-w-0 text-sm font-medium leading-snug">
-          <span className="mr-1 text-xs text-slate-500">#{task.id}</span>
-          {task.title}
+          <span className="mr-1 text-xs text-slate-500">#{card.id}</span>
+          {card.title}
         </span>
       </div>
       {/* 2行目: 状態のチップ。検収OKもここに畳む (以前はカード幅いっぱいの独立行で、
           Review列のカードだけ背が高かった)。何も無ければ行ごと出ない */}
-      {(task.rejected || task.due || (task.blockedBy?.length ?? 0) > 0 || onToggleApproved) && (
+      {(card.rejected || card.due || (card.blockedBy?.length ?? 0) > 0 || onToggleApproved) && (
         <div className="mt-1 flex flex-wrap items-center gap-1">
-          {task.rejected && (
+          {card.rejected && (
             <span className="rounded bg-rose-600 px-1.5 py-0.5 text-[10px] font-bold text-white">🚫 却下</span>
           )}
-          {task.due && <DueBadge due={task.due} />}
-          {task.blockedBy && task.blockedBy.length > 0 && (
+          {card.due && <DueBadge due={card.due} />}
+          {card.blockedBy && card.blockedBy.length > 0 && (
             <span
               className="text-[10px] text-slate-500"
               // #152: 「着手できません」と書いていたが、**コードは何も止めていない**
@@ -160,8 +160,8 @@ function TaskCard({
               title={depsUnresolved ? "終わっていない依存先があります (着手は止めません)" : "依存先はすべて完了済み"}
             >
               ⛓{" "}
-              {task.blockedBy.map((id) => (
-                <DepChip key={id} id={id} dep={taskById?.get(id)} unresolved={!!openIds?.has(id)} onOpen={onOpen} lanes={lanes} />
+              {card.blockedBy.map((id) => (
+                <DepChip key={id} id={id} dep={cardById?.get(id)} unresolved={!!openIds?.has(id)} onOpen={onOpen} lanes={lanes} />
               ))}
             </span>
           )}
@@ -176,9 +176,9 @@ function TaskCard({
             >
               <input
                 type="checkbox"
-                data-testid={`approve-${task.id}`}
+                data-testid={`approve-${card.id}`}
                 checked={!!approved}
-                onChange={() => onToggleApproved(task.id)}
+                onChange={() => onToggleApproved(card.id)}
                 className="h-3.5 w-3.5 accent-emerald-600"
               />
               検収OK
@@ -191,29 +191,29 @@ function TaskCard({
           以前はreasonに進捗が書き込まれていたが、原因はMCP側のツール契約にreasonの説明が
           無く、エージェントから見て用途不明の文字列欄になっていたこと */}
       {/* 3行目: いまどうなっているか */}
-      {task.summary && <p className="mt-1 text-xs text-slate-600">📝 {task.summary}</p>}
+      {card.summary && <p className="mt-1 text-xs text-slate-600">📝 {card.summary}</p>}
     </div>
   );
 }
 
 function SortableCard({
-  task,
+  card,
   onOpen,
   approved,
   onToggleApproved,
   openIds,
-  taskById,
+  cardById,
   lanes,
 }: {
-  task: Task;
+  card: Card;
   onOpen: (id: number) => void;
   approved?: boolean;
   onToggleApproved?: (id: number) => void;
   openIds?: Set<number>;
-  taskById?: Map<number, Task>;
+  cardById?: Map<number, Card>;
   lanes?: CustomLane[];
 }) {
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: task.id });
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: card.id });
   return (
     <div
       ref={setNodeRef}
@@ -222,13 +222,13 @@ function SortableCard({
       style={{ transform: CSS.Transform.toString(transform), transition }}
       className={`cursor-grab touch-none ${isDragging ? "opacity-30" : ""}`}
     >
-      <TaskCard
-        task={task}
+      <CardTile
+        card={card}
         onOpen={onOpen}
         approved={approved}
         onToggleApproved={onToggleApproved}
         openIds={openIds}
-        taskById={taskById}
+        cardById={cardById}
         lanes={lanes}
       />
     </div>
@@ -254,7 +254,7 @@ function renderRefs(text: string, onOpen: (id: number) => void) {
 
 // #200: Done列の2段目。直近24時間に畳んだカードをまとめた**1個だけ**の箱。
 // サーバーのメモリ上にしか無いので、再起動すると消える (中身は archived=1 でDBに残り、検索で引ける)
-function FoldedBox({ folded, onOpenTask }: { folded: FoldedTask[]; onOpenTask: (id: number) => void }) {
+function FoldedBox({ folded, onOpenCard }: { folded: FoldedCard[]; onOpenCard: (id: number) => void }) {
   const [open, setOpen] = useState(false);
   return (
     <div data-testid="folded-box" className="rounded-lg border border-emerald-300 bg-emerald-50 p-2.5 shadow-sm">
@@ -270,7 +270,7 @@ function FoldedBox({ folded, onOpenTask }: { folded: FoldedTask[]; onOpenTask: (
           {folded.map((t) => (
             <li key={t.id} className="text-xs leading-snug">
               <button
-                onClick={() => onOpenTask(t.id)}
+                onClick={() => onOpenCard(t.id)}
                 className="text-left text-slate-700 hover:text-emerald-700 hover:underline"
               >
                 <span className="text-slate-500">#{t.id}</span> {t.title}
@@ -285,20 +285,20 @@ function FoldedBox({ folded, onOpenTask }: { folded: FoldedTask[]; onOpenTask: (
 
 function Column({
   col,
-  tasks,
+  cards,
   folded,
-  onOpenTask,
+  onOpenCard,
   approvedIds,
   onToggleApproved,
   onCommitApproved,
   openIds,
-  taskById,
+  cardById,
   lanes,
 }: {
   col: Column;
-  tasks: Task[];
-  folded?: FoldedTask[];
-  onOpenTask: (id: number) => void;
+  cards: Card[];
+  folded?: FoldedCard[];
+  onOpenCard: (id: number) => void;
   /** Review列のみ: 検収OKマークの集合と一括確定 (#57) */
   approvedIds?: Set<number>;
   onToggleApproved?: (id: number) => void;
@@ -306,7 +306,7 @@ function Column({
   /** 未完了カードIDの集合 (#41: 依存バッジの未解決判定用) */
   openIds?: Set<number>;
   /** 依存先の中身を引くための索引 (#111)。アーカイブ済みは載らない */
-  taskById?: Map<number, Task>;
+  cardById?: Map<number, Card>;
   /** #19: 依存バッジの吹き出し用にカードへ流す */
   lanes?: CustomLane[];
 }) {
@@ -323,7 +323,7 @@ function Column({
       <div className="flex items-center justify-between px-1">
         <h2 className="text-xs font-bold uppercase tracking-wide text-slate-500">{col.label}</h2>
         <span className="flex items-center gap-1.5">
-          {onCommitApproved && tasks.length > 0 && (
+          {onCommitApproved && cards.length > 0 && (
             <button
               data-testid="approve-commit"
               onClick={onCommitApproved}
@@ -335,69 +335,69 @@ function Column({
           )}
           <span data-testid={`count-${col.key}`} className="rounded-full bg-slate-200 px-1.5 text-xs text-slate-500">
             {col.key === "done" && folded
-              ? `📦 ${folded.length + tasks.length}`
-              : tasks.length}
+              ? `📦 ${folded.length + cards.length}`
+              : cards.length}
           </span>
         </span>
       </div>
-      <SortableContext items={tasks.map((t) => t.id)} strategy={verticalListSortingStrategy}>
-        {tasks.map((t) =>
+      <SortableContext items={cards.map((t) => t.id)} strategy={verticalListSortingStrategy}>
+        {cards.map((t) =>
           // Done列の生カードはドラッグさせない。Doneへは入れられない(#57)ので、出られないほうが一貫する。
           // 戻したいときはチャットで「#xxを戻して」
           col.key === "done" ? (
-            <TaskCard key={t.id} task={t} onOpen={onOpenTask} openIds={openIds} taskById={taskById} lanes={lanes} />
+            <CardTile key={t.id} card={t} onOpen={onOpenCard} openIds={openIds} cardById={cardById} lanes={lanes} />
           ) : (
             <SortableCard
               key={t.id}
-              task={t}
-              onOpen={onOpenTask}
+              card={t}
+              onOpen={onOpenCard}
               approved={approvedIds?.has(t.id)}
               onToggleApproved={onToggleApproved}
               openIds={openIds}
-              taskById={taskById}
+              cardById={cardById}
               lanes={lanes}
             />
           )
         )}
-        {tasks.length === 0 && !(folded && folded.length > 0) && (
+        {cards.length === 0 && !(folded && folded.length > 0) && (
           <p className="rounded-lg border border-dashed border-slate-200 py-4 text-center text-xs text-slate-500">
             カードなし
           </p>
         )}
       </SortableContext>
       {/* #200: バラバラのDone(1段目)が上、畳んだ箱(2段目)がその下 */}
-      {folded && folded.length > 0 && <FoldedBox folded={folded} onOpenTask={onOpenTask} />}
+      {folded && folded.length > 0 && <FoldedBox folded={folded} onOpenCard={onOpenCard} />}
     </div>
   );
 }
 
 export default function Board({
-  tasks,
-  allTasks,
+  cards,
+  allCards,
   folded,
   lanes,
   onMove,
-  onOpenTask,
+  onOpenCard,
   approvedIds,
   onToggleApproved,
   onCommitApproved,
 }: {
-  tasks: Task[];
+  cards: Card[];
   /** 依存の判定に使う母集団。フィルタで隠れているものも含む全件 (#41/#90) */
-  allTasks: Task[];
-  folded: FoldedTask[];
+  allCards: Card[];
+  folded: FoldedCard[];
   /** #19: 有効な任意レーン (0〜2本)。空ならこれまでどおりの4列 */
   lanes: CustomLane[];
   onMove: (move: MovePayload) => void;
-  onOpenTask: (id: number) => void;
+  onOpenCard: (id: number) => void;
   approvedIds: Set<number>;
   onToggleApproved: (id: number) => void;
   onCommitApproved: () => void;
 }) {
-  const [active, setActive] = useState<Task | null>(null);
+  const [active, setActive] = useState<Card | null>(null);
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
 
-  const byStatus = (s: TaskStatus) => tasks.filter((t) => t.status === s);
+  const byStatus = (s: CardStatus) => cards.filter((t) => t.status === s);
   // #41: 依存バッジの未解決判定 (依存先がボード上に未完了で残っていれば「待ち」)。
   // #111: 依存先の中身をチップから引くための索引 (アーカイブ済みは載らない。クリックで取りに行く)。
   //
@@ -405,37 +405,37 @@ export default function Board({
   // 別担当の未完了カードに依存しているとき、担当フィルタでそれが隠れた瞬間に
   // 「待ち」表示まで消え、依存関係が実態と逆に見えた (自動レビュー指摘)。
   // フィルタは見せ方の話であって、待ちかどうかの事実は変わらない
-  const openIds = new Set(allTasks.filter((t) => t.status !== "done").map((t) => t.id));
-  const taskById = new Map(allTasks.map((t) => [t.id, t]));
+  const openIds = new Set(allCards.filter((t) => t.status !== "done").map((t) => t.id));
+  const cardById = new Map(allCards.map((t) => [t.id, t]));
 
   const columns = columnsFor(lanes);
 
-  function locate(overId: number | TaskStatus): { status: TaskStatus; index: number } | null {
+  function locate(overId: number | CardStatus): { status: CardStatus; index: number } | null {
     if (columns.some((c) => c.key === overId)) {
-      return { status: overId as TaskStatus, index: byStatus(overId as TaskStatus).length };
+      return { status: overId as CardStatus, index: byStatus(overId as CardStatus).length };
     }
-    const overTask = tasks.find((t) => t.id === overId);
-    if (!overTask) return null;
-    const col = byStatus(overTask.status);
-    return { status: overTask.status, index: col.findIndex((t) => t.id === overTask.id) };
+    const overCard = cards.find((t) => t.id === overId);
+    if (!overCard) return null;
+    const col = byStatus(overCard.status);
+    return { status: overCard.status, index: col.findIndex((t) => t.id === overCard.id) };
   }
 
   function handleDragStart(e: DragStartEvent) {
-    setActive(tasks.find((t) => t.id === e.active.id) ?? null);
+    setActive(cards.find((t) => t.id === e.active.id) ?? null);
   }
 
   function handleDragEnd(e: DragEndEvent) {
     setActive(null);
     if (!e.over) return;
-    const task = tasks.find((t) => t.id === e.active.id);
-    const target = locate(e.over.id as number | TaskStatus);
-    if (!task || !target) return;
+    const card = cards.find((t) => t.id === e.active.id);
+    const target = locate(e.over.id as number | CardStatus);
+    if (!card || !target) return;
     // Done列へのD&D流入は禁止 (検収ボタン/チャット承認のみ)。done内の並び替えは許可 (#57)
-    if (target.status === "done" && task.status !== "done") return;
+    if (target.status === "done" && card.status !== "done") return;
     const col = byStatus(target.status);
-    const curIndex = col.findIndex((t) => t.id === task.id);
-    if (task.status === target.status && (curIndex === target.index || curIndex === -1)) return;
-    onMove({ id: task.id, status: target.status, index: target.index });
+    const curIndex = col.findIndex((t) => t.id === card.id);
+    if (card.status === target.status && (curIndex === target.index || curIndex === -1)) return;
+    onMove({ id: card.id, status: target.status, index: target.index });
   }
 
   return (
@@ -449,19 +449,19 @@ export default function Board({
           <Column
             key={col.key}
             col={col}
-            tasks={byStatus(col.key)}
+            cards={byStatus(col.key)}
             folded={col.key === "done" ? folded : undefined}
-            onOpenTask={onOpenTask}
+            onOpenCard={onOpenCard}
             approvedIds={col.key === "review" ? approvedIds : undefined}
             onToggleApproved={col.key === "review" ? onToggleApproved : undefined}
             onCommitApproved={col.key === "review" ? onCommitApproved : undefined}
             openIds={openIds}
-            taskById={taskById}
+            cardById={cardById}
             lanes={lanes}
           />
         ))}
       </div>
-      <DragOverlay>{active && <TaskCard task={active} overlay lanes={lanes} />}</DragOverlay>
+      <DragOverlay>{active && <CardTile card={active} overlay lanes={lanes} />}</DragOverlay>
     </DndContext>
   );
 }

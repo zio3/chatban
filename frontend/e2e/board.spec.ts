@@ -2162,3 +2162,29 @@ test.describe("失敗のあとに再送を出してよいか (#123 の線)", () 
     await expect(page.getByRole("button", { name: /再送/ }), "副作用の有無が分からないのに再送が出ている").toHaveCount(0);
   });
 });
+
+// #232 第3弾のレビュー指摘 (2026-08-23): **AI応答の #NN をクリックして詳細が開く経路に番人が無かった。**
+// linkifyMentions は `[#NN](#task-NN)` を作り、レンダラが `/^#task-(\d+)$/` で拾う。
+// **この2つは対でしか意味がない**のに、識別子の一括改名でレンダラ側だけ `#card-` に変わり、
+// クリックが黙って効かなくなった。既存76本は全部通ったまま素通りしている。
+//
+// アンカーは data-testid と同じ**契約**なので、片方だけ動かせないことをここで固定する。
+// LLMは呼ばない (page.route でチャットの応答を作る)。
+test("AI応答の #NN をクリックすると、そのカードの詳細が開く", async ({ page }) => {
+  const id = await createTask("メンションから開くカード");
+  await page.route("**/api/chat", (route) =>
+    route.fulfill({
+      json: { reply: `確認先は #${id} です`, trace: [], uiActions: [], usage: { rounds: 1, elapsedMs: 1 } },
+    })
+  );
+  await page.goto("/");
+
+  await page.getByPlaceholder(/ボードに話しかける/).fill("どれを見ればいい");
+  await page.keyboard.press("Enter");
+
+  // 素の <a> ではなくボタンとして描かれていること自体が、レンダラが拾えている証拠
+  // 発言者の吹き出しは複数あるので、AI応答の中に絞る
+  await page.locator(".chat-md").last().getByRole("button", { name: `#${id}` }).click();
+  await expect(page.getByTestId("task-detail-panel")).toBeVisible();
+  await expect(page.getByTestId("task-detail-panel")).toContainText("メンションから開くカード");
+});

@@ -19,7 +19,7 @@
  * 桁は 15 文字までに制限する — それを超える入力はカードIDではありえず、
  * Number() が丸めた値でうっかり別のカードを開く経路を作らないため。
  */
-export function parseTaskJump(text: string): number | null {
+export function parseCardJump(text: string): number | null {
   // 全角の井桁と数字を半角へ寄せてから見る
   const normalized = text
     .trim()

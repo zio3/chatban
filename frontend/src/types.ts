@@ -1,16 +1,16 @@
 /** #19: custom1 / custom2 はプロジェクトが表示名を付けたときだけ現れる任意レーン。
  * 位置は Review と Done の間。値は固定で、意味は表示名 (lanes) が与える */
-export type TaskStatus = "todo" | "inprogress" | "review" | "custom1" | "custom2" | "done";
+export type CardStatus = "todo" | "inprogress" | "review" | "custom1" | "custom2" | "done";
 export interface CustomLane {
   key: "custom1" | "custom2";
   /** 画面に出るのはこちら。custom1 という値そのものは人に見せない */
   label: string;
 }
 
-export interface Task {
+export interface Card {
   id: number;
   title: string;
-  status: TaskStatus;
+  status: CardStatus;
   /** #226: 経緯メモの本文。**板の配信 (GET /api/board / board:changed) には載っていない** —
    * ペイロードの96%を占めていたので外した。入るのは GET /api/cards/:id で取り直したときだけ。
    * 「本文があるか」は contextChars、「変わったか」は contextVersion で分かる */
@@ -38,7 +38,7 @@ export interface Task {
 
 /** #200: Done列の2段目。直近24時間に畳んだカードを1つにまとめた箱。
  * サーバーのメモリ上にしか無いので、再起動すると消える (中身は archived=1 でDBに残る) */
-export interface FoldedTask {
+export interface FoldedCard {
   id: number;
   title: string;
   foldedAt: number;

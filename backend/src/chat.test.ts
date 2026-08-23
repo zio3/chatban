@@ -4,7 +4,7 @@ import { extractChoices, suggestSkipReason } from "./chat.js";
 import { readFileSync } from "node:fs";
 import { buildTools } from "./chat.js";
 import { DONE_GATE_RULE, isDueDate, isCardStatus, mayEnterDone } from "./db.js";
-import { AGENT_STATUS_VALUES } from "./chat.js";
+import { AGENT_STATUS_VALUES } from "./toolArgs.js";
 import { isAllowedOrigin, isBrowserCrossSite } from "./origin.js";
 
 // #180: 認証を廃止したので、境界は「待ち受けを閉じる」と「知らないページを断る」だけ。

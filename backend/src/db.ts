@@ -410,16 +410,32 @@ export function getProjectContextRow(): { text: string; updatedAt: string | null
   return { text: r?.text ?? "", updatedAt: r?.updated_at ?? null, version: r?.version ?? 1 };
 }
 
-/** #115: 前提情報は全文上書き。エージェントからは版を添えないと書けない。
+/** #115: 前提情報は全文上書き。**版を添えないと書けない。**
  * カードの経緯メモ(#112)と同じ形だが、こちらは全員の前提でシステムプロンプトに常時載るため、
- * 読まずに書かれると運用ルールごと消える。人間のUI経路は version を省略して従来どおり上書きできる */
-export function setProjectContext(rawText: string, version?: number): { ok: boolean; current?: ReturnType<typeof getProjectContextRow> } {
+ * 読まずに書かれると運用ルールごと消える。
+ *
+ * **省略は競合として断る (#244)。**以前は「人間のUI経路は version を省略して上書きできる」
+ * という緩和だったが、**その経路はもう無い** (📋前提は編集UIを持たず、変更経路はチャットだけ #73)。
+ * 居なくなった呼び出し元のための緩和が、**LLMから届く経路として残っていた** —
+ * ツール定義では必須にしてあるが、チャットの引数はLLMが組み立てるJSONなので
+ * スキーマを無視した値が届きえる (この文書自身が §1 で説明しているとおり。自動レビュー指摘)。
+ *
+ * 引数は省略可にしない (`?` を付けない)。**既定値を持たせると、渡し忘れが黙って通る形に戻る** */
+export function setProjectContext(
+  rawText: string,
+  version: number | undefined
+): { ok: boolean; missingText?: boolean; current?: ReturnType<typeof getProjectContextRow> } {
   // 実際にここが壊れた: project 9 の前提情報が全文 \uXXXX エスケープで保存されていて、
   // 296字が1,346字(トークンで3.2倍)に膨らみ、しかもLLMの読み取り精度も落ちていた。
   // 前提情報はシステムプロンプトに常時載るので、発言のたびに払い続けることになる
-  const text = decodeUnicodeEscapes(rawText);
   const cur = getProjectContextRow();
-  if (version !== undefined && version !== cur.version) return { ok: false, current: cur };
+  // **本文が来ていない書き込みは断る (#244)。**呼び出し元で `args.text ?? ""` のように
+  // 補ってしまうと、**欠落や null が「意図的な全消去」に化ける** — 正しい版さえ添えれば
+  // 前提情報が空になる。空文字そのものは禁じない (全部消す操作と区別が付かなくなる)。
+  // 型は string だが、チャットの引数はLLMが組み立てるJSONなのでここまで何でも届く
+  if (typeof rawText !== "string") return { ok: false, missingText: true, current: cur };
+  const text = decodeUnicodeEscapes(rawText);
+  if (version === undefined || version !== cur.version) return { ok: false, current: cur };
   db().prepare(
     "INSERT INTO project_context (id, text, updated_at, version) VALUES (1, ?, datetime('now', 'localtime'), ?) ON CONFLICT(id) DO UPDATE SET text = excluded.text, updated_at = excluded.updated_at, version = excluded.version"
   ).run(text, cur.version + 1);

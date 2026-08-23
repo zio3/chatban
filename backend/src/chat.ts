@@ -19,6 +19,7 @@ import {
   setProjectContext,
 } from "./db.js";
 import { currentProjectId, customLanes } from "./store.js";
+import { agentStatusValues, parseToolArgs, reorderableStatuses } from "./toolArgs.js";
 import { chatCompletion } from "./llm.js";
 import { getModel } from "./config.js";
 import { foldedContainer } from "./archive.js";
@@ -50,18 +51,15 @@ export interface ChatResult {
  * review へ倒していたが、それは「押せるボタンを押した後で断る」形だった。
  * 「プロンプトは漏れるが、経路が無いことは漏れない」— 選べないものは選ばれない。
  *
- * coerceStatus は残す。チャットのツール呼び出しはLLMが組み立てるJSONで、
- * enum を無視した値が届きうる (MCPはzodで弾くが、こちらに検証は無い) */
-export const AGENT_STATUS_VALUES = ["todo", "inprogress", "review"] as const;
+ * coerceStatus は残す。done を review へ倒すのは**型ではなく意味の話**で、
+ * 入口の検査 (toolArgs.ts) を通ったあとに効かせたいため。
+ * (#245 以前はここに「こちらに検証は無い」と書いてあった。いまは両入口とも Zod を通る) */
 
 /** #19: この接続のプロジェクトで選べる列。任意レーンを**有効なものだけ**足す。
  * 「選べないものは選ばれない」— 無効なレーンを enum に出さないので、そこへ置く経路が無い。
  * db.ts の isUsableStatus が最後の砦だが、そこまで届かせないほうがよい (done を enum から外したのと同じ形)。
  *
  * **チャットとMCPで同じ関数を使う。**同じ一覧を2か所に書くと必ず片方だけ直る (#92 #108 #114) */
-export function agentStatusValues(lanes: CustomLane[]): string[] {
-  return [...AGENT_STATUS_VALUES, ...lanes.map((l) => l.key)];
-}
 
 /** 任意レーンの意味を契約に差し込む。**表示名は必須**なので、custom1 が説明の無い箱になることはない。
  * 人が前提情報に運用ルールを書くのは任意だが、`custom1 = 素材` の対応だけは待たずに自動で出す */
@@ -71,13 +69,6 @@ export function statusDescription(lanes: CustomLane[]): string {
   return `${STATUS_DESCRIPTION}。このプロジェクトには任意レーンがある: ${map}。ボードでは Review と Done の間に並ぶ。何を置く列かはプロジェクトの前提情報を読むこと`;
 }
 
-/** 並べ替えられる列 (任意レーン込み)。Todo/Inprogress と同じ緩い箱なので、並べ替えも同じに扱う */
-export function reorderableStatuses(lanes: CustomLane[]): string[] {
-  return [...REORDERABLE_STATUSES, ...lanes.map((l) => l.key)];
-}
-/** 並べ替えられる列。done は人が並べる列ではない (検収の結果が並ぶだけで、いずれ箱に畳まれる) ので対象にしない (#105)。
- * これもチャットとMCPで共有する — 同じ一覧を2か所に書くと必ず片方だけ直る */
-export const REORDERABLE_STATUSES = ["todo", "inprogress", "review"] as const;
 
 /** #106/#108: 記録へのSQL窓口の説明。チャットとMCPで同じものを使う。
  * 入口ごとに書き分けると必ずズレる (#92 #108 #114 で3回起きた) */
@@ -268,6 +259,10 @@ export function buildTools(lanes: CustomLane[]): OpenAI.Chat.Completions.ChatCom
               type: "object",
               properties: {
                 title: { type: "string" },
+                // #245: status と summary はMCPだけが出していた。**内蔵チャットは作成時に置けると知らず**、
+                // 作ってから update_cards で直す往復をしていた (Codexレビュー指摘)
+                status: { type: "string", enum: STATUS_VALUES, description: `省略時はtodo。${STATUS_DESC}` },
+                summary: { type: "string", description: SUMMARY_DESCRIPTION },
                 context: { type: "string", description: "登録に至った経緯・会話で出た論点・決まったこと。相談や議論の流れから登録するときは必ず書く (タイトルだけでは背景が失われる)" },
                 due: { type: "string", description: DUE_DESCRIPTION },
                 blocked_by: { type: "array", items: { type: "integer" }, description: BLOCKED_BY_DESCRIPTION },
@@ -405,16 +400,31 @@ export function buildTools(lanes: CustomLane[]): OpenAI.Chat.Completions.ChatCom
 // プロンプトのバイト列が揺れる余地 (キャッシュが外れる原因) も1つ減っている
 
 
-async function execTool(name: string, args: any, events: Set<string>): Promise<unknown> {
+/** #245: **テストから入口の配線を叩けるようにしてある。**
+ * `delete_cards` / `reorder_cards` は agentWrite を通らず、ガードがここにしか無い。
+ * ヘルパ単体のテストでは**配線を消しても気づけない** (Codexレビュー指摘) */
+export async function execTool(name: string, rawArgs: any, events: Set<string>): Promise<unknown> {
+  // #245: **ここから先は検証済みの値しか流れない。**
+  // 以前はここに検査が無く、モデルの出力が揺れるだけで実データが消えた
+  // (`context:null` で経緯メモが消える / `ids:"12"` が `"1"`,`"2"` に割れて別のカードを復元する等)。
+  // MCPは同じことを SDK の Zod がやっていたので踏んでいない — **穴は入口が1つ無検査だった点**だった。
+  // 項目ごと・ツールごとに塞ぐと (入口 × ツール × 項目) の面を1マスずつ埋めることになる
+  const parsed = parseToolArgs(name, rawArgs, customLanes());
+  if (!parsed.ok) return { ok: false, note: parsed.note };
+  const args = parsed.args;
+
   switch (name) {
     case "create_cards": {
       // #114: 書き込みは agentWrite に集約 (チャットとMCPで同じガードを通す)
-      const r = createCardsAsAgent(args.cards ?? []);
+      // #245: **`?? []` にしない。**欠落を空配列に補うと「何もしていないのに成功」になる
+      const r = createCardsAsAgent(args.cards);
       events.add("board");
-      return { ok: true, ...r };
+      // #245: **`ok:true` を被せない。**共有入口が決めた ok/status をそのまま返す —
+      // 被せていたので、1件も作れなくても成功に見えていた
+      return r;
     }
     case "update_cards": {
-      const { ok, status, updated, note, conflicts, notFound, badDue } = updateCardsAsAgent(args.updates ?? []);
+      const { ok, status, updated, note, conflicts, notFound, badDue } = updateCardsAsAgent(args.updates);
       events.add("board");
       // #112: 版が合わなかった経緯メモは適用していない。現在の全文を返すのでマージして再実行する
       // #153: badDue も返す。**列挙して返しているので、足し忘れると入口ごとにズレる** —
@@ -444,17 +454,17 @@ async function execTool(name: string, args: any, events: Set<string>): Promise<u
       // #161: 判定と報告は agentWrite に集約。以前はここだけ **常に ok:true** で、
       // MCPは「1件でも戻せなければ ok:false」だった — ok だけを見るエージェントは
       // 入口によって失敗を見落とす (Codexレビュー指摘)
-      const r = restoreCardsAsAgent(args.ids as number[]);
+      const r = restoreCardsAsAgent(args.ids as number[]); // 型は restoreCardsAsAgent が見る (#245)
       events.add("board");
       return r;
     }
     case "reorder_cards": {
-      const r = reorderCards(args.ids ?? [], args.status);
+      const r = reorderCards(args.ids, args.status);
       events.add("board");
       return reorderResult(r);
     }
     case "search_cards": {
-      const r = searchCards(args.terms ?? []);
+      const r = searchCards(args.terms);
       return searchResult(r);
     }
     case "query_log": {
@@ -468,7 +478,8 @@ async function execTool(name: string, args: any, events: Set<string>): Promise<u
       }
     }
     case "update_project_context": {
-      const r = setProjectContext(args.text ?? "", args.version);
+      // **`args.text ?? ""` にしない。**欠落や null を空文字に補うと、全消去に化ける (#244)
+      const r = setProjectContext(args.text, args.version);
       // 📋前提の画面は編集UIを持たず変更経路がチャットだけ (#73) なので、
       // ここで伝えないと**開いたまま古い本文を読み続ける** (レビュー指摘 2026-08-21)
       if (r.ok) events.add("context");
@@ -476,7 +487,9 @@ async function execTool(name: string, args: any, events: Set<string>): Promise<u
         return {
           ok: false,
           conflict: r.current,
-          note: "前提情報が他から更新されています。返した text に自分の変更をマージし、この version を添えて再実行してください",
+          note: r.missingText
+            ? "text (前提情報の全文) が届いていません。返した text に自分の変更をマージし、全文と version を添えて再実行してください。全部消したいときだけ空文字を明示してください"
+            : "前提情報が他から更新されています。返した text に自分の変更をマージし、この version を添えて再実行してください",
         };
       return { ok: true };
     }

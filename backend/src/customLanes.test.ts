@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { isCardStatus, isUsableStatus, isWorkStatus, CARD_STATUSES } from "./db.js";
-import { agentStatusValues, reorderableStatuses, statusDescription, STATUS_DESCRIPTION } from "./chat.js";
+import { statusDescription, STATUS_DESCRIPTION } from "./chat.js";
+import { agentStatusValues, reorderableStatuses } from "./toolArgs.js";
 import type { CustomLane, CardStatus } from "./types.js";
 
 // #19: 任意レーン。**判定はどれも純粋関数**にしてあるので、DBもexpressも要らない

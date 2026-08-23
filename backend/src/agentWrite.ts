@@ -80,6 +80,14 @@ const BAD_DUE_NOTE = `期限の形式が違うため、その指定だけ適用�
 const NOT_FOUND_NOTE =
   "は存在しません。IDを確認してください (古い一覧を見ている可能性があります)。この指定は何も適用していません。その旨をユーザーにも伝えてください";
 
+/** #245 以前、ここには「LLMが返す値の型を1項目ずつ検査する」コードがあった。
+ * **入口 (toolArgs.ts) で Zod を通すようにしたので消した** —
+ * 検査を (入口 × ツール × 項目) の数だけ書くのは、面を1マスずつ埋める作業だった。
+ *
+ * ここに残っているのは**意味の判定**だけ (版の一致 / done の矯正 / 期限の形)。
+ * 型は「もう検証済みのものしか来ない」という前提でよい。
+ * その前提を保つのは `toolArgs.test.ts` の「execTool の全ツールに契約がある」テスト。 */
+
 const CONFLICT_NOTE =
   "経緯メモの版が合わないため、この行の更新は一切適用していません (他のフィールドも保存されていません)。conflicts の context に自分の追記をマージし、その contextVersion を添えて再実行してください。上書きに失敗したことをユーザーにも伝えてください";
 
@@ -97,6 +105,10 @@ function acceptableDue(due: string | null | undefined): { due?: string | null; b
 }
 
 export function createCardsAsAgent(cards: AgentCardInput[]): {
+  /** #245: **更新側と同じ契約にする。**1件でも作れなければ false。
+   * 以前は入口が無条件に `ok:true` を付けており、**1件も作れなくても成功に見えた** */
+  ok: boolean;
+  status: "ok" | "partial" | "failed";
   created: unknown[];
   note?: string;
   /** 期限の形が違って捨てたもの (タイトルで返す。作成時点ではIDを知らせても意味が薄い) */
@@ -120,8 +132,13 @@ export function createCardsAsAgent(cards: AgentCardInput[]): {
     return Object.keys(patch).length > 0 ? updateCard(card.id, patch) : card;
   });
   // 2つ重なったら両方言う。片方だけ返すと、もう片方は起きなかったことになる
-  const notes = [anyCoerced ? DONE_NOTE : "", badDue.length > 0 ? BAD_DUE_NOTE : ""].filter(Boolean);
+  const notes = [
+    anyCoerced ? DONE_NOTE : "",
+    badDue.length > 0 ? BAD_DUE_NOTE : "",
+  ].filter(Boolean);
   return {
+    ok: true,
+    status: "ok",
     created,
     ...(notes.length > 0 ? { note: notes.join(" / ") } : {}),
     ...(badDue.length > 0 ? { badDue } : {}),
@@ -192,6 +209,7 @@ export function updateCardsAsAgent(updates: AgentCardUpdate[]): {
 } {
   const coerced: number[] = [];
   const conflicts: ContextConflict[] = [];
+
   const notFound: number[] = [];
   const badDue: number[] = [];
 
@@ -281,6 +299,8 @@ export function updateCardsAsAgent(updates: AgentCardUpdate[]): {
   const updated = updateCards(patches.filter((p): p is NonNullable<typeof p> => p !== null));
   const notes = [
     // 件数を先に言う。「何件通って何件通らなかったか」を数えさせない
+    // **未適用は3種ある (版の競合 / 存在しない / 型が違う)。**どれかを引き忘れると
+    // 「配列を数えさせない」ための1行が嘘になり、**再送が漏れる**
     ...(conflicts.length + notFound.length > 0
       ? [`${updates.length}件のうち${updates.length - conflicts.length - notFound.length}件を適用しました`]
       : []),

@@ -80,6 +80,55 @@ const BAD_DUE_NOTE = `期限の形式が違うため、その指定だけ適用�
 const NOT_FOUND_NOTE =
   "は存在しません。IDを確認してください (古い一覧を見ている可能性があります)。この指定は何も適用していません。その旨をユーザーにも伝えてください";
 
+/** #245: **契約どおりの実行時型でなければ、その行は触らない。**
+ *
+ * チャットのツール引数はLLMが組み立てるJSONで、**実行時検証をしていない** —
+ * ツール定義で string と宣言してあっても `null` や数値が届く。しかも
+ * **`undefined` (触らない) と `null` (置換する) は意味が逆**なので、静かにデータが消える。
+ * Codexが実測で再現した壊れ方 (#244 のレビュー):
+ *
+ *   - `summary: null`     → 要約が消える
+ *   - `blocked_by: false` → 依存が解除される (DB側の `?.length` が偽になり null 保存)
+ *   - `rejected: "false"` → `!!` で **true に反転**する
+ *   - `title: null`       → `NOT NULL constraint failed` が未処理で飛ぶ
+ *   - `context_append: null` / `status: null` → 無視されるのに `ok:true` が返り、**再試行されない**
+ *
+ * MCPは Zod が先に弾くので、抜けているのはチャット経路だけ。
+ * **共有入口に置く**のは、入口ごとにガードがズレないため (#114)。
+ *
+ * 値の中身は見ない (期限の形は `acceptableDue()`、列の妥当性は `isUsableStatus()` が
+ * それぞれ理由付きで扱う)。ここで見るのは**型だけ**。 */
+function typeErrors(u: AgentCardUpdate): string[] {
+  const bad: string[] = [];
+  const got = (v: unknown) => (v === null ? "null" : Array.isArray(v) ? "配列" : typeof v);
+  const str = (k: string, v: unknown) => {
+    if (v !== undefined && typeof v !== "string") bad.push(`${k} は文字列で渡してください (届いたのは ${got(v)})`);
+  };
+  str("title", u.title);
+  str("summary", u.summary);
+  str("context", u.context);
+  str("context_append", u.context_append);
+  str("status", u.status);
+  if (u.rejected !== undefined && typeof u.rejected !== "boolean")
+    bad.push(`rejected は true / false で渡してください (届いたのは ${got(u.rejected)})`);
+  if (u.due !== undefined && u.due !== null && typeof u.due !== "string")
+    bad.push(`due は文字列か null で渡してください (届いたのは ${got(u.due)})`);
+  if (u.context_version !== undefined && !Number.isInteger(u.context_version))
+    bad.push(`context_version は整数で渡してください (届いたのは ${got(u.context_version)})`);
+  if (
+    u.blocked_by !== undefined &&
+    u.blocked_by !== null &&
+    !(Array.isArray(u.blocked_by) && u.blocked_by.every((n) => Number.isInteger(n)))
+  )
+    bad.push(`blocked_by はカードIDの配列か null で渡してください (届いたのは ${got(u.blocked_by)})`);
+  return bad;
+}
+
+/** 型が契約と違った行の断り文。**版の競合とは別の失敗**なので、文言も分ける —
+ * 「版が合わない」と案内すると、**LLMは版だけ差し替えて同じ不正な値で再実行する** */
+const INVALID_NOTE =
+  "指定された値の型が契約と違うため、この行の更新は一切適用していません (他のフィールドも保存されていません)。invalid の reason を読んで、正しい型で送り直してください。全部消したいときは null ではなく空文字を明示してください";
+
 const CONFLICT_NOTE =
   "経緯メモの版が合わないため、この行の更新は一切適用していません (他のフィールドも保存されていません)。conflicts の context に自分の追記をマージし、その contextVersion を添えて再実行してください。上書きに失敗したことをユーザーにも伝えてください";
 
@@ -188,10 +237,14 @@ export function updateCardsAsAgent(updates: AgentCardUpdate[]): {
   notFound?: number[];
   /** #153: 期限の形が違って、その指定だけ捨てたカードID */
   badDue?: number[];
+  /** #245: 値の型が契約と違って、行ごと適用しなかったもの。版の競合とは別の失敗 */
+  invalid?: { id: number; reason: string }[];
   note?: string;
 } {
   const coerced: number[] = [];
   const conflicts: ContextConflict[] = [];
+  /** #245: 型が契約と違って、行ごと適用しなかったもの */
+  const invalid: { id: number; reason: string }[] = [];
   const notFound: number[] = [];
   const badDue: number[] = [];
 
@@ -208,6 +261,14 @@ export function updateCardsAsAgent(updates: AgentCardUpdate[]): {
       notFound.push(u.id);
       return null;
     }
+    // #245: **他の計算をさせる前に型を見る。**不正な値のまま進むと、
+    // 消える (summary:null) / 反転する (rejected:"false") / 例外が飛ぶ (title:null) が起きる
+    const badTypes = typeErrors(u);
+    if (badTypes.length > 0) {
+      invalid.push({ id: u.id, reason: badTypes.join(" / ") });
+      return null;
+    }
+
     const changed = <T>(incoming: T | undefined, current: T) => incoming !== undefined && incoming !== current;
 
     // done → review の倒し込みも、報告に積むのは行の適用が決まってから (下の contextStale の後)。
@@ -234,22 +295,6 @@ export function updateCardsAsAgent(updates: AgentCardUpdate[]): {
     // (#114のdone→reviewと同じ「拒否ではなく情報を返す」形。LLMは読み直して考え直せる)
     // 追記は「既存の末尾に足す」だけなので版で守る必要がない。
     // 全文置換と併用されたら、置換後の全文の末尾に足す (自然な読み方。片方を黙って捨てない)
-    // #244: **型だけに頼らない。**チャットのツール引数はLLMが組み立てるJSONなので、
-    // スキーマが string でも `null` や数値が届きうる。`null` は `undefined` と違って
-    // **「全文置換あり」と読まれる**ので、版さえ合っていれば経緯メモが丸ごと消える
-    // (Codexが再現: `context:"KEEP"` / 版2 のカードに `{context:null, context_version:2}` を
-    // 渡すと ok:true、保存後は context:null / 版3)。
-    // **空文字は禁じない** — 正当な全消去と区別が付かなくなる。弾くのは「文字列でないもの」だけ。
-    // 共有入口に置くのは、チャットとMCPで同じガードを通すため (#114 と同じ理由)
-    if (u.context !== undefined && typeof u.context !== "string") {
-      conflicts.push({
-        id: u.id,
-        contextVersion: cur.contextVersion ?? 1,
-        context: cur.context ?? null,
-        note: `context は文字列で渡してください (届いたのは ${u.context === null ? "null" : typeof u.context})。返した context に自分の追記をマージし、この contextVersion を添えて再実行してください。全部消したいときだけ空文字を明示してください`,
-      });
-      return null;
-    }
     const appended = typeof u.context_append === "string" ? cleanAgentText(u.context_append).trim() : "";
     const baseContext = u.context !== undefined ? u.context : cur?.context ?? null;
     const nextContext = appended
@@ -302,6 +347,8 @@ export function updateCardsAsAgent(updates: AgentCardUpdate[]): {
       : []),
     ...(coerced.length > 0 ? [`#${coerced.join(", #")} は${DONE_NOTE}`] : []),
     ...(conflicts.length > 0 ? [`#${conflicts.map((c) => c.id).join(", #")} は${CONFLICT_NOTE}`] : []),
+    // **版の競合とは別の行に出す。**混ぜると「版を直せば通る」と読まれる (#245)
+    ...(invalid.length > 0 ? [`#${invalid.map((v) => v.id).join(", #")} は${INVALID_NOTE}`] : []),
     ...(notFound.length > 0 ? [`#${notFound.join(", #")} ${NOT_FOUND_NOTE}`] : []),
     // #153: 期限だけ捨てた行。**rejected には数えない** — 他の項目は保存できているので、
     // ここで ok:false にすると「1件も書けなかった」と読まれて全部送り直される
@@ -309,7 +356,7 @@ export function updateCardsAsAgent(updates: AgentCardUpdate[]): {
   ];
   // #124: 適用できた行だけが入る。undefined/null は混ざらない (内部事情を漏らさない)
   const applied = updated.filter((t): t is NonNullable<typeof t> => t != null);
-  const rejected = conflicts.length + notFound.length;
+  const rejected = conflicts.length + notFound.length + invalid.length;
   return {
     // 部分成功を ok:true と返すと、多くのエージェントはここで分岐して先へ進む。
     // 1件でも適用できなかったなら false にして、中身を読ませる (#120/#123)
@@ -320,6 +367,7 @@ export function updateCardsAsAgent(updates: AgentCardUpdate[]): {
     ...(conflicts.length > 0 ? { conflicts } : {}),
     ...(notFound.length > 0 ? { notFound } : {}),
     ...(badDue.length > 0 ? { badDue } : {}),
+    ...(invalid.length > 0 ? { invalid } : {}),
     ...(notes.length > 0 ? { note: notes.join(" / ") } : {}),
   };
 }

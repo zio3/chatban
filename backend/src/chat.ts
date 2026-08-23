@@ -414,7 +414,7 @@ async function execTool(name: string, args: any, events: Set<string>): Promise<u
       return { ok: true, ...r };
     }
     case "update_cards": {
-      const { ok, status, updated, note, conflicts, notFound, badDue } = updateCardsAsAgent(args.updates ?? []);
+      const { ok, status, updated, note, conflicts, notFound, badDue, invalid } = updateCardsAsAgent(args.updates ?? []);
       events.add("board");
       // #112: 版が合わなかった経緯メモは適用していない。現在の全文を返すのでマージして再実行する
       // #153: badDue も返す。**列挙して返しているので、足し忘れると入口ごとにズレる** —
@@ -426,6 +426,8 @@ async function execTool(name: string, args: any, events: Set<string>): Promise<u
         ...(conflicts ? { conflicts } : {}),
         ...(notFound ? { notFound } : {}),
         ...(badDue ? { badDue } : {}),
+        // #245: 型が契約と違って行ごと適用しなかったもの。**版の競合と混ぜない**
+        ...(invalid ? { invalid } : {}),
         ...(note ? { note } : {}),
       };
     }

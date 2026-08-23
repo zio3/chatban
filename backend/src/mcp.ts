@@ -175,7 +175,7 @@ export function buildMcpServer(onEvent: (kind: ViewEvent) => void): McpServer {
       },
     },
     async ({ updates, sync_token }) => {
-      const { ok, status, updated, note, conflicts, notFound, badDue } = updateCardsAsAgent(updates as any);
+      const { ok, status, updated, note, conflicts, notFound, badDue, invalid } = updateCardsAsAgent(updates as any);
       onEvent("board");
       return text({
         // #120/#123: 1件でも適用できなければ ok:false。
@@ -189,6 +189,8 @@ export function buildMcpServer(onEvent: (kind: ViewEvent) => void): McpServer {
         // #153: 期限だけ捨てた行。**フィールドを列挙して返しているので、増やしたら
         // ここも足さないと入口ごとにズレる** (#92 #108 #114 と同じ形で、実際にズレた)
         ...(badDue ? { badDue } : {}),
+        // #245: 型が契約と違って行ごと適用しなかったもの。**版の競合と混ぜない**
+        ...(invalid ? { invalid } : {}),
         ...(note ? { note } : {}),
         ...boardUpdate(sync_token),
       });

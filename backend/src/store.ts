@@ -134,16 +134,45 @@ CREATE TABLE IF NOT EXISTS settings (
  * 取り残されて、**板が空になったように見える**。エラーは出ない。
  * だから「移行しない」ではなく「**移行が要るなら開かずに止める**」にする。
  *
+ * **見るのは名前だけでなく中身。**「`tasks` が在って `cards` が無い」しか見ないと、
+ * 両方在って旧側に行が入っているDBを素通りさせてしまう (レビュー指摘 P1、2026-08-23)。
+ * 名前で判断すると、いちばん危ない中途半端な状態がちょうど網から漏れる。
+ *
  * 後方互換を持たない方針 (2026-08-17 合意) を、**捨てたことが分かる形**で実装したもの。 */
 function refuseLegacySchema(db: Database.Database) {
   const has = (name: string) =>
     !!db.prepare("SELECT name FROM sqlite_master WHERE type IN ('table','view') AND name = ?").get(name);
-  if (has("tasks") && !has("cards")) {
+  const refuse = (why: string): never => {
     throw new Error(
-      "このDBは `tasks` 時代のスキーマです (#215 以前)。開く前に移行してください: " +
-        "backend で `node scripts/migrate-cards.mjs` (下見) → `--apply` (実行)。" +
-        "**そのまま開くと空の cards が作られ、板が空になったように見えます。**"
+      `${why} 開く前に移行してください: backend で \`node scripts/migrate-cards.mjs\` (下見) → ` +
+        "`--apply` (実行)。**そのまま開くと、旧側のデータがエラーも出ずに板から消えたように見えます。**"
     );
+  };
+
+  // (1) 素の旧スキーマ。`CREATE TABLE IF NOT EXISTS cards` が空を作って `tasks` が取り残される
+  if (has("tasks") && !has("cards")) {
+    refuse("このDBは `tasks` 時代のスキーマです (#215 以前)。");
+  }
+
+  // (2) **両方在るときは中身で決める。**移行し切ったDBに古いコードで触ると空の `tasks` が
+  // 復活する (2026-08-23 実測: 稼働中10件が全部この形だった)。空なら残骸なので通してよい。
+  // だが**行が入っていたら通してはいけない** — 本体は `cards` しか読まないので、
+  // `tasks` に増えた分が黙って見えなくなる (レビュー指摘 P1、2026-08-23)
+  if (has("tasks") && has("cards")) {
+    const n = (db.prepare("SELECT COUNT(*) AS c FROM tasks").get() as { c: number }).c;
+    if (n > 0) refuse(`このDBは古い \`tasks\` に ${n}件 残っています (\`cards\` と混在)。`);
+  }
+
+  // (3) 会話の紐付けも同じ。`task_id` に値が残っていると、どのカードの会話かが黙って失われる
+  if (has("chat_messages")) {
+    const cols = (db.prepare("PRAGMA table_info(chat_messages)").all() as { name: string }[]).map((c) => c.name);
+    if (cols.includes("task_id")) {
+      if (!cols.includes("card_id")) refuse("このDBの chat_messages は `task_id` のままです (#215 以前)。");
+      const n = (
+        db.prepare("SELECT COUNT(*) AS c FROM chat_messages WHERE task_id IS NOT NULL").get() as { c: number }
+      ).c;
+      if (n > 0) refuse(`このDBは古い \`chat_messages.task_id\` に ${n}件 値が残っています。`);
+    }
   }
 }
 

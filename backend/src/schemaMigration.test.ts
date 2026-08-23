@@ -89,3 +89,53 @@ test("新規DBには cards が作られる", () => {
   assert.equal(db.prepare("SELECT COUNT(*) FROM cards").pluck().get(), 0);
   assert.ok(!names(db, "table").includes("tasks"), "新規DBに古い名前が作られている");
 });
+
+// ---- ここから下はレビュー指摘 (P1、2026-08-23) で足した分 ----------------------------
+//
+// **名前だけ見ていたのが穴だった。**「`tasks` が在って `cards` が無い」しか見ないと、
+// 両方在って旧側に**行が入っている**DBがちょうど網から漏れる。
+// 本体は `cards` しか読まないので、`tasks` に増えた分がエラーも出ずに板から消える —
+// このPRが防ごうとしていた障害そのものが、混在スキーマでは残っていた。
+//
+// 到達経路: 移行済みのDBを古い版で開く → 古い版が空の `tasks` を作り直す →
+// そこへカードが書かれる → この版で開く。
+
+test("cards と行入り tasks が混在していたら止める (旧側を黙って無視しない)", () => {
+  const db = new Database(":memory:");
+  ensureProjectSchema(db);
+  db.prepare("INSERT INTO cards (id, title) VALUES (1, '新しい方')").run();
+  db.exec("CREATE TABLE tasks (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL)");
+  db.prepare("INSERT INTO tasks (id, title) VALUES (2, '旧側に書かれたカード')").run();
+
+  assert.throws(() => ensureProjectSchema(db), /tasks/);
+  // 止めたあとも両側そのまま (人が中身を見て決められる状態で渡す)
+  assert.equal(db.prepare("SELECT COUNT(*) FROM tasks").pluck().get(), 1);
+  assert.equal(db.prepare("SELECT COUNT(*) FROM cards").pluck().get(), 1);
+});
+
+test("chat_messages.task_id に値が残っていたら止める (会話の紐付けが黙って失われる)", () => {
+  const db = new Database(":memory:");
+  ensureProjectSchema(db);
+  db.exec("ALTER TABLE chat_messages ADD COLUMN task_id INTEGER");
+  db.prepare("INSERT INTO chat_messages (role, content, task_id) VALUES ('user', 'これ直して', 7)").run();
+
+  assert.throws(() => ensureProjectSchema(db), /task_id/);
+});
+
+test("chat_messages が task_id だけなら止める (card_id が無い旧スキーマ)", () => {
+  const db = legacyDb();
+  db.exec("ALTER TABLE tasks RENAME TO cards"); // tasks 側は移行済みにして、列だけ旧いDBを作る
+  assert.throws(() => ensureProjectSchema(db), /task_id/);
+});
+
+// **空の残骸は通す。**ここを止めると、実測した稼働中10件が全部開けなくなる
+test("tasks も task_id も空なら、残骸として通す", () => {
+  const db = new Database(":memory:");
+  ensureProjectSchema(db);
+  db.exec("CREATE TABLE tasks (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL)");
+  db.exec("ALTER TABLE chat_messages ADD COLUMN task_id INTEGER");
+  db.prepare("INSERT INTO chat_messages (role, content, card_id) VALUES ('user', '普通の発言', 1)").run();
+
+  ensureProjectSchema(db); // 例外にならない
+  assert.equal(db.prepare("SELECT COUNT(*) FROM chat_messages").pluck().get(), 1);
+});

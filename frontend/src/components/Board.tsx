@@ -1,5 +1,5 @@
 import { DndContext, DragOverlay, PointerSensor, useDroppable, useSensor, useSensors } from "@dnd-kit/core";
-import type { DragEndEvent, DragOverEvent, DragStartEvent } from "@dnd-kit/core";
+import type { DragEndEvent, DragStartEvent } from "@dnd-kit/core";
 import { SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { useState } from "react";
@@ -233,23 +233,6 @@ function SortableCard({
       />
     </div>
   );
-}
-
-/** 要約要素内の #NN をクリック可能にする (#59: アーカイブ済みカードの詳細も開ける) */
-function renderRefs(text: string, onOpen: (id: number) => void) {
-  return text.split(/(#\d+)/g).map((p, i) => {
-    const m = p.match(/^#(\d+)$/);
-    if (!m) return <span key={i}>{p}</span>;
-    return (
-      <button
-        key={i}
-        onClick={() => onOpen(Number(m[1]))}
-        className="font-bold text-emerald-700 underline decoration-dotted underline-offset-2 hover:text-emerald-900"
-      >
-        {p}
-      </button>
-    );
-  });
 }
 
 // #200: Done列の2段目。直近24時間に畳んだカードをまとめた**1個だけ**の箱。

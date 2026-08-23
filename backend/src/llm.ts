@@ -232,7 +232,7 @@ export async function chatCompletion(
   const cacheCreationTokens = (res.usage as any)?.prompt_tokens_details?.cache_creation_tokens ?? 0;
   log(
     "llm",
-    `<- ${purpose} routed=${res.model} finish=${res.choices[0]?.finish_reason} tokens=${res.usage?.prompt_tokens}/${res.usage?.completion_tokens} cached=${cachedTokens} ${elapsedMs}ms`
+    `<- ${purpose} routed=${res.model} finish=${res.choices[0]?.finish_reason} tokens=${res.usage?.prompt_tokens}/${res.usage?.completion_tokens} cached=${cachedTokens}${cacheCreationTokens ? ` cacheWrite=${cacheCreationTokens}` : ""} ${elapsedMs}ms`
   );
   // #106 → #181: ここで単価を引いて llm_calls へ打刻していた (recordLlmCall)。撤去した。
   // **打刻のために毎回 fetchModelCatalog() を待っていた**のが消えるので、呼び出しが素直になる。

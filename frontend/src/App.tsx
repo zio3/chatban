@@ -11,7 +11,7 @@ import { useChatTurn } from "./hooks/useChatTurn";
 import type { Attachment } from "./hooks/useAttachments";
 import { socket } from "./socket";
 import { parseCardJump } from "./cardJump";
-import type { ChatEntry, CustomLane, FoldedCard, Card } from "./types";
+import type { CustomLane, FoldedCard, Card } from "./types";
 
 interface Toast {
   tone?: "error" | "info";

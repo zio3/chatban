@@ -28,15 +28,12 @@ import {
   queryLogHelp,
   queryProjectData,
   reorderCards,
-  createCard,
   trashCard,
   getProjectContextRow,
   getCard,
   listCards,
-  listTrashedCards,
   searchCards,
   setProjectContext,
-  updateCards,
 } from "./db.js";
 import { boardDelta, formatBoardUpdate } from "./boardState.js";
 import { contextReference, contextTemplateHint } from "./contextTemplate.js";

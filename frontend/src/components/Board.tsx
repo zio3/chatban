@@ -356,7 +356,6 @@ function Column({
 
 export default function Board({
   cards,
-  allCards,
   folded,
   lanes,
   onMove,
@@ -366,8 +365,6 @@ export default function Board({
   onCommitApproved,
 }: {
   cards: Card[];
-  /** 依存の判定に使う母集団。フィルタで隠れているものも含む全件 (#41/#90) */
-  allCards: Card[];
   folded: FoldedCard[];
   /** #19: 有効な任意レーン (0〜2本)。空ならこれまでどおりの4列 */
   lanes: CustomLane[];
@@ -384,12 +381,16 @@ export default function Board({
   // #41: 依存バッジの未解決判定 (依存先がボード上に未完了で残っていれば「待ち」)。
   // #111: 依存先の中身をチップから引くための索引 (アーカイブ済みは載らない。クリックで取りに行く)。
   //
-  // **描画はフィルタ後、依存の判定は全件**。同じ配列から両方作っていたので、
-  // 別担当の未完了カードに依存しているとき、担当フィルタでそれが隠れた瞬間に
-  // 「待ち」表示まで消え、依存関係が実態と逆に見えた (自動レビュー指摘)。
-  // フィルタは見せ方の話であって、待ちかどうかの事実は変わらない
-  const openIds = new Set(allCards.filter((t) => t.status !== "done").map((t) => t.id));
-  const cardById = new Map(allCards.map((t) => [t.id, t]));
+  // かつては `allCards` を別に受け取っていた。**描画はフィルタ後、依存の判定は全件**という
+  // 区別が要ったためで、同じ配列から両方作っていた頃は、別担当の未完了カードに依存していると
+  // 担当フィルタでそれが隠れた瞬間に「待ち」表示まで消え、依存関係が実態と逆に見えた。
+  // #179 で担当フィルタごと廃止したので**絞り込みが無くなり、区別する対象そのものが消えた** (#241)。
+  //
+  // **絞り込みを作り直すときは、ここに戻ってくること。**述語で絞る方式なら区別が再び要る。
+  // CLAUDE.md の将来案 (押した瞬間のIDの集合で絞る) は「あとから来たやつは全部勝ち」なので、
+  // 隠れた依存先という状況自体が起きない — どちらを採るかで、この行の要否が変わる
+  const openIds = new Set(cards.filter((t) => t.status !== "done").map((t) => t.id));
+  const cardById = new Map(cards.map((t) => [t.id, t]));
 
   const columns = columnsFor(lanes);
 

@@ -113,7 +113,6 @@ export default function App() {
       setLlmRefused(!!p.llmRefused);
       setCanAttach(p.attachments !== false);
     };
-    // Done要約カードの非同期再生成中インジケータ (#56)
     // プロジェクトが切り替わったら全部読み直す (他のタブ/端末での切り替えにも追従する)
     const onProject = (p: { projects: Project[] }) => {
       setProjects(p.projects);
@@ -165,7 +164,7 @@ export default function App() {
     });
   }, []);
 
-  // アーカイブ済みカードの詳細表示用 (#59: 要約カードの#xxリンクから開く)
+  // アーカイブ済みカードの詳細表示用 (#59: 「畳んだ完了」の箱の行や #xx リンクから開く)
   const [archivedCard, setArchivedCard] = useState<Card | null>(null);
   // #226: 経緯メモの本文だけを取りに行く先 (板の配信には載っていない)
   const [detailFull, setDetailFull] = useState<Card | null>(null);
@@ -223,7 +222,7 @@ export default function App() {
   // #197: 番号だけの発言 (`193` / `#193`) は、LLMを呼ばずにそのカードを開く。
   // 「検索窓が欲しい、とくに番号でアクセスしたいケースが増えてきた」への答えだが、
   // **専用の検索窓は作らない** — チャットは常設 (#74) でどこからでも打てるし、
-  // 開く仕掛け (openCard / jumpToBoard) は要約カードのリンク (#59) と依存チップ (#111) で
+  // 開く仕掛け (openCard / jumpToBoard) は畳んだ完了の箱 (#59) と依存チップ (#111) で
   // 既に在る。足りないのは番号を打ち込む入口だけだった。
   //
   // 番号が存在しないときは**普通の発言としてLLMへ渡す** (zio判断)。
@@ -231,7 +230,7 @@ export default function App() {
   const cardExists = useCallback(
     async (id: number) => {
       if (cards.some((t) => t.id === id)) return true; // ボード上なら往復しない
-      // アーカイブ済みかもしれない。要約カードの #xx リンクと同じ経路で確かめる
+      // アーカイブ済みかもしれない。畳んだ完了の箱から開くのと同じ経路で確かめる
       return api
         .getCard(id)
         .then(() => true)
@@ -292,7 +291,7 @@ export default function App() {
   const commitApproved = useCallback(() => {
     const ids = cards.filter((t) => t.status === "review" && t.checkedAt).map((t) => t.id);
     if (ids.length === 0) return;
-    // 複数前提の一括確定API (#60): N件でも要約再生成は1回
+    // 複数前提の一括確定API (#60): N件でもDone列の畳み直しは1回
     api
       .approveCards(ids)
       // #1: 条件を満たさないものはサーバーが弾いて note で理由を返す。

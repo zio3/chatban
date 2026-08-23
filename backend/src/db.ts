@@ -169,9 +169,9 @@ export function isDueDate(v: unknown): v is string {
 
 export const DUE_FORMAT_RULE = "期限は YYYY-MM-DD (実在する日付) で渡してください。解除は null です";
 
-/** Doneへ確定して要約カードに畳まれたか。
+/** Doneへ確定して「畳んだ完了」の箱に入ったか。
  *
- * archived は Card 型に出していない (getCard はアーカイブ済みも返すが、UIは要約カード経由で読む)。
+ * archived は Card 型に出していない (getCard はアーカイブ済みも返すが、UIは箱の中の行から開く)。
  * 「確定してよいか」「消してよいか」の判定は隠れている列も見る必要があるので、ここに1本だけ置く */
 export function isArchived(id: number): boolean {
   return !!(db().prepare("SELECT archived FROM cards WHERE id = ?").get(id) as { archived: number } | undefined)
@@ -182,7 +182,7 @@ export function mayEnterDone(cur: Pick<Card, "status" | "checkedAt" | "trashedAt
   return cur.status === "review" && !!cur.checkedAt && !cur.trashedAt;
 }
 
-/** 複数カードの一括更新 (#60)。完了遷移はまとめて1回だけ通知する (要約再生成のバッチ化)。
+/** 複数カードの一括更新 (#60)。完了遷移はまとめて1回だけ通知する (Done列の畳み直しを1回に)。
  * 単一更新もこの関数の長さ1ケースとして扱う — Doneへ入るルートはここ1本 */
 export function updateCards(patches: { id: number; patch: CardPatch }[]): (Card | undefined)[] {
   const completed: number[] = [];
@@ -310,10 +310,11 @@ export function trashCard(id: number): boolean {
   return (
     db()
       .prepare(
-        // アーカイブ済み (Doneへ確定して要約カードに畳まれたもの) は対象外。
-        // 要約カードの card_ids は更新されないので、消すとカードに存在しないIDが残り、
-        // 開くと404になる — 検収済み成果の監査元が壊れる (自動レビュー指摘)。
+        // アーカイブ済み (Doneへ確定して「畳んだ完了」の箱に入ったもの) は対象外。
+        // **検収の結果はゴミ箱へ入れない。**箱の中の行から開けるものが消えると、
+        // 検収済み成果の監査元が壊れる (自動レビュー指摘)。
         // ボードから見えないカードをチャット/MCPがIDで名指しできてしまうのが入口だった
+        // (#200 以前は、要約カードの card_ids が更新されず404になる、という形で踏んだ)
         //
         // #161: 検収の印はここでは触らない。落とすのは復元のとき (restoreCard を見る)
         "UPDATE cards SET trashed_at = datetime('now', 'localtime') WHERE id = ? AND trashed_at IS NULL AND archived = 0"

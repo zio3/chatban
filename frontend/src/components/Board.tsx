@@ -302,7 +302,7 @@ function Column({
       title={col.key === "done" ? "Doneへは検収ボタンかチャットの承認からのみ移動できます" : undefined}
       className={`flex min-h-40 flex-col gap-2 rounded-xl border-t-4 ${col.accent} bg-slate-50 p-2 ${isOver ? "ring-2 ring-indigo-400" : ""}`}
     >
-      {/* #71: Done列は生カードが常駐しない(検収→即アーカイブ)ので、バッジは蒸留済み総数を出す */}
+      {/* #71: Done列は個別カードと畳んだ箱の2段なので、バッジは両方の合計を出す */}
       <div className="flex items-center justify-between px-1">
         <h2 className="text-xs font-bold uppercase tracking-wide text-slate-500">{col.label}</h2>
         <span className="flex items-center gap-1.5">

@@ -75,7 +75,7 @@ export function statusDescription(lanes: CustomLane[]): string {
 export function reorderableStatuses(lanes: CustomLane[]): string[] {
   return [...REORDERABLE_STATUSES, ...lanes.map((l) => l.key)];
 }
-/** 並べ替えられる列。done は検収後すぐ要約カードへ畳まれて一覧から消えるので対象にしない (#105)。
+/** 並べ替えられる列。done は人が並べる列ではない (検収の結果が並ぶだけで、いずれ箱に畳まれる) ので対象にしない (#105)。
  * これもチャットとMCPで共有する — 同じ一覧を2か所に書くと必ず片方だけ直る */
 export const REORDERABLE_STATUSES = ["todo", "inprogress", "review"] as const;
 
@@ -101,10 +101,10 @@ export const QUERY_LOG_DESCRIPTION = [
   // ビューの条件は status ではなく archived / trashed_at / done_at なので、**両方に出る状態がある** —
   // そこも書かないと「重複している=おかしい」と読まれる。
   //
-  // **「短時間だけ」とは書かない** (Codexレビュー指摘)。畳む処理は fire-and-forget で走り
-  // (index.ts の runScoped)、`archived=1` が付くのは rollUpOldCards を待ったあと
-  // (archive.ts)。**その間にプロセスが止まればジョブは失われ、起動時に
-  // `status=done AND archived=0` を回収する処理は無い**ので、両方に出る状態は無期限に残る。
+  // **「短時間だけ」とは書かない** (Codexレビュー指摘)。畳むのは #200 以降**同期**だが、
+  // そのとき畳むのは**前回の検収ぶん**なので (`foldDoneColumn`)、いま確定したカードは
+  // **次に誰かが検収を押すまで** `archived=0` のまま残る。押さなければ何も動かない。
+  // (起動時に `status=done AND archived=0` を回収する処理も無い)
   // 時間で消えると書くと、エージェントは「待てば直る」と判断してしまう
   "live_cards に入るのは **done 以外の列すべて** (todo / inprogress / review と、そのプロジェクトで有効な任意レーン)。加えて「Doneへ確定したが、まだ畳まれていないもの」も入る。done_cards は done_at が入っているものなので、**畳まれるまでは同じカードが両方に出る**(不整合ではない)。畳むのは**人が検収を押した瞬間だけ**で、押さなければ何も動かない — 時間が経てば消えると考えないこと。列で絞りたいなら status を書く: WHERE status='review'",
   "例(いつ何件終わったか): SELECT done_day, COUNT(*) n FROM done_cards GROUP BY 1 ORDER BY 1 DESC",
@@ -505,7 +505,7 @@ export function buildSystemPrompt(cardFocus?: ReturnType<typeof getCard>, view?:
     "- create_cards / update_cards の報告では、必ず割り当てられたカードID を「#12として登録しました」の形式で明記する (ユーザーは以後この番号で参照する)。",
     "- 相談・議論の流れからカードを登録するときは、create_cards の context に登録に至った経緯を要約して入れる。経緯のない単発の明確な依頼では省略可。",
     "- ただし判断材料が足りないときや、影響が大きいと感じたときは、実行する前にチャットで案を出して聞く。どちらにするかは文脈で決めてよい。",
-    "- 「終わりました」等の完了報告は status=review に置き、「Reviewに置いたので確認OKなら承認を」と一言返す。勝手に done にしない (doneは検収済みの意味で、即アーカイブされる)。",
+    "- 「終わりました」等の完了報告は status=review に置き、「Reviewに置いたので確認OKなら承認を」と一言返す。勝手に done にしない (doneは人間の検収済みという意味。確定したカードはしばらく個別に残り、次の検収のときに「畳んだ完了」の箱へ入る)。",
     "- あなたは done に変更できない (ツールが受け付けず review に置き換わる)。完了・却下・承認はすべて status=review に置き、done への確定はボードのReview列の検収チェック(人間の操作)だけが行う。「doneにして」「まとめて承認」と言われたら review に置いた上で「確定はReview列の検収チェックからお願いします」と案内する。",
     "- 共通の前提・決まりごと(締切、方針、用語など)を伝えられたら update_project_context で前提情報に反映する。",
     "- 特定カードの経緯・決定事項・補足(「#22は◯◯方式でいくことにした」等)は update_cards の context_append でそのカードの経緯メモに1行足す。",

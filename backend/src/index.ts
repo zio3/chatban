@@ -377,12 +377,17 @@ app.patch("/api/cards/:id", (req, res) => {
 // 「間違えないようにする」のではなく「間違えても取り返しがつく」形にする
 app.delete("/api/cards/:id", (req, res) => {
   const id = Number(req.params.id);
-  // アーカイブ済み (Doneへ確定して要約カードに畳まれたもの) は消せない。
-  // 「見つからない」と返すと、実在するのに存在しないことになって混乱する
+  // アーカイブ済み (Doneへ確定して畳まれたもの) は消せない。
+  // 「見つからない」と返すと、実在するのに存在しないことになって混乱する。
+  //
+  // #233: この文面は「要約カードに畳まれた」「要約から辿れなくなる」と、
+  // #200 で撤去した仕組みを現在形で案内していた。**人が読むエラーなので、
+  // 撤去した機能を指したままだと辿れない場所を教えることになる。**
+  // frontend の番人 (e2e/staleUiCopy.spec.ts) は frontend/src しか見ないので、ここは届かない
   const cur = getCard(id);
   if (cur && !cur.trashedAt && isArchived(id))
     return res.status(409).json({
-      error: "Doneへ確定して要約カードに畳まれたカードは削除できません (要約から辿れなくなるため)",
+      error: "Doneへ確定して畳まれたカードは削除できません (Done列の「📦 畳んだ完了」から辿れます)",
     });
   const ok = trashCard(id);
   if (!ok) return res.status(404).json({ error: "not found" });

@@ -2,6 +2,7 @@ import { test, expect } from "@playwright/test";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import ts from "typescript";
 
 /** #233: **撤去した機能への言及が画面の文言に残っていないか**の番人。
  *
@@ -21,32 +22,23 @@ import { fileURLToPath } from "node:url";
  * 見つかった2件は**アーカイブ済みのカードを開いたときにしか出ない**。
  * 描いて見る方式だと、その状態に到達するテストを書いた分しか守れない —
  * **番人の網が、たまたま書いたテストの形になる。**
- * 文字列リテラルを直に見れば、どの状態で出るかに関係なく全部見える。
+ * 静的に見れば、どの状態で出るかに関係なく全部見える。
  *
- * ## なぜコメントを拾わないか
+ * ## なぜ自前の正規表現ではなく TypeScript のパーサで読むか
  *
- * このリポジトリは「#181 で撤去した」と経緯をコメントに残す方針 (#225) なので、
- * ソースを語で grep すると**偽陽性だらけになる**。だから字句を分けて、
- * **文字列リテラルの中だけ**を見る。さらに日本語を含むものに絞る
- * (`"column-review"` のようなコード上の文字列を巻き込まないため)。
+ * 最初は字句を正規表現で分けていたが、**JSXに直接書いた文言 (`<span>要約カード</span>`) を
+ * 1つも見ていなかった** (レビュー指摘 P2)。このリポジトリでは `🚫 却下` や `現況` のように
+ * JSX直書きの文言が多数あるので、**方式の主目的を満たしていなかった。**
+ *
+ * パーサなら `JsxText` も文字列リテラルも構文として区別でき、コメントと正規表現リテラルを
+ * 取り違える心配も消える (#232 の改名で、正規表現リテラルの中を見落とす穴を実際に踏んでいる)。
+ *
+ * コメントは対象にしない。このリポジトリは「#181 で撤去した」と経緯をコメントに残す方針 (#225)
+ * なので、語で grep すると偽陽性だらけになる。
  *
  * ブラウザは要らないが、`test:e2e` で一緒に走ってほしいのでここに置く。 */
 
-// ESM なので __dirname は無い
 const SRC = join(dirname(fileURLToPath(import.meta.url)), "..", "src");
-
-/** コメントの外にある文字列リテラルだけを集める。
- * URL の `//` や、コメントの中の引用符を取り違えないよう、頭から字句を読む */
-const TOKEN = new RegExp(
-  [
-    "(//[^\\n]*)", // 行コメント
-    "(/\\*[\\s\\S]*?\\*/)", // ブロックコメント
-    '("(?:[^"\\\\\\n]|\\\\.)*")', // "..."
-    "('(?:[^'\\\\\\n]|\\\\.)*')", // '...'
-    "(`(?:[^`\\\\]|\\\\.)*`)", // `...`
-  ].join("|"),
-  "g"
-);
 
 const JAPANESE = /[ぁ-んァ-ヶ一-龠]/;
 
@@ -60,17 +52,29 @@ function sourceFiles(dir: string): string[] {
   return out;
 }
 
-/** 画面に出うる日本語の文言。**リテラルの中身だけ**を返す (引用符は落とす) */
-function uiCopy(): { file: string; text: string }[] {
-  const out: { file: string; text: string }[] = [];
+/** 画面に出うる日本語の文言を全部集める。
+ *
+ * 拾うのは3種: 文字列リテラル / テンプレートリテラルの地の文 / **JSXのテキストノード**。
+ * `${...}` の中はコードなので入らない (パーサが分けてくれる)。 */
+function uiCopy(): { file: string; kind: string; text: string }[] {
+  const out: { file: string; kind: string; text: string }[] = [];
   for (const file of sourceFiles(SRC)) {
     const src = readFileSync(file, "utf-8");
-    for (const m of src.matchAll(TOKEN)) {
-      const lit = m[0];
-      if (lit.startsWith("//") || lit.startsWith("/*")) continue; // コメントは履歴の記録
-      const text = lit.slice(1, -1);
-      if (JAPANESE.test(text)) out.push({ file: file.slice(SRC.length + 1), text });
-    }
+    const sf = ts.createSourceFile(file, src, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+    const where = file.slice(SRC.length + 1);
+
+    const push = (kind: string, text: string) => {
+      if (JAPANESE.test(text)) out.push({ file: where, kind, text: text.trim() });
+    };
+
+    const walk = (node: ts.Node) => {
+      if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) push("文字列", node.text);
+      else if (ts.isTemplateHead(node) || ts.isTemplateMiddle(node) || ts.isTemplateTail(node))
+        push("テンプレート", node.text);
+      else if (ts.isJsxText(node)) push("JSX", node.text);
+      ts.forEachChild(node, walk);
+    };
+    walk(sf);
   }
   return out;
 }
@@ -100,19 +104,26 @@ for (const { word, why, allow } of REMOVED_UI) {
     const found = uiCopy().filter(({ text }) => text.includes(word) && !allow?.test(text));
     expect(
       found,
-      found.map(({ file, text }) => `${file}: ${text.slice(0, 120)}`).join("\n")
+      found.map(({ file, kind, text }) => `${file} [${kind}]: ${text.slice(0, 120)}`).join("\n")
     ).toHaveLength(0);
   });
 }
 
 // **番人が本物を見ていることを、番人自身で確かめる。**
-// 集めたリテラルが空だと、上のテストは全部素通りして「守っている」ように見える
-// (rows をループするだけで rows が空でも通るテストを実際に消した経緯がある — #180 の教訓)
-test("画面の文言をちゃんと拾えている (集める側が壊れたら気づく)", () => {
+// 集めた文言が空だと、上のテストは全部素通りして「守っている」ように見える
+// (rows をループするだけで rows が空でも通るテストを実際に消した経緯がある — #180 の教訓)。
+//
+// **3種それぞれについて実在の文言を名指しで確かめる。**1周目は placeholder (引用符付き属性) しか
+// 見ておらず、**JSX直書きを1つも拾えていないのにこの健全性テストが通っていた** (レビュー指摘 P2)。
+test("3種の文言をどれも拾えている (集める側が壊れたら気づく)", () => {
   const copy = uiCopy();
   expect(copy.length, "日本語の文言が1つも拾えていない").toBeGreaterThan(50);
-  expect(
-    copy.some(({ text }) => text.includes("ボードに話しかける")),
-    "実在する文言 (チャット入力の placeholder) が拾えていない"
-  ).toBe(true);
+
+  const kinds = (k: string) => copy.filter((c) => c.kind === k);
+  expect(kinds("文字列").length, "文字列リテラルを拾えていない").toBeGreaterThan(10);
+  expect(kinds("JSX").length, "JSXのテキストノードを拾えていない").toBeGreaterThan(10);
+
+  const says = (t: string) => copy.some((c) => c.text.includes(t));
+  expect(says("ボードに話しかける"), "属性の文言 (placeholder) が拾えていない").toBe(true);
+  expect(says("畳んだ完了"), "JSX直書きの文言が拾えていない").toBe(true);
 });

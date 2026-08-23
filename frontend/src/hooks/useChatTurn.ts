@@ -24,10 +24,10 @@ export function useChatTurn(opts: {
     attachments?: TurnAttachment[]
   ) => Promise<ChatResponse>;
   /** chat:progress を拾う対象。null=メインチャット / number=そのカードのチャット */
-  progressTaskId?: number | null;
+  progressCardId?: number | null;
   onResponse?: (res: ChatResponse) => void;
 }) {
-  const { progressTaskId = null } = opts;
+  const { progressCardId = null } = opts;
   const [log, setLog] = useState<ChatEntry[]>([]);
   const [sending, setSending] = useState(false);
   const [elapsedSec, setElapsedSec] = useState(0);
@@ -41,14 +41,14 @@ export function useChatTurn(opts: {
   // ツール実行の逐次フィードバック: 応答待ちの吹き出しに実行中の操作を表示
   useEffect(() => {
     function onProgress(p: { label: string; cardId?: number }) {
-      if ((p.cardId ?? null) !== progressTaskId) return;
+      if ((p.cardId ?? null) !== progressCardId) return;
       setLog((prev) => prev.map((e) => (e.pending ? { ...e, content: `${p.label}中…` } : e)));
     }
     socket.on("chat:progress", onProgress);
     return () => {
       socket.off("chat:progress", onProgress);
     };
-  }, [progressTaskId]);
+  }, [progressCardId]);
 
   // 応答待ちの経過秒 (無応答不安の可視化)
   useEffect(() => {

@@ -8,20 +8,20 @@ import AttachmentTray from "./AttachmentTray";
 import ThinkingIndicator from "./ThinkingIndicator";
 import { DepChip, DueBadge } from "./Board";
 import { statusLabel } from "../types";
-import type { ChatEntry, CustomLane, Task } from "../types";
+import type { ChatEntry, CustomLane, Card } from "../types";
 
-export default function TaskDetailPanel({
-  task,
+export default function CardDetailPanel({
+  card,
   archived,
   onClose,
   onJumpToBoard,
   onRestored,
-  taskById,
-  onOpenTask,
+  cardById,
+  onOpenCard,
   lanes = [],
   canAttach = true,
 }: {
-  task: Task;
+  card: Card;
   /** true: カードは完了→アーカイブ済み (表示は最後のスナップショット) */
   archived?: boolean;
   onClose: () => void;
@@ -29,8 +29,8 @@ export default function TaskDetailPanel({
   /** #102: ゴミ箱から戻したあとの再読み込み */
   onRestored?: () => void;
   /** #111: 依存先の中身をチップから引く索引と、そこへ飛ぶための導線 */
-  taskById?: Map<number, Task>;
-  onOpenTask?: (id: number) => void;
+  cardById?: Map<number, Card>;
+  onOpenCard?: (id: number) => void;
   /** #19: 任意レーンの表示名。列バッジと依存チップに使う */
   lanes?: CustomLane[];
   /** 添付を受けられるか (板の配信が決める)。**チャット面は2つあるので両方に渡す** —
@@ -38,10 +38,10 @@ export default function TaskDetailPanel({
    * 「押せるのに断られる」状態だった (レビュー指摘 2026-08-21) */
   canAttach?: boolean;
 }) {
-  const status = statusLabel(task.status, lanes);
+  const status = statusLabel(card.status, lanes);
   // #111: このカードを待っている側 (被依存)。データは blocked_by にあるので逆引きで足りる。
   // 索引に載るのは未完了カードだけだが、完了したものはもう待っていないので実用上それでよい
-  const dependents = [...(taskById?.values() ?? [])].filter((t) => t.blockedBy?.includes(task.id));
+  const dependents = [...(cardById?.values() ?? [])].filter((t) => t.blockedBy?.includes(card.id));
   const [width, setWidth] = useState(() => {
     const saved = Number(localStorage.getItem("chatban.panelWidth"));
     return saved >= 320 ? saved : 400;
@@ -57,8 +57,8 @@ export default function TaskDetailPanel({
 
   // カード専用チャット (#24)。ライフサイクルは共有フック (#23/#28/#29/#30)
   const chat = useChatTurn({
-    request: (m, h, signal, attachments) => api.taskChat(task.id, m, h, signal, attachments),
-    progressTaskId: task.id,
+    request: (m, h, signal, attachments) => api.cardChat(card.id, m, h, signal, attachments),
+    progressCardId: card.id,
   });
   const { setLog } = chat;
   const [input, setInput] = useState("");
@@ -69,8 +69,8 @@ export default function TaskDetailPanel({
 
   useEffect(() => {
     setLog([]);
-    api.chatLog(task.id).then((r) => setLog(r.messages as ChatEntry[])).catch(() => {});
-  }, [task.id, setLog]);
+    api.chatLog(card.id).then((r) => setLog(r.messages as ChatEntry[])).catch(() => {});
+  }, [card.id, setLog]);
 
   useEffect(() => {
     logRef.current?.scrollTo({ top: logRef.current.scrollHeight });
@@ -125,8 +125,8 @@ export default function TaskDetailPanel({
 
       <header className="flex items-start justify-between gap-2 border-b border-slate-100 py-3 pl-4 pr-3">
         <div className="min-w-0">
-          <p className="text-xs text-slate-500">#{task.id}</p>
-          <h2 className="text-base font-bold leading-snug">{task.title}</h2>
+          <p className="text-xs text-slate-500">#{card.id}</p>
+          <h2 className="text-base font-bold leading-snug">{card.title}</h2>
         </div>
         <button
           onClick={onClose}
@@ -140,42 +140,42 @@ export default function TaskDetailPanel({
       <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-4 py-3">
         {/* #102: ゴミ箱にあるカード。チャットの返答の #xx リンクからここに辿り着けるので、
             「元に戻せます」を毎回文章で説明する必要がない (くどくなる) */}
-        {task.trashedAt && (
+        {card.trashedAt && (
           <div className="flex flex-wrap items-center gap-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800">
-            <span>🗑 このカードはゴミ箱にあります ({task.trashedAt})</span>
+            <span>🗑 このカードはゴミ箱にあります ({card.trashedAt})</span>
             <button
               data-testid="restore-from-panel"
-              onClick={() => api.restoreTask(task.id).then(() => onRestored?.())}
+              onClick={() => api.restoreCard(card.id).then(() => onRestored?.())}
               className="ml-auto rounded-md bg-slate-900 px-3 py-1 text-xs font-medium text-white hover:bg-slate-700"
             >
               戻す
             </button>
           </div>
         )}
-        {archived && !task.trashedAt && (
+        {archived && !card.trashedAt && (
           <div className="rounded-lg bg-emerald-50 px-3 py-2 text-xs text-emerald-700">
-            {task.rejected
+            {card.rejected
               ? "🚫 このカードは却下として確定し、アーカイブ済みです (理由は下の割り振り理由・経緯メモ参照)"
               : "✅ このカードは完了し、Doneの要約カードにアーカイブされました"}
           </div>
         )}
         <div className="flex flex-wrap items-center gap-2 text-sm">
-          {task.rejected && (
+          {card.rejected && (
             <span className="rounded-full bg-rose-600 px-2.5 py-0.5 text-xs font-bold text-white">🚫 却下</span>
           )}
           <span className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${status.cls}`}>{status.label}</span>
           {/* #228: 以前はここだけ自前で整形しており、**期限切れでも普通の期限に見えていた** */}
-          {task.due && <DueBadge due={task.due} long />}
-          {task.blockedBy && task.blockedBy.length > 0 && (
+          {card.due && <DueBadge due={card.due} long />}
+          {card.blockedBy && card.blockedBy.length > 0 && (
             <span className="text-[10px] text-slate-500" title="このカードが待っている先">
               ⛓ 待ち{" "}
-              {task.blockedBy.map((id) => (
+              {card.blockedBy.map((id) => (
                 <DepChip
                   key={id}
                   id={id}
-                  dep={taskById?.get(id)}
-                  unresolved={(taskById?.get(id)?.status ?? "done") !== "done"}
-                  onOpen={onOpenTask}
+                  dep={cardById?.get(id)}
+                  unresolved={(cardById?.get(id)?.status ?? "done") !== "done"}
+                  onOpen={onOpenCard}
                   lanes={lanes}
                 />
               ))}
@@ -187,37 +187,37 @@ export default function TaskDetailPanel({
             <span className="text-[10px] text-slate-500" title="このカードの完了を待っているカード">
               🔓 これ待ち{" "}
               {dependents.map((d) => (
-                <DepChip key={d.id} id={d.id} dep={d} unresolved tone="waiting" onOpen={onOpenTask} lanes={lanes} />
+                <DepChip key={d.id} id={d.id} dep={d} unresolved tone="waiting" onOpen={onOpenCard} lanes={lanes} />
               ))}
             </span>
           )}
           <button
-            onClick={() => onJumpToBoard(task.id)}
+            onClick={() => onJumpToBoard(card.id)}
             className="ml-auto rounded-lg bg-slate-100 px-2.5 py-1 text-xs text-slate-600 hover:bg-slate-200"
           >
             📌 ボードで表示
           </button>
         </div>
 
-        {task.summary && (
+        {card.summary && (
           <section>
             <h3 className="mb-1 text-xs font-bold uppercase tracking-wide text-slate-500">現況</h3>
-            <p className="text-sm text-slate-700">📝 {task.summary}</p>
+            <p className="text-sm text-slate-700">📝 {card.summary}</p>
           </section>
         )}
 
         <section>
           <h3 className="mb-1 text-xs font-bold uppercase tracking-wide text-slate-500">経緯メモ</h3>
-          {task.context ? (
+          {card.context ? (
             <div className="chat-md rounded-lg bg-slate-50 p-3 text-sm text-slate-700">
-              <Markdown remarkPlugins={[remarkGfm]}>{task.context}</Markdown>
+              <Markdown remarkPlugins={[remarkGfm]}>{card.context}</Markdown>
             </div>
           ) : (
             <p className="text-sm text-slate-500">まだありません。下のチャットで話すと決定事項が記録されます</p>
           )}
         </section>
 
-        <p className="text-xs text-slate-500">作成 {task.createdAt} / 更新 {task.updatedAt}</p>
+        <p className="text-xs text-slate-500">作成 {card.createdAt} / 更新 {card.updatedAt}</p>
       </div>
 
       {/* カード専用チャット (#24) */}
@@ -298,7 +298,7 @@ export default function TaskDetailPanel({
               }
             }}
             onPaste={(e) => canAttach && atts.addFromPaste(e)}
-            placeholder={`#${task.id} について話す… (Shift+Enterで改行)`}
+            placeholder={`#${card.id} について話す… (Shift+Enterで改行)`}
             className="min-w-0 flex-1 resize-none rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-indigo-500"
           />
           <button

@@ -33,13 +33,13 @@ function linkifyMentions(text: string): string {
 }
 
 /** ユーザー発話(プレーンテキスト)用: #NN をクリック可能なspanに分解 */
-function renderUserText(text: string, onOpenTask: (id: number) => void) {
+function renderUserText(text: string, onOpenCard: (id: number) => void) {
   const parts = text.split(/(#\d+)/g);
   return parts.map((p, i) => {
     const m = p.match(/^#(\d+)$/);
     if (!m) return <span key={i}>{p}</span>;
     return (
-      <button key={i} onClick={() => onOpenTask(Number(m[1]))} className="font-bold underline decoration-dotted underline-offset-2">
+      <button key={i} onClick={() => onOpenCard(Number(m[1]))} className="font-bold underline decoration-dotted underline-offset-2">
         {p}
       </button>
     );
@@ -52,7 +52,7 @@ export default function Chat({
   elapsedSec,
   suggestions,
   askOptions,
-  onOpenTask,
+  onOpenCard,
   onSend,
   onStop,
   onReset,
@@ -66,7 +66,7 @@ export default function Chat({
   canAttach?: boolean;
   /** AIが直前の返答に添えた簡易返信。押すとその文字列がそのまま発言として送られ、次の発言で消える */
   askOptions: string[];
-  onOpenTask: (id: number) => void;
+  onOpenCard: (id: number) => void;
   onSend: (message: string, attachments?: Attachment[]) => void;
   onStop: () => void;
   onReset: () => void;
@@ -210,11 +210,11 @@ export default function Chat({
                           remarkPlugins={[remarkGfm]}
                           components={{
                             a: ({ href, children }) => {
-                              const m = href?.match(/^#task-(\d+)$/);
+                              const m = href?.match(/^#card-(\d+)$/);
                               if (m) {
                                 return (
                                   <button
-                                    onClick={() => onOpenTask(Number(m[1]))}
+                                    onClick={() => onOpenCard(Number(m[1]))}
                                     className="font-bold text-indigo-600 underline decoration-dotted underline-offset-2 hover:text-indigo-800"
                                   >
                                     {children}
@@ -243,7 +243,7 @@ export default function Chat({
                             ))}
                           </div>
                         )}
-                        {renderUserText(e.content, onOpenTask)}
+                        {renderUserText(e.content, onOpenCard)}
                       </>
                     )}
                     {e.trace && e.trace.length > 0 && (

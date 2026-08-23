@@ -6,12 +6,12 @@ import Chat, { type Suggestion } from "./components/Chat";
 import ContextView from "./components/ContextView";
 import SettingsView from "./components/SettingsView";
 import TrashView from "./components/TrashView";
-import TaskDetailPanel from "./components/TaskDetailPanel";
+import CardDetailPanel from "./components/CardDetailPanel";
 import { useChatTurn } from "./hooks/useChatTurn";
 import type { Attachment } from "./hooks/useAttachments";
 import { socket } from "./socket";
-import { parseTaskJump } from "./taskJump";
-import type { ChatEntry, CustomLane, FoldedTask, Task } from "./types";
+import { parseCardJump } from "./cardJump";
+import type { ChatEntry, CustomLane, FoldedCard, Card } from "./types";
 
 interface Toast {
   tone?: "error" | "info";
@@ -22,8 +22,8 @@ interface Toast {
 
 
 export default function App() {
-  const [tasks, setTasks] = useState<Task[]>([]);
-  const [folded, setFolded] = useState<FoldedTask[]>([]);
+  const [cards, setCards] = useState<Card[]>([]);
+  const [folded, setFolded] = useState<FoldedCard[]>([]);
   // #19: 有効な任意レーン。**ボードと一緒に届く** — 別のAPIで取りに行くと、
   // レーン名を変えた直後だけ列とカードの表示がズレる (同じ配信物に載せておけば起きない)
   const [lanes, setLanes] = useState<CustomLane[]>([]);
@@ -34,7 +34,7 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [toast, setToast] = useState<Toast | null>(null);
-  const [detailTaskId, setDetailTaskId] = useState<number | null>(null);
+  const [detailCardId, setDetailCardId] = useState<number | null>(null);
   // #21/#33: ボード以外の閲覧ビューへの遷移 (簡易タブ)
   const [view, setView] = useState<"board" | "context" | "settings" | "trash">("board");
 
@@ -75,7 +75,7 @@ export default function App() {
     setLoadError(null);
     try {
       const b = await api.board();
-      setTasks(b.cards);
+      setCards(b.cards);
       setFolded(b.folded ?? []);
       setLanes(b.lanes ?? []);
       setLlmRefused(!!b.llmRefused);
@@ -104,8 +104,8 @@ export default function App() {
     };
     // #72: メインチャットはリロードで新規 (会話は作業記憶。重要事項はプロジェクト前提/カード経緯メモに
     // 蒸留されて残り、生ログはDBに保存済みで query_log から引ける)。カードチャットは経緯ログなので復元維持
-    const onBoard = (p: { cards: Task[]; folded?: FoldedTask[]; lanes?: CustomLane[]; llmRefused?: boolean; attachments?: boolean }) => {
-      setTasks(p.cards);
+    const onBoard = (p: { cards: Card[]; folded?: FoldedCard[]; lanes?: CustomLane[]; llmRefused?: boolean; attachments?: boolean }) => {
+      setCards(p.cards);
       if (p.folded) setFolded(p.folded);
       // **空配列も反映する。**`if (p.lanes)` にすると最後の1本を畳んだときだけ列が残る
       if (p.lanes) setLanes(p.lanes);
@@ -138,11 +138,11 @@ export default function App() {
   }, [reload, loadProjects]);
 
   // 列内挿入位置から新しいsort値を計算 (前後の中間値。端は±1)
-  const moveTask = useCallback((move: MovePayload) => {
-    setTasks((prev) => {
+  const moveCard = useCallback((move: MovePayload) => {
+    setCards((prev) => {
       const snapshot = prev;
-      const task = prev.find((t) => t.id === move.id);
-      if (!task) return prev;
+      const card = prev.find((t) => t.id === move.id);
+      if (!card) return prev;
       const colWithout = prev
         .filter((t) => t.status === move.status && t.id !== move.id)
         .sort((a, b) => a.sort - b.sort || a.id - b.id);
@@ -150,14 +150,14 @@ export default function App() {
       const before = colWithout[idx - 1];
       const after = colWithout[idx];
       let sort: number;
-      if (!before && !after) sort = task.sort;
+      if (!before && !after) sort = card.sort;
       else if (!before) sort = after!.sort - 1;
       else if (!after) sort = before.sort + 1;
       else sort = (before.sort + after.sort) / 2;
 
       const doPatch = () =>
-        api.updateTask(move.id, { status: move.status, sort }).catch((e) => {
-          setTasks(snapshot); // ロールバック
+        api.updateCard(move.id, { status: move.status, sort }).catch((e) => {
+          setCards(snapshot); // ロールバック
           setToast({ message: `移動に失敗しました: ${e?.message ?? e}`, retry: doPatch });
         });
       doPatch();
@@ -166,39 +166,39 @@ export default function App() {
   }, []);
 
   // アーカイブ済みカードの詳細表示用 (#59: 要約カードの#xxリンクから開く)
-  const [archivedTask, setArchivedTask] = useState<Task | null>(null);
+  const [archivedCard, setArchivedCard] = useState<Card | null>(null);
   // #226: 経緯メモの本文だけを取りに行く先 (板の配信には載っていない)
-  const [detailFull, setDetailFull] = useState<Task | null>(null);
-  const openTask = useCallback(
+  const [detailFull, setDetailFull] = useState<Card | null>(null);
+  const openCard = useCallback(
     (id: number) => {
-      if (tasks.some((t) => t.id === id)) {
-        setDetailTaskId(id);
+      if (cards.some((t) => t.id === id)) {
+        setDetailCardId(id);
         return;
       }
       api
-        .getTask(id)
+        .getCard(id)
         .then((t) => {
-          setArchivedTask(t);
-          setDetailTaskId(id);
+          setArchivedCard(t);
+          setDetailCardId(id);
         })
         .catch(() => setToast({ message: `#${id} は存在しません` }));
     },
-    [tasks]
+    [cards]
   );
 
   // #226: 開いているカードの経緯メモを取りに行く。**版が変わったら取り直す** —
   // 依存に contextVersion を入れてあるので、チャット/MCP/他のタブが書き換えても追随する。
   // 板の配信には版だけが載っているので、本文を配らずに鮮度が保てる
   const detailContextVersion =
-    detailTaskId !== null ? tasks.find((t) => t.id === detailTaskId)?.contextVersion : undefined;
+    detailCardId !== null ? cards.find((t) => t.id === detailCardId)?.contextVersion : undefined;
   useEffect(() => {
-    if (detailTaskId === null) {
+    if (detailCardId === null) {
       setDetailFull(null);
       return;
     }
     let alive = true;
     api
-      .getTask(detailTaskId)
+      .getCard(detailCardId)
       .then((t) => {
         if (alive) setDetailFull(t);
       })
@@ -207,7 +207,7 @@ export default function App() {
     return () => {
       alive = false;
     };
-  }, [detailTaskId, detailContextVersion]);
+  }, [detailCardId, detailContextVersion]);
 
   // 詳細パネルの「ボードで表示」: パネルは開いたまま、スクロール→フラッシュ (Slackスレッド風の常駐)
   const jumpToBoard = useCallback((id: number) => {
@@ -223,29 +223,29 @@ export default function App() {
   // #197: 番号だけの発言 (`193` / `#193`) は、LLMを呼ばずにそのカードを開く。
   // 「検索窓が欲しい、とくに番号でアクセスしたいケースが増えてきた」への答えだが、
   // **専用の検索窓は作らない** — チャットは常設 (#74) でどこからでも打てるし、
-  // 開く仕掛け (openTask / jumpToBoard) は要約カードのリンク (#59) と依存チップ (#111) で
+  // 開く仕掛け (openCard / jumpToBoard) は要約カードのリンク (#59) と依存チップ (#111) で
   // 既に在る。足りないのは番号を打ち込む入口だけだった。
   //
   // 番号が存在しないときは**普通の発言としてLLMへ渡す** (zio判断)。
   // 「2026」のような数字だけの発言を横取りしない
-  const taskExists = useCallback(
+  const cardExists = useCallback(
     async (id: number) => {
-      if (tasks.some((t) => t.id === id)) return true; // ボード上なら往復しない
+      if (cards.some((t) => t.id === id)) return true; // ボード上なら往復しない
       // アーカイブ済みかもしれない。要約カードの #xx リンクと同じ経路で確かめる
       return api
-        .getTask(id)
+        .getCard(id)
         .then(() => true)
         .catch(() => false);
     },
-    [tasks]
+    [cards]
   );
 
   const sendFromChat = useCallback(
     async (message: string, attachments?: Attachment[]) => {
       setAskOptions([]);
       // 添付があるときは番号ジャンプにしない (画像を貼って「193」は、その画像についての発言)
-      const id = attachments?.length ? null : parseTaskJump(message);
-      if (id !== null && (await taskExists(id))) {
+      const id = attachments?.length ? null : parseCardJump(message);
+      if (id !== null && (await cardExists(id))) {
         // DBには残さない (リロードで消えてよい)。LLMを通っていないので保存の経路が無い。
         //
         // ただし**次のターンではLLMの履歴に入る**。useChatTurn が履歴から外すのは
@@ -258,13 +258,13 @@ export default function App() {
           { role: "user", content: message },
           { role: "assistant", content: `#${id} をひらきます。` },
         ]);
-        openTask(id); // 存在は確認済み。ボードに無ければ内部でもう一度引くが、番号を打つ頻度なら安い
+        openCard(id); // 存在は確認済み。ボードに無ければ内部でもう一度引くが、番号を打つ頻度なら安い
         jumpToBoard(id); // ボード上にあればスクロールして光らせる (無ければ何もしない)
         return;
       }
       mainChat.send(message, attachments);
     },
-    [mainChat.send, mainChat.setLog, taskExists, openTask, jumpToBoard]
+    [mainChat.send, mainChat.setLog, cardExists, openCard, jumpToBoard]
   );
 
   // Review→Doneの検収 (#57)。カードの検収OKチェックはマーキングのみで、
@@ -274,27 +274,27 @@ export default function App() {
   // 一塊の完了を管理するフラグなので、確かめた記録として残す。
   // 書けるのはこの経路(REST)だけ — エージェントはSQL窓口で読めるが付けられない
   const approvedIds = useMemo(
-    () => new Set(tasks.filter((t) => t.checkedAt).map((t) => t.id)),
-    [tasks]
+    () => new Set(cards.filter((t) => t.checkedAt).map((t) => t.id)),
+    [cards]
   );
   // 他の更新と同じく楽観更新 (moveTaskと同じ形): 先に画面へ反映し、失敗したら戻す
   const toggleApproved = useCallback((id: number) => {
-    setTasks((prev) => {
+    setCards((prev) => {
       const snapshot = prev;
       const on = !prev.find((t) => t.id === id)?.checkedAt;
       api.setChecked(id, on).catch((e) => {
-        setTasks(snapshot);
+        setCards(snapshot);
         setToast({ message: `検収の記録に失敗しました: ${e?.message ?? e}` });
       });
       return prev.map((t) => (t.id === id ? { ...t, checkedAt: on ? new Date().toISOString() : null } : t));
     });
   }, []);
   const commitApproved = useCallback(() => {
-    const ids = tasks.filter((t) => t.status === "review" && t.checkedAt).map((t) => t.id);
+    const ids = cards.filter((t) => t.status === "review" && t.checkedAt).map((t) => t.id);
     if (ids.length === 0) return;
     // 複数前提の一括確定API (#60): N件でも要約再生成は1回
     api
-      .approveTasks(ids)
+      .approveCards(ids)
       // #1: 条件を満たさないものはサーバーが弾いて note で理由を返す。
       // HTTPは200なので、ここで見ないと「押したのに動かない」だけが残る
       .then((r) => {
@@ -303,7 +303,7 @@ export default function App() {
       .catch((e) => {
         setToast({ message: `検収に失敗しました: ${e?.message ?? e}` });
       });
-  }, [tasks]);
+  }, [cards]);
 
 
   // ✨AI提案チップ (#75): ボードの文脈を読んだ提案を非同期で追加 (固定チップは即時表示の保険)
@@ -346,7 +346,7 @@ export default function App() {
   // 新規プロジェクト(まだ何も無い)では、レポートも割り振りも中身が無い。
   // 最初にやるべきは方針を伝えること — 前提情報はAIの振る舞いを決める介入チャネル (#81) なので、
   // ここを埋めるところから始まるのが自然。チップは1つに絞る
-  const isEmptyBoard = tasks.length === 0 && folded.length === 0;
+  const isEmptyBoard = cards.length === 0 && folded.length === 0;
   if (view !== "board") {
     suggestions.push(...(VIEW_SUGGESTIONS[view] ?? []));
   } else if (isEmptyBoard) {
@@ -356,10 +356,10 @@ export default function App() {
     });
   } else {
     suggestions.push({ label: "📋 現状をレポートして", message: "ボードの現状を簡潔にレポートして" });
-    if (tasks.filter((t) => t.status === "review").length > 0) {
+    if (cards.filter((t) => t.status === "review").length > 0) {
       suggestions.push({ label: "👀 レビュー待ちをまとめて", message: "レビュー中のカードの状況をまとめて" });
     }
-    if (tasks.filter((t) => t.status === "todo").length === 0) {
+    if (cards.filter((t) => t.status === "todo").length === 0) {
       suggestions.push({ label: "💡 次のタスク候補を挙げて", message: "次にやるべきタスクの候補を挙げて" });
     }
     suggestions.push(...aiSuggestions);
@@ -369,24 +369,24 @@ export default function App() {
   // 作り直すなら「LLMにIDの集合を返させて、押した瞬間に確定する」形になる (CLAUDE.md の将来案) —
   // 述語で絞る方式に戻さないのは、フィルタを掛けたまま放置したときに
   // 後から増えたカードが埋もれるため (#41/#90 で気にしていた「隠れたものが無いことになる」)
-  const visibleTasks = [...tasks].sort((a, b) => a.sort - b.sort || a.id - b.id);
+  const visibleCards = [...cards].sort((a, b) => a.sort - b.sort || a.id - b.id);
 
   // パネルで開いているカードが完了→アーカイブでtasksから消えても、パネルは最後のスナップショットで
   // 開き続ける (#53: AIの「完了にしました」返答が見えないまま消えるのを防ぐ)。閉じるのは✕のみ
-  const foundDetailTask = detailTaskId !== null ? tasks.find((t) => t.id === detailTaskId) : undefined;
-  const lastDetailTaskRef = useRef<Task | undefined>(undefined);
-  if (foundDetailTask) lastDetailTaskRef.current = foundDetailTask;
+  const foundDetailCard = detailCardId !== null ? cards.find((t) => t.id === detailCardId) : undefined;
+  const lastDetailCardRef = useRef<Card | undefined>(undefined);
+  if (foundDetailCard) lastDetailCardRef.current = foundDetailCard;
   const detailBase =
-    detailTaskId !== null
-      ? foundDetailTask ?? (archivedTask?.id === detailTaskId ? archivedTask : undefined) ?? lastDetailTaskRef.current
+    detailCardId !== null
+      ? foundDetailCard ?? (archivedCard?.id === detailCardId ? archivedCard : undefined) ?? lastDetailCardRef.current
       : undefined;
   // #226: 経緯メモの本文は板の配信に載っていない (ペイロードの96%を占めていたので外した)。
   // 開いたときに取りに行き、**版 (contextVersion) が変わったら取り直す** —
   // チャットやMCPが書き換えても、板の配信に載る版だけで気づける。
   // 新しい仕組みは作らない: 取得先はアーカイブ済みカードと同じ GET /api/cards/:id
-  const detailTask =
+  const detailCard =
     detailBase && detailFull?.id === detailBase.id ? { ...detailBase, context: detailFull.context } : detailBase;
-  const detailArchived = detailTaskId !== null && !foundDetailTask && !!detailTask;
+  const detailArchived = detailCardId !== null && !foundDetailCard && !!detailCard;
 
   // #97: プロジェクト切替はページ遷移 (/p/<id>) にしたので、画面の持ち越しを個別に消す処理は不要になった。
   // 「切り替えたら詳細パネルもフィルタも検収チェックも落とす」を手で書いていたが、
@@ -472,12 +472,12 @@ export default function App() {
         )}
         {view === "board" && !loading && !loadError && (
           <Board
-            tasks={visibleTasks}
-            allTasks={visibleTasks}
+            cards={visibleCards}
+            allCards={visibleCards}
             folded={folded}
             lanes={lanes}
-            onMove={moveTask}
-            onOpenTask={openTask}
+            onMove={moveCard}
+            onOpenCard={openCard}
             approvedIds={approvedIds}
             onToggleApproved={toggleApproved}
             onCommitApproved={commitApproved}
@@ -490,35 +490,35 @@ export default function App() {
         elapsedSec={mainChat.elapsedSec}
         suggestions={suggestions}
         askOptions={askOptions}
-        onOpenTask={openTask}
+        onOpenCard={openCard}
         onSend={sendFromChat}
         onStop={mainChat.stop}
         onReset={resetChat}
         canAttach={canAttach}
       />
       </div>
-      {detailTask && (
+      {detailCard && (
         // **カードごとに別物として扱う。**key が無いとパネルは作り直されず、
         // チャットのログ・送信中のリクエスト・入力中の下書きが前のカードのまま引き継がれる。
         // 送信中に別のカードへ切り替えると、応答が新しいカードのログに落ち、
         // そのまま次の発言の履歴としてLLMへ渡って**別のカードの経緯メモが書かれる**
         // (レビュー指摘 2026-08-21)。世代管理を自前で足すより、Reactに状態を捨てさせるほうが
         // 漏れが無い — #97 の「状態の置き場所を変えると後始末が消える」と同じ形
-        <TaskDetailPanel
-          key={detailTask.id}
-          task={detailTask}
+        <CardDetailPanel
+          key={detailCard.id}
+          card={detailCard}
           archived={detailArchived}
           canAttach={canAttach}
           onClose={() => {
-            setDetailTaskId(null);
-            lastDetailTaskRef.current = undefined;
+            setDetailCardId(null);
+            lastDetailCardRef.current = undefined;
           }}
           onJumpToBoard={jumpToBoard}
           lanes={lanes}
-          taskById={new Map(tasks.map((t) => [t.id, t]))}
-          onOpenTask={openTask}
+          cardById={new Map(cards.map((t) => [t.id, t]))}
+          onOpenCard={openCard}
           onRestored={() => {
-            setArchivedTask(null);
+            setArchivedCard(null);
             reload();
           }}
         />

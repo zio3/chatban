@@ -1,4 +1,4 @@
-import { archiveTasks, listLooseDoneIds, unarchiveTask } from "./db.js";
+import { archiveCards, listLooseDoneIds, unarchiveCard } from "./db.js";
 import { log } from "./log.js";
 
 // #200: Done列は3段。
@@ -23,13 +23,13 @@ import { log } from "./log.js";
  * 数分前の検収バッチが「昨日の分」として消える */
 const CONTAINER_HOURS = 24;
 
-export type FoldedTask = { id: number; title: string; foldedAt: number };
+export type FoldedCard = { id: number; title: string; foldedAt: number };
 
 // プロジェクトごとに1個。**増えない**ので、上限も掃除の引き金も要らない
-const containers = new Map<number, FoldedTask[]>();
+const containers = new Map<number, FoldedCard[]>();
 
 /** 期限内のものだけ。**純粋関数**にしてあるのが要点 (下の foldedContainer を見る) */
-function fresh(items: FoldedTask[] | undefined): FoldedTask[] {
+function fresh(items: FoldedCard[] | undefined): FoldedCard[] {
   const limit = Date.now() - CONTAINER_HOURS * 3600_000;
   return (items ?? []).filter((t) => t.foldedAt > limit);
 }
@@ -41,7 +41,7 @@ function fresh(items: FoldedTask[] | undefined): FoldedTask[] {
  * 何度も走る。期限切れをここで捨てて書き戻すと、「押した瞬間にしか動かない」が嘘になり、
  * 板を眺めているだけで中身が消える (自動レビュー指摘)。
  * 実際に捨てるのは次に畳むときで、それまで残っていても読み手には見えない */
-export function foldedContainer(projectId: number): FoldedTask[] | undefined {
+export function foldedContainer(projectId: number): FoldedCard[] | undefined {
   const kept = fresh(containers.get(projectId));
   return kept.length === 0 ? undefined : kept;
 }
@@ -54,7 +54,7 @@ export function foldDoneColumn(projectId: number, justApproved: number[]): void 
   const loose = listLooseDoneIds().filter((id) => !justApproved.includes(id));
   if (loose.length === 0) return;
 
-  const folded = archiveTasks(loose);
+  const folded = archiveCards(loose);
   if (folded.length === 0) return;
 
   // 期限切れを捨てるのはここ (書くのはこの経路だけ、という不変条件を保つため)
@@ -64,9 +64,9 @@ export function foldDoneColumn(projectId: number, justApproved: number[]): void 
 }
 
 /** doneから戻されたカードを板へ返す */
-export function onTaskReopened(projectId: number, taskId: number): void {
-  unarchiveTask(taskId);
-  const kept = (containers.get(projectId) ?? []).filter((t) => t.id !== taskId);
+export function onCardReopened(projectId: number, cardId: number): void {
+  unarchiveCard(cardId);
+  const kept = (containers.get(projectId) ?? []).filter((t) => t.id !== cardId);
   if (kept.length > 0) containers.set(projectId, kept);
   else containers.delete(projectId);
 }

@@ -1,11 +1,11 @@
 // タスクのタイトルで全プロジェクトを横断検索する。どのプロジェクトの話か分からなくなったとき用。
-//   npx tsx scripts/find-task.ts "外部FAQ"
+//   npx tsx scripts/find-card.ts "外部FAQ"
 import { listProjects, withProject } from "../src/store.js";
 import { queryProjectData } from "../src/db.js";
 
 const needle = process.argv[2] ?? "";
 if (!needle) {
-  console.log('使い方: npx tsx scripts/find-task.ts "検索語"');
+  console.log('使い方: npx tsx scripts/find-card.ts "検索語"');
   process.exit(1);
 }
 

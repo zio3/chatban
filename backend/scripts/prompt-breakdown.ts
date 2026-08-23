@@ -23,7 +23,7 @@ function row(name: string, s: string, note = "") {
 }
 
 withProject(projectId, () => {
-  // #180 で発言者を撤去したので引数は (taskFocus, view) の2つ。ここは板を見ている状態を測る
+  // #180 で発言者を撤去したので引数は (cardFocus, view) の2つ。ここは板を見ている状態を測る
   const sys = buildSystemPrompt(undefined, "board");
   const toolsJson = JSON.stringify(tools);
 

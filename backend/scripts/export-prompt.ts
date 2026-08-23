@@ -18,7 +18,7 @@ const TK = 1.7; // 日本語混じりGPT系の実測比。正確な値はAPIのu
 const tk = (s: string) => Math.round(s.length / TK);
 
 withProject(projectId, () => {
-  // #180 で発言者を撤去したので引数は (taskFocus, view) の2つ。ここは板を見ている状態を測る
+  // #180 で発言者を撤去したので引数は (cardFocus, view) の2つ。ここは板を見ている状態を測る
   const sys = buildSystemPrompt(undefined, "board");
   const toolList = tools.map((t: any) => ({ name: t.function.name, json: JSON.stringify(t.function, null, 2), chars: JSON.stringify(t.function).length }));
   const toolTotal = toolList.reduce((a, t) => a + t.chars, 0);

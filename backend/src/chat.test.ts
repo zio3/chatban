@@ -101,7 +101,7 @@ test("選択肢だけの行が残っても空行は畳む", () => {
 // Doneへ入れる条件。PR #1 では検収API (approveChecked) だけが持っていたため、
 // PATCH /api/cards/:id に status:"done" を投げれば素通りしていた (自動レビュー指摘)。
 // フロントは Done列へのD&Dを禁止しているが、その禁止がクライアント側にしか無かった —
-// PR #1 で塞いだのとまったく同じ形。条件そのものを updateTasks の不変条件にする。
+// PR #1 で塞いだのとまったく同じ形。条件そのものを updateCards の不変条件にする。
 
 const review = { status: "review" as const, checkedAt: "2026-08-12 10:00", trashedAt: null };
 

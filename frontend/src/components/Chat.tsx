@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { cardRefId, remarkCardLinks, splitCardRefs } from "../cardLinks";
 import { useAttachments, type Attachment } from "../hooks/useAttachments";
 import AttachmentTray from "./AttachmentTray";
 import ThinkingIndicator from "./ThinkingIndicator";
@@ -28,22 +29,23 @@ export interface Suggestion {
 }
 
 /** #NN メンションをMarkdownリンクに変換 (リンク先は #card-NN、レンダラ側でクリックを拾う) */
-function linkifyMentions(text: string): string {
-  return text.replace(/#(\d+)/g, "[#$1](#card-$1)");
-}
+// #248: **判定は cardLinks.ts に1つ。**ここには以前 linkifyMentions があり、
+// `#12` を `[#12](#card-12)` という文字列に書き換えてからMarkdownに食わせていた。
+// **コードの中まで書き換わる**うえ、出す側 (この関数) と読む側 (`a` のレンダラ) が
+// 離れていて、片方だけ変えると黙って効かなくなる状態だった (#232 第3弾で踏んだ)。
 
-/** ユーザー発話(プレーンテキスト)用: #NN をクリック可能なspanに分解 */
+/** ユーザー発話(プレーンテキスト)用: #NN をクリック可能なボタンに分解。
+ * **番号の切り出しは経緯メモと同じ関数** (splitCardRefs) を使う */
 function renderUserText(text: string, onOpenCard: (id: number) => void) {
-  const parts = text.split(/(#\d+)/g);
-  return parts.map((p, i) => {
-    const m = p.match(/^#(\d+)$/);
-    if (!m) return <span key={i}>{p}</span>;
-    return (
-      <button key={i} onClick={() => onOpenCard(Number(m[1]))} className="font-bold underline decoration-dotted underline-offset-2">
-        {p}
+  return splitCardRefs(text).map((p, i) =>
+    typeof p === "string" ? (
+      <span key={i}>{p}</span>
+    ) : (
+      <button key={i} onClick={() => onOpenCard(p)} className="font-bold underline decoration-dotted underline-offset-2">
+        #{p}
       </button>
-    );
-  });
+    )
+  );
 }
 
 export default function Chat({
@@ -207,17 +209,15 @@ export default function Chat({
                     ) : e.role === "assistant" ? (
                       <div className="chat-md">
                         <Markdown
-                          remarkPlugins={[remarkGfm]}
+                          remarkPlugins={[remarkGfm, remarkCardLinks]}
                           components={{
-                            a: ({ href, children }) => {
-                              // **linkifyMentions が出すアンカーと対でしか意味がない。**
-                              // 片方だけ改名すると #NN のクリックが黙って効かなくなる (#232 第3弾で踏んだ)。
-                              // 正規表現リテラルの中なので、文字列リテラルの照合では拾えない
-                              const m = href?.match(/^#card-(\d+)$/);
-                              if (m) {
+                            a: (props: any) => {
+                              const { href, children } = props;
+                              const id = cardRefId(props);
+                              if (id !== null) {
                                 return (
                                   <button
-                                    onClick={() => onOpenCard(Number(m[1]))}
+                                    onClick={() => onOpenCard(id)}
                                     className="font-bold text-indigo-600 underline decoration-dotted underline-offset-2 hover:text-indigo-800"
                                   >
                                     {children}
@@ -232,7 +232,7 @@ export default function Chat({
                             },
                           }}
                         >
-                          {linkifyMentions(e.content)}
+                          {e.content}
                         </Markdown>
                       </div>
                     ) : (

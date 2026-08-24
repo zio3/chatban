@@ -2222,3 +2222,111 @@ test.describe("チャットの入口 (#242 で1つの関数に寄せた)", () =>
     expect((await post("/api/cards/999999/chat", {})).status).toBe(404);
   });
 });
+
+/** 経緯メモを持つカードを1枚。**作成時に置く** —
+ * `update_cards` で後から入れるには版 (context_version) が要り、**省くと黙って断られる** (#245)。
+ * 断りを見ずに書いたテストは、経緯メモが空のまま「リンクが無い」と言って落ちる (実際に踏んだ) */
+async function cardWithContext(title: string, context: string): Promise<number> {
+  const r = await mcp("create_cards", { cards: [{ title, context }] });
+  expect(r.ok, `前提の用意に失敗した: ${r.note}`).toBe(true);
+  return r.created[0].id;
+}
+
+test("経緯メモの #番号 を押すとそのカードが開く (#248)", async ({ page }) => {
+  // 経緯メモは相互参照だらけ (実測: 全カードの経緯メモに `#` が 2,794 個) で、
+  // **指させること**が索引の値打ちになっている。文字のままだと番号を打ち直す必要があった。
+  const target = await createCard("リンクの飛び先");
+  const from = await cardWithContext("リンク元", `本文の中で #${target} を指している。`);
+
+  await page.goto("/");
+  await expect(page.getByTestId(`card-tile-${from}`)).toBeVisible();
+  await page.getByTestId(`card-tile-${from}`).click();
+  const panel = page.getByTestId("card-detail-panel");
+  await expect(panel).toBeVisible();
+
+  await panel.getByTestId(`card-ref-${target}`).click();
+  await expect(panel).toContainText("リンクの飛び先");
+});
+
+test("コードの中の #番号 はリンクにしない (#248)", async ({ page }) => {
+  // コードは**書いたとおりに見せる場所**なので触らない。
+  // これは除外規則ではなく**構造で保証されている** — コードは本文を子ではなく値に持つ葉なので、
+  // text ノードだけを割る実装では触れない (SKIP から外しても挙動が変わらないことを実測済み)
+  const id = await cardWithContext("コード内の井桁", "地の文の #4321 と、コードの `#4321` は別扱い。");
+
+  await page.goto("/");
+  await page.getByTestId(`card-tile-${id}`).click();
+  const panel = page.getByTestId("card-detail-panel");
+
+  // 地の文のほうは押せる形になっている
+  await expect(panel.getByTestId("card-ref-4321")).toHaveCount(1);
+  // コードのほうは素の文字のまま残っている
+  await expect(panel.locator("code", { hasText: "#4321" })).toHaveCount(1);
+});
+
+// **これは除外規則が効いていないと落ちる。**`#55` を割ると、リンクの中にリンクができて行き先が2つになる
+test("もともとリンクの文言に入っている #番号 は割らない (#248)", async ({ page }) => {
+  const id = await cardWithContext("リンク文言に番号があるカード", "[詳細 #55 はこちら](https://example.com/x)");
+
+  await page.goto("/");
+  await page.getByTestId(`card-tile-${id}`).click();
+  const panel = page.getByTestId("card-detail-panel");
+
+  await expect(panel.getByTestId("card-ref-55")).toHaveCount(0);
+  await expect(panel.getByRole("link", { name: "詳細 #55 はこちら" })).toHaveCount(1);
+});
+
+// **桁数だけで切ると、長い番号の先頭15桁がIDに化ける** (Codexレビュー P3)。
+// 実測では `#1234567890123456` が「15桁のリンク + 地の文の 6」に割れていた
+test("16桁以上の数字はカード番号として扱わない (#248)", async ({ page }) => {
+  const id = await cardWithContext(
+    "長い番号を含むカード",
+    "外部の番号 #1234567890123456 と、上限ぴったりの #123456789012345。"
+  );
+
+  await page.goto("/");
+  await page.getByTestId(`card-tile-${id}`).click();
+  const panel = page.getByTestId("card-detail-panel");
+
+  // 16桁以上は丸ごと素の文字 (先頭15桁だけを拾わない)
+  await expect(panel.getByTestId("card-ref-1234567890123456")).toHaveCount(0);
+  await expect(panel).toContainText("#1234567890123456");
+  // 上限の15桁は拾う (存在するかどうかでは決めない)
+  await expect(panel.getByTestId("card-ref-123456789012345")).toHaveCount(1);
+});
+
+// **普通のリンクに独自の属性を足さない。**react-markdown が渡す内部の値 (`node`) を
+// そのままDOMへ流すと `<a node="[object Object]">` になっていた (Codexレビュー P3)
+test("普通のリンクに内部プロパティが漏れない (#248)", async ({ page }) => {
+  const id = await cardWithContext("外部リンクを含むカード", "詳しくは [ここ](https://example.com/doc) を見る。");
+
+  await page.goto("/");
+  await page.getByTestId(`card-tile-${id}`).click();
+  const link = page.getByTestId("card-detail-panel").getByRole("link", { name: "ここ" });
+
+  await expect(link).toHaveCount(1);
+  await expect(link).not.toHaveAttribute("node", /.*/);
+});
+
+test("存在しないカードを指していたら、開かずに知らせる (#248)", async ({ page }) => {
+  // **リンクにするかどうかは存在で決めない** (経緯メモは過去の記録なので、消えた番号も出てくる)。
+  // 押した先で `openCard` が引き直し、無ければトーストになる
+  const id = await cardWithContext("消えた番号を指すカード", "もう無い #999123 を指している。");
+
+  await page.goto("/");
+  await page.getByTestId(`card-tile-${id}`).click();
+  const panel = page.getByTestId("card-detail-panel");
+
+  await panel.getByTestId("card-ref-999123").click();
+  await expect(page.getByText("#999123 は存在しません")).toBeVisible();
+});
+
+test("GitHubの番号もリンクになる (承知の上・#248)", async ({ page }) => {
+  // `PR #109` はカード #109 ではないが、**そこは人間が文脈で判断する**という判断 (zio)。
+  // 判定規則を増やさない。このテストは「意図した挙動」を固定するためにある
+  const id = await cardWithContext("PR番号を含むカード", "実装完了 (PR #109 / merge abc1234)。");
+
+  await page.goto("/");
+  await page.getByTestId(`card-tile-${id}`).click();
+  await expect(page.getByTestId("card-detail-panel").getByTestId("card-ref-109")).toHaveCount(1);
+});

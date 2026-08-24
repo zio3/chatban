@@ -1,0 +1,105 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+
+/** #250: **同じ項目の説明文が、入口ごとに違わないこと。**
+ *
+ * `toolContractDrift.test.ts` は**キーの顔ぶれと必須の指定**を見ている。
+ * こちらは**説明文そのもの**を見る。
+ *
+ * ## 実際にズレていた
+ *
+ * 書いた時点で 26 項目中 3 件が食い違っていた。いちばん効いていたのがこれ:
+ *
+ * - チャット … 「登録に至った経緯・会話で出た論点・決まったこと。**相談や議論の流れから
+ *   登録するときは必ず書く** (タイトルだけでは背景が失われる)」
+ * - MCP … 「登録に至った経緯・論点・決定事項 (経緯メモの初期値)」
+ *
+ * **MCP から作るときだけ、書く理由が伝わっていなかった。**
+ * ドッグフーディングの登録はほぼ MCP 経由なので、**効いてほしい側に届いていなかった**。
+ *
+ * ## なぜ説明文が「仕様」なのか
+ *
+ * CLAUDE.md いわく「**ツール契約のdescriptionはエージェントにとってのUIラベル**」。
+ * かつて `reason` 欄が「説明が無い文字列欄」に見えて進捗で汚された事故があり、
+ * **入口ごとに契約がズレると入口ごとに違う汚れ方をする**。 */
+
+process.env.CHATBAN_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "chatban-desc-"));
+process.env.CHATBAN_LOG_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "chatban-desclog-"));
+process.env.AUTO_ARCHIVE = "0";
+
+const { ensureInitialProject } = await import("./store.js");
+ensureInitialProject();
+
+const { buildMcpServer } = await import("./mcp.js");
+const { buildTools } = await import("./chat.js");
+
+const server = buildMcpServer(() => {});
+const [c, s] = InMemoryTransport.createLinkedPair();
+const client = new Client({ name: "desc-drift", version: "0" });
+await Promise.all([server.connect(s), client.connect(c)]);
+
+const mcpTools = new Map((await client.listTools()).tools.map((t: any) => [t.name, t.inputSchema]));
+const chatTools = new Map(buildTools([]).map((t: any) => [t.function.name, t.function.parameters]));
+
+/** JSON Schema から「項目名 → 説明文」を取り出す (配列要素の中も1段だけ見る) */
+function fields(schema: any): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const [k, v] of Object.entries<any>(schema?.properties ?? {})) {
+    out.set(k, v.description ?? "");
+    if (v.type === "array" && v.items?.properties)
+      for (const [k2, v2] of Object.entries<any>(v.items.properties)) out.set(`${k}[].${k2}`, v2.description ?? "");
+  }
+  return out;
+}
+
+for (const [name, chatSchema] of chatTools) {
+  const mcpSchema = mcpTools.get(name);
+  if (!mcpSchema) continue; // 顔ぶれの欠けは toolContractDrift の担当
+
+  test(`${name}: 同じ項目の説明文が、チャットとMCPで一致する`, () => {
+    const chat = fields(chatSchema);
+    const mcp = fields(mcpSchema);
+    const diff: string[] = [];
+
+    for (const [key, chatText] of chat) {
+      const mcpText = mcp.get(key);
+      if (mcpText === undefined) continue; // 片方にしかない項目は対象外
+      if (chatText !== mcpText) diff.push(`  ${key}\n    chat: ${chatText}\n    mcp : ${mcpText}`);
+    }
+
+    assert.deepEqual(
+      diff,
+      [],
+      `同じ項目を入口ごとに違う言葉で説明している。**説明文はエージェントにとってのUIラベル**なので、` +
+        `片方だけ手厚いと、もう片方の入口から来たときだけ意図が伝わらない:\n${diff.join("\n")}`
+    );
+  });
+}
+
+// **番人が本物を見ていること。**片方が空だと全部素通りする (#180 の教訓)
+test("番人が実際に説明文を読めている", () => {
+  assert.ok(chatTools.size >= 8, `チャットのツールが読めていない (${chatTools.size}件)`);
+  assert.ok(mcpTools.size >= 8, `MCPのツールが読めていない (${mcpTools.size}件)`);
+
+  const create = fields(chatTools.get("create_cards"));
+  assert.ok(create.has("cards[].context"), "配列要素の中まで見えていない");
+  assert.ok((create.get("cards[].context") ?? "").length > 20, "説明文が取れていない");
+});
+
+// #250: 宣言そのもの。**「Markdown で書いてよい」だけを言うと、節を増やす方へ効いてしまう**
+test("経緯メモの契約が、Markdown と「節を増やさない」を対で言っている", () => {
+  const create = fields(chatTools.get("create_cards")).get("cards[].context") ?? "";
+  const write = fields(chatTools.get("update_cards")).get("updates[].context") ?? "";
+
+  for (const [label, text] of [["作成", create], ["上書き", write]] as const) {
+    assert.match(text, /Markdown/, `${label}の契約が Markdown と言っていない`);
+    assert.match(text, /節は増やさず/, `${label}の契約が「節を増やさない」と対で言っていない`);
+    assert.match(text, /バックティック/, `${label}の契約が、文字として見せる書き方を案内していない`);
+  }
+});

@@ -1,6 +1,7 @@
 import type OpenAI from "openai";
 import {
   CONTEXT_APPEND_DESCRIPTION,
+  CONTEXT_MARKDOWN_RULE,
   createCardsAsAgent,
   RESTORE_DESCRIPTION,
   restoreCardsAsAgent,
@@ -176,7 +177,15 @@ export const SUMMARY_DESCRIPTION =
  * 「累積なので上書きすると前の情報が消える」が書いていなかった。
  * 実例: 外部エージェントが書き直すたびに無意識に要約し、経緯メモの情報が減った */
 export const CONTEXT_WRITE_DESCRIPTION =
-  "経緯メモの全文上書き。累積の記録なので、既存を読んでマージした全文を渡す(書き直すときに要約すると前の情報が消える)。渡すときは context_version も必須。1件足すだけなら context_append を使う — そちらは読む必要も版も要らない";
+  "経緯メモの全文上書き。累積の記録なので、既存を読んでマージした全文を渡す(書き直すときに要約すると前の情報が消える)。渡すときは context_version も必須。1件足すだけなら context_append を使う — そちらは読む必要も版も要らない。" +
+  CONTEXT_MARKDOWN_RULE;
+
+/** #250: **作成時の説明は入口ごとに書かない。**実測すると、同じ `context` なのに
+ * チャットは「相談や議論の流れから登録するときは必ず書く」まで言い、MCPは
+ * 「(経緯メモの初期値)」だけだった — **MCP から作るときだけ、書く理由が伝わっていなかった** */
+export const CONTEXT_CREATE_DESCRIPTION =
+  "登録に至った経緯・会話で出た論点・決まったこと。相談や議論の流れから登録するときは必ず書く (タイトルだけでは背景が失われる)。" +
+  CONTEXT_MARKDOWN_RULE;
 
 /** #153: 期限の契約。以前は「期限 YYYY-MM-DD」だけで、**渡した値が使われたかどうかが
  * 返り値から分からなかった** — `not-a-date` がそのまま保存された報告がある。
@@ -263,7 +272,7 @@ export function buildTools(lanes: CustomLane[]): OpenAI.Chat.Completions.ChatCom
                 // 作ってから update_cards で直す往復をしていた (Codexレビュー指摘)
                 status: { type: "string", enum: STATUS_VALUES, description: `省略時はtodo。${STATUS_DESC}` },
                 summary: { type: "string", description: SUMMARY_DESCRIPTION },
-                context: { type: "string", description: "登録に至った経緯・会話で出た論点・決まったこと。相談や議論の流れから登録するときは必ず書く (タイトルだけでは背景が失われる)" },
+                context: { type: "string", description: CONTEXT_CREATE_DESCRIPTION },
                 due: { type: "string", description: DUE_DESCRIPTION },
                 blocked_by: { type: "array", items: { type: "integer" }, description: BLOCKED_BY_DESCRIPTION },
               },
@@ -296,7 +305,7 @@ export function buildTools(lanes: CustomLane[]): OpenAI.Chat.Completions.ChatCom
                 blocked_by: { type: ["array", "null"], items: { type: "integer" }, description: `${BLOCKED_BY_DESCRIPTION}。全置換で、解除はnull` },
                 rejected: { type: "boolean", description: REJECTED_DESCRIPTION },
                 context: { type: "string", description: CONTEXT_WRITE_DESCRIPTION },
-                context_version: { type: "integer", description: "context を渡すときのみ必須。直前に読んだ contextVersion をそのまま添える" },
+                context_version: { type: "integer", description: "context を渡すときのみ必須。直前に query_log で読んだ context_version をそのまま添える" },
                 context_append: { type: "string", description: CONTEXT_APPEND_DESCRIPTION },
               },
               required: ["id"],
@@ -385,7 +394,7 @@ export function buildTools(lanes: CustomLane[]): OpenAI.Chat.Completions.ChatCom
         type: "object",
         properties: {
           text: { type: "string", description: "新しい前提情報の全文" },
-          version: { type: "integer", description: "直前に読んだ前提情報の version。合わないと更新されず現在値が返る" },
+          version: { type: "integer", description: "直前に get_project_context で読んだ version。合わないと更新されず現在値が返る" },
         },
         required: ["text", "version"],
       },

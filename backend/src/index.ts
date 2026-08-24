@@ -13,7 +13,7 @@ import { attachmentsEnabled, jsonLimit } from "./demoMode.js";
 import { llmConfig } from "./config.js";
 import { log } from "./log.js";
 import { buildMcpServer } from "./mcp.js";
-import { argShape } from "./mcpLog.js";
+import { argShape, toolCalls } from "./mcpLog.js";
 import { isAllowedOrigin, isBrowserCrossSite } from "./origin.js";
 import { resetPromptState } from "./promptState.js";
 import { assertTimezone } from "./timezone.js";
@@ -115,7 +115,10 @@ app.use((req, res, next) => {
   return res.status(400).json({ error: `project #${raw} not found`, available: projectList() });
 });
 
-const server = http.createServer(app);
+// #247: テストから実HTTPで叩けるように公開する (PORT=0 で空きポートに開ける)。
+// **入口の記録はここを通らないと確かめられない** — JSON-RPCのバッチはSDKの内側で展開されるので、
+// InMemoryTransport 越しのテストでは再現しない (Codexレビュー P2)
+export const server = http.createServer(app);
 // #113 → #180: ボードの中身は Socket.IO で流れるので、RESTだけ締めても意味がない。
 // **WebSocketのハンドシェイクは CORS の対象外**なので、`cors` オプションは接続の可否に効かない
 // (実測: 許可していない Origin から CONNECTED になった。Codexレビュー指摘)。
@@ -680,13 +683,12 @@ app.post("/mcp/:projectId", async (req, res) => {
       // 記録に一切残らない。**使い方を間違え続けているツールが「呼ばれていない」に見える**のが
       // 一番まずい (この記録の目的が「呼ばれている/いない」の可視化なので、結論が逆になる)。
       // 受けた tools/call と、ハンドラが動いたかを突き合わせて、届かなかったぶんだけここで残す
-      const call = req.body?.method === "tools/call" ? req.body?.params : undefined;
-      let reached = false;
+      // **JSON-RPCは配列 (バッチ) でも来る**ので、id ごとに突き合わせる (Codexレビュー P2)。
+      // 真偽値1つだと、バッチの1件目が届いた時点で残りの拒否を見逃す
+      const pending = new Map(toolCalls(req.body).map((c) => [JSON.stringify(c.id), c]));
       const mcpServer = buildMcpServer(
         (kind) => notifyView(kind, projectId),
-        () => {
-          reached = true;
-        }
+        (requestId) => pending.delete(JSON.stringify(requestId))
       );
       const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
       res.on("close", () => {
@@ -695,9 +697,9 @@ app.post("/mcp/:projectId", async (req, res) => {
       });
       await mcpServer.connect(transport);
       await transport.handleRequest(req, res, req.body);
-      if (call && !reached) {
+      for (const c of pending.values()) {
         // 引数はキー名だけ (値は残さない)。**どのキーが足りなかったのかは、キーの顔ぶれで分かる**
-        log("mcp", `${call?.name ?? "(名前なし)"} NG スキーマで拒否 (ハンドラまで届かず) | ${argShape(call?.arguments)} |`);
+        log("mcp", `${c.name} NG スキーマで拒否 (ハンドラまで届かず) | ${argShape(c.args)} |`);
       }
     });
   } catch (e) {

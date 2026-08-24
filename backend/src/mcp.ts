@@ -36,7 +36,7 @@ import {
 import { boardDelta, formatBoardUpdate } from "./boardState.js";
 import { log } from "./log.js";
 // #247: MCP経由の呼び出しを記録する (キー名だけ。値は残さない)
-import { argShape, toolOutcome } from "./mcpLog.js";
+import { argShape, safeToolName, toolOutcome } from "./mcpLog.js";
 // #245: 列の一覧と引数の契約は toolArgs.ts が唯一の置き場 (チャットと同じものを指す)
 import { agentStatusValues, parseToolArgs, reorderableStatuses } from "./toolArgs.js";
 import { contextReference, contextTemplateHint } from "./contextTemplate.js";
@@ -104,8 +104,13 @@ function currentProject() {
  *  **SDKのZodで弾かれた呼び出しはハンドラまで来ない**ので、入口 (index.ts) 側で
  *  「受けたのに届かなかった」を検出するために要る。
  *  実測: `query_log` を引数なしで呼ぶと**1行も記録されなかった** —
- *  **使い方を間違え続けているツールが「呼ばれていない」に見える**のが一番まずい */
-export function buildMcpServer(onEvent: (kind: ViewEvent) => void, onToolHandled?: () => void): McpServer {
+ *  **使い方を間違え続けているツールが「呼ばれていない」に見える**のが一番まずい。
+ *  引数の requestId は JSON-RPC の id。**バッチで複数の呼び出しが1リクエストに入る**ので、
+ *  「届いたかどうか」は真偽値ではなく id ごとに持つ必要がある (Codexレビュー P2) */
+export function buildMcpServer(
+  onEvent: (kind: ViewEvent) => void,
+  onToolHandled?: (requestId: unknown) => void
+): McpServer {
   const server = new McpServer({ name: "chatban", version: "0.1.0" });
 
   // #247: **記録の絞り口はここ1つ。**ハンドラ10個に個別に入れない (#245 と同じ形 —
@@ -123,11 +128,13 @@ export function buildMcpServer(onEvent: (kind: ViewEvent) => void, onToolHandled
         return r;
       } catch (e) {
         // 例外はSDKへそのまま返す。**記録だけ足す** (落ちたことこそ残したい)
-        outcome = `throw ${e instanceof Error ? e.message : String(e)}`.slice(0, 80);
+        // **例外の本文は出さない** (入力値を含みうる。SQLiteのエラーはSQLをそのまま載せる)。
+        // 種類だけで「どのツールが落ちているか」は分かる (Codexレビュー P2)
+        outcome = `throw ${e instanceof Error ? e.name : "不明"}`;
         throw e;
       } finally {
-        log("mcp", `${name} ${outcome} | ${argShape(args)} | ${Date.now() - started}ms`);
-        onToolHandled?.();
+        log("mcp", `${safeToolName(name)} ${outcome} | ${argShape(args)} | ${Date.now() - started}ms`);
+        onToolHandled?.(extra?.requestId);
       }
     })) as typeof server.registerTool;
 

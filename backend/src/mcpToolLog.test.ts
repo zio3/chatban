@@ -23,6 +23,7 @@ const { ensureInitialProject } = await import("./store.js");
 ensureInitialProject();
 
 const { buildMcpServer } = await import("./mcp.js");
+const { MCP_TOOL_NAMES } = await import("./mcpLog.js");
 const { createCard } = await import("./db.js");
 
 let client: Client;
@@ -130,4 +131,11 @@ test("ハンドラが動いたときは通知口が呼ばれる (入口側の突
 
   await cl.callTool({ name: "query_log", arguments: {} }).catch(() => {});
   assert.equal(handled, 1, "SDKが弾いたのに届いたことになっている");
+});
+
+// **許可リストが実物とズレると、正当なツール名が「(未登録のツール)」になって数えられなくなる。**
+// 未知の名前を平文にしないための許可リストなので、実物と突き合わせて固定しておく
+test("ツール名の許可リストが、実際に登録されているものと一致する", async () => {
+  const actual = (await client.listTools()).tools.map((t) => t.name).sort();
+  assert.deepEqual([...MCP_TOOL_NAMES].sort(), actual, "mcpLog.ts の MCP_TOOL_NAMES を合わせること");
 });

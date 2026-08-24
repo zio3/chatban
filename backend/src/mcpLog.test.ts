@@ -1,11 +1,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { argShape, toolOutcome } from "./mcpLog.js";
+import { argShape, MCP_TOOL_NAMES, safe, safeToolName, toolCalls, toolOutcome } from "./mcpLog.js";
 
-/** #247: **記録に本文が混ざらないことが、この機能の一番大事な性質。**
- * 経緯メモは3,000字級の実データなので、うっかり出すと
- * #224 (公開デモでプロンプト全文がディスクに残る) と同じ形になる。 */
+/** #247: **ログに出てよいのは「こちらが決めた語」だけ。**
+ *
+ * 最初は「値を出さなければ安全」と考えてキー名をそのまま出していたが、これは誤りだった
+ * (Codexレビュー P2)。`create_cards` の要素スキーマは `.passthrough()` なので、
+ * **キー名そのものが外部入力**になる。 */
+
+// ---- 値を出さない (元からの性質) ----
 
 test("値は1文字も残さない (経緯メモの本文が混ざらない)", () => {
   const line = argShape({
@@ -16,6 +20,45 @@ test("値は1文字も残さない (経緯メモの本文が混ざらない)", (
   assert.ok(!line.includes("12"), `値が記録に出ている: ${line}`);
   assert.ok(line.includes("context") && line.includes("summary"), `キー名は残っていない: ${line}`);
 });
+
+// ---- キー名も外部入力として扱う (レビューで見つかった穴) ----
+
+test("契約に無いキーは平文にせず、個数だけ数える", () => {
+  const line = argShape({ cards: [{ title: "x", "SECRET-顧客情報": "y" }] });
+
+  assert.ok(!line.includes("SECRET"), `キー名から本文が漏れている: ${line}`);
+  assert.match(line, /\+1不明/, `契約に無いキーを使ったことが消えている: ${line}`);
+  assert.ok(line.includes("title"), "契約にあるキーまで消えている");
+});
+
+test("トップレベルの未知キーも同じ扱い", () => {
+  const line = argShape({ ids: [1], "SECRET-混入": 1 });
+  assert.ok(!line.includes("SECRET"), line);
+  assert.match(line, /\+1不明/);
+});
+
+// **改行を残すと1回の呼び出しで複数行を作れる。**行数を数える集計が丸ごと偽装できる
+test("制御文字は落とす (ログの行を作らせない)", () => {
+  const forged = "a\n[2099-01-01 00:00:00] [mcp] sync_board ok";
+  assert.ok(!safe(forged).includes("\n"), "改行が残っている");
+  assert.ok(!safe("a\r\nb\tc").match(/[\r\n\t]/), "制御文字が残っている");
+  assert.equal(safe("  詰める   空白  "), "詰める 空白");
+  assert.equal(safe(undefined), "");
+  assert.equal(safe(123), "");
+});
+
+test("自由文は長さを切る (1行に収まる)", () => {
+  assert.ok(safe("あ".repeat(500)).length < 70, "切られていない");
+});
+
+test("登録済みでないツール名は平文にしない", () => {
+  assert.equal(safeToolName("create_cards"), "create_cards");
+  assert.equal(safeToolName("SECRET-な名前"), "(未登録のツール)");
+  assert.equal(safeToolName(undefined), "(未登録のツール)");
+  assert.ok(MCP_TOOL_NAMES.length >= 8, "許可リストが空同然になっている");
+});
+
+// ---- 形の読み取り ----
 
 test("配列は件数と、要素に現れたキーを出す", () => {
   assert.equal(argShape({ ids: [1, 2, 3] }), "ids[3]");
@@ -37,10 +80,7 @@ test("空・非オブジェクトでも落ちない", () => {
   assert.equal(argShape([1, 2]), "");
 });
 
-test("長すぎるキーと行は打ち切る (ログを1行に保つ)", () => {
-  const long = "k".repeat(300);
-  assert.ok(argShape({ [long]: 1 }).length < 60, "キーが打ち切られていない");
-
+test("行が長くなりすぎない", () => {
   const many = Object.fromEntries(Array.from({ length: 50 }, (_, i) => [`key${i}`, 1]));
   assert.ok(argShape(many).length <= 201, "行が打ち切られていない");
 });
@@ -59,6 +99,11 @@ test("理由が無いときも NG と分かる", () => {
   assert.equal(toolOutcome(res({ ok: false })), "NG (理由なし)");
 });
 
+test("断りの理由にも制御文字と長さの制限が効く", () => {
+  assert.ok(!toolOutcome(res({ ok: false, note: "a\nb" })).includes("\n"), "改行が残っている");
+  assert.ok(toolOutcome(res({ ok: false, note: "あ".repeat(500) })).length < 80);
+});
+
 test("通ったものは ok", () => {
   assert.equal(toolOutcome(res({ ok: true, created: [{ id: 1 }] })), "ok");
   assert.equal(toolOutcome(res({ cards: [] })), "ok", "ok を持たない応答 (sync_board) が NG になっている");
@@ -70,8 +115,34 @@ test("JSONでない応答や形の違う応答でも落ちない", () => {
   assert.equal(toolOutcome(undefined), "ok");
 });
 
-// **理由の全文は載せない。**note は数百字になることがあり、載せるとログが読めなくなる
-test("理由は先頭だけ (1行に収まる)", () => {
-  const out = toolOutcome(res({ ok: false, note: "あ".repeat(500) }));
-  assert.ok(out.length < 80, `理由が長すぎる: ${out.length}字`);
+// ---- JSON-RPC の取り出し (バッチ) ----
+
+const c = (id: number, name: string, args: unknown = {}) => ({
+  jsonrpc: "2.0",
+  id,
+  method: "tools/call",
+  params: { name, arguments: args },
+});
+
+test("単発の tools/call を拾う", () => {
+  assert.deepEqual(toolCalls(c(1, "sync_board")), [{ id: 1, name: "sync_board", args: {} }]);
+});
+
+// **body.method だけを見ていると配列では常に undefined になる** — これが穴だった
+test("配列 (バッチ) でも全部拾う", () => {
+  const got = toolCalls([c(1, "sync_board"), c(2, "query_log")]);
+  assert.deepEqual(
+    got.map((g) => g.name),
+    ["sync_board", "query_log"]
+  );
+});
+
+test("tools/call 以外は拾わない", () => {
+  assert.deepEqual(toolCalls([{ jsonrpc: "2.0", id: 1, method: "tools/list" }]), []);
+  assert.deepEqual(toolCalls(undefined), []);
+  assert.deepEqual(toolCalls({ method: "tools/call" }), [{ id: undefined, name: "(未登録のツール)", args: undefined }]);
+});
+
+test("未登録のツール名はここでも平文にしない", () => {
+  assert.equal(toolCalls(c(1, "SECRET-な名前"))[0].name, "(未登録のツール)");
 });

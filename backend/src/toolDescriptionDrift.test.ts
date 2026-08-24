@@ -65,8 +65,15 @@ function fields(schema: any): Map<string, string> {
  * (Codexレビュー P2)。ここは文言ではなく**意味**(直前に読んだ版を添える)だけを共有する。
  *
  * **増やすときは理由を書くこと。**空にできる日が来たら、この仕組みごと消してよい */
-const ENTRANCE_SPECIFIC: Record<string, string> = {
-  "update_project_context.version": "読む道具が違う (チャット=query_log / MCP=get_project_context)",
+const ENTRANCE_SPECIFIC: Record<string, { why: string; chat: RegExp; mcp: RegExp; chatNot?: RegExp }> = {
+  "update_project_context.version": {
+    why: "読む道具が違う (チャット=query_log / MCP=get_project_context)",
+    chat: /query_log/,
+    // **これが本体。**最初は「揃える」ことを優先して、チャットにも
+    // `get_project_context` で読めと書いてしまった (存在しないのに)
+    chatNot: /get_project_context/,
+    mcp: /get_project_context/,
+  },
 };
 
 for (const [name, chatSchema] of chatTools) {
@@ -85,9 +92,19 @@ for (const [name, chatSchema] of chatTools) {
     for (const [key, chatText] of chat) {
       const mcpText = mcp.get(key);
       assert.ok(mcpText !== undefined, `${name}.${key} が MCP 側に無い (共有している項目が片方から消えている)`);
-      if (ENTRANCE_SPECIFIC[`${name}.${key}`]) {
-        // 違っていてよいが、**どちらも中身があること**は見る (片方を空にして揃えるのを防ぐ)
-        assert.ok(chatText.length > 10 && mcpText.length > 10, `${name}.${key} の説明が痩せている`);
+      const exception = ENTRANCE_SPECIFIC[`${name}.${key}`];
+      if (exception) {
+        // **「違ってよい」で終わらせない。**長さだけ見ていたら、
+        // 元の誤案内 (存在しない道具を名指しする) に戻しても通ってしまった (Codexレビュー P3)。
+        // **その入口に実在する道具を案内していること**まで固定する
+        assert.match(chatText, exception.chat, `${name}.${key}: チャット側の案内が違う (${exception.why})`);
+        assert.match(mcpText, exception.mcp, `${name}.${key}: MCP側の案内が違う (${exception.why})`);
+        if (exception.chatNot)
+          assert.doesNotMatch(
+            chatText,
+            exception.chatNot,
+            `${name}.${key}: **チャットに無い道具を案内している** (${exception.why})`
+          );
         continue;
       }
       if (chatText !== mcpText) diff.push(`  ${key}\n    chat: ${chatText}\n    mcp : ${mcpText}`);

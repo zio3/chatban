@@ -692,8 +692,16 @@ export function ensureInitialProject(): void {
         `中身が必要なら 2026-08-17 より前の版で一度起動して data/ 形式へ移してから上げ直してください`
     );
   }
+  // #250: **前提情報の行だけは必ず作る。**以前はここだけ行を作っておらず、
+  // **前提情報の行が作られなかった** — `getProjectContextRow()` は行が無ければ既定値を合成するので
+  // 画面もMCPも動くが、**query_log の生SQLには補完が無い**ので `WHERE id=1` が0行を返す。
+  // 「query_log で版を読め」と契約に書いた途端、**まっさらな環境の既定プロジェクトだけ
+  // その案内どおりにできない**状態になっていた (Codexレビュー P2)
   const p = insertProject("マイプロジェクト");
-  projectDb(p.id); // ここで ensureProjectSchema が当たる
+  // **行だけ作る。雛形は入れない。**`createProject` は雛形 (CONTEXT_TEMPLATE) を入れるが、
+  // それを既定プロジェクトにも入れると**節が最初から揃ってしまい、「足りない節を知らせる」案内が
+  // 一度も出なくなる** (E2Eで実際に落ちて分かった)。ここで要るのは「行が在ること」だけ
+  projectDb(p.id).prepare("INSERT OR IGNORE INTO project_context (id, text) VALUES (1, '')").run();
   setActiveProjectId(p.id);
   log("project", `initialized empty project #${p.id}`);
 }

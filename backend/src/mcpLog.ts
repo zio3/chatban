@@ -1,0 +1,170 @@
+import { toolArgSchemas } from "./toolArgs.js";
+
+/** #247: **MCP経由の呼び出しを1行に畳む。**
+ *
+ * 直近5日分のログを数えたら、内蔵チャットのツール呼び出しは4回、
+ * **MCP経由は1行も残っていなかった** (残っていたのは接続拒否の2件だけ)。
+ * Claude Code から叩いている**一番使っている経路が丸ごと無記録**だった。
+ *
+ * 目的は「次に何を直すか」の材料を、**聞かずに集める**こと。
+ * LLMに「使っていて不便でしたか」と聞くと、詰まりを思い出すのではなく
+ * 尤もらしい改善案をその場で作るので、**作るものを無限に生成する装置**になる。
+ * 困ったときは振る舞いに出る (#245 は「作ってから update_cards で直す往復」を
+ * 契約の突き合わせから見つけた。聞いて分かったのではない)。
+ *
+ * ## ログに出てよいのは「こちらが決めた語」だけ
+ *
+ * 最初は「値を出さなければ安全」と考えて**キー名をそのまま出していた**が、これは誤りだった
+ * (Codexレビュー P2)。`create_cards` の要素スキーマは `.passthrough()` なので、
+ * **キー名そのものが外部入力**になる。実測: `{ "SECRET-顧客情報\n[2099-01-01 00:00:00] [mcp] forged": "x" }`
+ * を渡すと、**本文がログに残り、しかも偽の行が1本増える** (集計そのものを偽装できる)。
+ *
+ * なので**許可した語だけを平文にする**。
+ *
+ *   - キー名 … 契約 (`toolArgs.ts`) にある語だけ。それ以外は**個数だけ**数える
+ *   - ツール名 … 登録済みの名前だけ。それ以外は固定ラベル
+ *   - 自由文 (断りの理由・例外) … 制御文字を落として長さを切る
+ *
+ * **値は元から1文字も出さない。**`context` をそのまま出すと経緯メモが丸ごとディスクに残り、
+ * #224 (公開デモでプロンプト全文がディスクに残る) と同じ形になる。 */
+
+const MAX_LINE = 200;
+const MAX_FREE_TEXT = 60;
+
+/** 外部由来の文字列をログへ出す前の**最後の共通処理**。
+ * **改行を残すと1回の呼び出しで複数行を作れる** — 行数を数える集計が丸ごと偽装できる */
+export function safe(s: unknown, max = MAX_FREE_TEXT): string {
+  if (typeof s !== "string") return "";
+  // 制御文字 (CR/LF・タブ・エスケープ) は空白に潰してから詰める
+  const flat = s.replace(/[\x00-\x1f\x7f-\x9f]/g, " ").replace(/\s+/g, " ").trim();
+  return flat.length > max ? flat.slice(0, max) + "…" : flat;
+}
+
+/** 契約 (`toolArgs.ts`) に出てくるキー名。**平文で出してよい語はこれだけ。**
+ * ここから漏れた正当なキーは「不明」に数えられるだけで、**壊れるのではなく鈍る**方に倒れる */
+function contractKeys(): Set<string> {
+  const out = new Set<string>();
+  const walk = (schema: any) => {
+    const shape = schema?.shape ?? schema?._def?.shape?.();
+    if (!shape) return;
+    for (const [k, v] of Object.entries<any>(shape)) {
+      out.add(k);
+      const el = v?._def?.type ?? v?.element; // z.array(...) の中身
+      if (el) walk(el);
+    }
+  };
+  for (const schema of Object.values(toolArgSchemas([]))) walk(schema);
+  // MCPにだけある引数 (契約はチャットと共有だが、この2つはMCP側の口)
+  for (const k of ["sync_token", "reference"]) out.add(k);
+  return out;
+}
+
+const KNOWN_KEYS = contractKeys();
+
+/** 登録済みのツール名。**未知の名前を平文で出さない**ための許可リスト。
+ * 実物と合っているかは mcpToolLog.test.ts が listTools と突き合わせる */
+export const MCP_TOOL_NAMES = [
+  "create_cards",
+  "update_cards",
+  "delete_cards",
+  "restore_cards",
+  "search_cards",
+  "reorder_cards",
+  "query_log",
+  "get_project_context",
+  "update_project_context",
+  "sync_board",
+] as const;
+
+const NAME_SET: Set<string> = new Set(MCP_TOOL_NAMES);
+
+/** 未知のツール名は平文にしない (名前もクライアントが決める文字列なので) */
+export function safeToolName(name: unknown): string {
+  return typeof name === "string" && NAME_SET.has(name) ? name : "(未登録のツール)";
+}
+
+function keysOf(v: unknown): string[] {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return [];
+  return Object.keys(v as Record<string, unknown>);
+}
+
+/** 配列要素に現れたキーの**和**。1件目だけ見ると、2件目で足された項目を見落とす */
+function elementKeys(arr: unknown[]): string[] {
+  const seen = new Set<string>();
+  for (const el of arr) for (const k of keysOf(el)) seen.add(k);
+  return [...seen];
+}
+
+/** 契約にある語だけ並べ、それ以外は個数にする。
+ * **「契約に無いキーを使った」こと自体は見たい情報**なので、消さずに数だけ残す */
+function render(keys: string[]): string {
+  const known = keys.filter((k) => KNOWN_KEYS.has(k));
+  const unknown = keys.length - known.length;
+  return [...known, ...(unknown ? [`+${unknown}不明`] : [])].join(",");
+}
+
+/** 引数の**形**を1行にする。`cards[2]{title,context} sync_token` のような形。
+ * **値は出さない** — 何を渡してきたかではなく、**どの項目を使っているか**を見るためのもの。
+ * 使われない項目は、説明文が悪いか、さもなくば要らない (#247) */
+export function argShape(args: unknown): string {
+  const parts: string[] = [];
+  const top = keysOf(args);
+  const unknownTop: string[] = [];
+
+  for (const k of top) {
+    const v = (args as Record<string, unknown>)[k];
+    if (!KNOWN_KEYS.has(k)) {
+      unknownTop.push(k);
+      continue;
+    }
+    if (Array.isArray(v)) {
+      const inner = render(elementKeys(v));
+      parts.push(`${k}[${v.length}]${inner ? `{${inner}}` : ""}`);
+    } else {
+      parts.push(k);
+    }
+  }
+  if (unknownTop.length) parts.push(`+${unknownTop.length}不明`);
+
+  const line = parts.join(" ");
+  return line.length > MAX_LINE ? line.slice(0, MAX_LINE) + "…" : line;
+}
+
+/** 応答から「通ったか / 断ったならどう言ったか」を取り出す。
+ * **失敗が溜まっていく場所が要る** — `ok:false` が繰り返すツールは、契約が伝わっていない */
+export function toolOutcome(result: unknown): string {
+  const content = (result as { content?: unknown })?.content;
+  const first = Array.isArray(content) ? (content[0] as { text?: unknown } | undefined) : undefined;
+  if (typeof first?.text !== "string") return "ok";
+
+  let body: unknown;
+  try {
+    body = JSON.parse(first.text);
+  } catch {
+    return "ok"; // JSONでない応答 (queryLogHelp など) は、断り方を持たないので通ったものとして扱う
+  }
+  const { ok, note } = (body ?? {}) as { ok?: unknown; note?: unknown };
+  // 断りの文はこちらが書いたものだが、**将来入力値を含むようになっても越えない**ように通す
+  if (ok === false) return `NG ${safe(note) || "(理由なし)"}`;
+  return "ok";
+}
+
+/** リクエストに含まれる `tools/call` を全部拾う。
+ *
+ * **JSON-RPCは配列 (バッチ) で来ることがある** (Codexレビュー P2)。
+ * `body.method` だけを見ていると配列では常に undefined になり、
+ * **バッチの中でスキーマに弾かれた呼び出しだけが記録から消える** —
+ * 「間違え続けているツールが呼ばれていないように見える」という、この記録が解こうとしている
+ * 当の問題がバッチ経路にそのまま残っていた。
+ *
+ * 突き合わせは JSON-RPC の `id` で行う (同じツール名が複数回入っていても区別が付く) */
+export function toolCalls(body: unknown): Array<{ id: unknown; name: string; args: unknown }> {
+  const list = Array.isArray(body) ? body : [body];
+  const out: Array<{ id: unknown; name: string; args: unknown }> = [];
+  for (const m of list) {
+    const msg = m as { method?: unknown; id?: unknown; params?: { name?: unknown; arguments?: unknown } };
+    if (msg?.method !== "tools/call") continue;
+    out.push({ id: msg.id, name: safeToolName(msg.params?.name), args: msg.params?.arguments });
+  }
+  return out;
+}

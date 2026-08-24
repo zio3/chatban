@@ -20,6 +20,8 @@ import path from "node:path";
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "chatban-wiring-"));
 process.env.CHATBAN_DATA_DIR = dataDir;
 process.env.AUTO_ARCHIVE = "0";
+// #247: 実ログに混ぜない (テストの呼び出しが「呼ばれている」に数えられてしまう)
+process.env.CHATBAN_LOG_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "chatban-logs-"));
 
 const { ensureInitialProject } = await import("./store.js");
 ensureInitialProject();

@@ -55,3 +55,24 @@ test("契約に書いてあるSQLと、ここで試しているSQLが同じ", as
     `契約の文面が、ここで試しているSQLと違う:\n  契約: ${desc}\n  試験: ${GUIDED_SQL}`
   );
 });
+
+// **新規だけ直しても足りない。**旧版が作った既定プロジェクトは行が無いまま残り、
+// 起動時は「プロジェクトが在る」ので初期化を素通りする (Codexレビュー P2)。
+// 保証をスキーマ側に置いたので、**開き直した時点で揃う**
+test("旧版が作った「行が無い」プロジェクトも、開き直せば直る", async () => {
+  const { db, closeProjectDb, activeProjectId } = await import("./store.js");
+
+  // 旧版の状態を作る: 行を消す
+  db().prepare("DELETE FROM project_context").run();
+  assert.equal(
+    (queryProjectData(GUIDED_SQL) as { rows: unknown[] }).rows.length,
+    0,
+    "前提の用意に失敗した (行が消えていない)"
+  );
+
+  closeProjectDb(activeProjectId()); // 次の起動に相当 (開き直すとスキーマが当たり直す)
+
+  const r = queryProjectData(GUIDED_SQL) as { rows: Array<{ version: number }> };
+  assert.equal(r.rows.length, 1, "開き直しても行が作られていない");
+  assert.equal(r.rows[0].version, 1);
+});

@@ -148,3 +148,32 @@ test("経緯メモの契約が、Markdown と「節を増やさない」を対�
     assert.match(text, /節は増やさず/, `${label}の契約が「節を増やさない」と対で言っていない`);
   }
 });
+
+// #250: **この不具合はクラスなので、項目単位でなく面で見る。**
+// `update_project_context.version` を直した直後、**同じ入口の `query_log` の説明にも**
+// `get_project_context` が残っていた (Codexレビュー P2、2周連続で同じ形)。
+// 「例外を1件ずつ潰す」をやめて、**チャットに公開する説明全体**を見る
+test("チャットに見せる説明に、チャットに無い道具の名前が出てこない", () => {
+  const chatNames = new Set(chatTools.keys());
+  const mcpOnly = [...mcpTools.keys()].filter((n) => !chatNames.has(n));
+  assert.ok(mcpOnly.length > 0, "MCP専用の道具が1つも無い (番人が何も見ていない)");
+
+  const offenders: string[] = [];
+  for (const [name, schema] of chatTools) {
+    const texts = [...fields(schema).entries()];
+    // ツール自身の説明も見る (引数の説明だけでは面が埋まらない)
+    const self = (buildTools([]) as any[]).find((t) => t.function.name === name)?.function?.description ?? "";
+    texts.push(["(ツールの説明)", self]);
+
+    for (const [key, text] of texts)
+      for (const tool of mcpOnly)
+        if (text.includes(tool)) offenders.push(`${name}.${key} が ${tool} を案内している`);
+  }
+
+  assert.deepEqual(
+    offenders,
+    [],
+    `**内蔵チャットに存在しない道具を案内している。**説明文はエージェントにとってのUIラベルなので、` +
+      `無い道具を名指しすると、呼ぼうとして失敗するか、別の読み方を推測する往復になる:\n${offenders.join("\n")}`
+  );
+});

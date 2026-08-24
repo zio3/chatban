@@ -394,7 +394,7 @@ export function buildTools(lanes: CustomLane[]): OpenAI.Chat.Completions.ChatCom
         type: "object",
         properties: {
           text: { type: "string", description: "新しい前提情報の全文" },
-          version: { type: "integer", description: "直前に get_project_context で読んだ version。合わないと更新されず現在値が返る" },
+          version: { type: "integer", description: "直前に query_log で `SELECT text, version FROM project_context WHERE id=1` を読んだ version。合わないと更新されず現在値が返る" },
         },
         required: ["text", "version"],
       },

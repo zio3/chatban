@@ -58,18 +58,38 @@ function fields(schema: any): Map<string, string> {
   return out;
 }
 
+/** **入口ごとに違って当然の項目。**使える道具が違うので、同じ文言にすると片方が嘘になる。
+ *
+ * `update_project_context.version` … **内蔵チャットには `get_project_context` が無い** (MCP専用)。
+ * 揃えようとして「`get_project_context` で読め」と書いたら、**存在しない道具を案内していた**
+ * (Codexレビュー P2)。ここは文言ではなく**意味**(直前に読んだ版を添える)だけを共有する。
+ *
+ * **増やすときは理由を書くこと。**空にできる日が来たら、この仕組みごと消してよい */
+const ENTRANCE_SPECIFIC: Record<string, string> = {
+  "update_project_context.version": "読む道具が違う (チャット=query_log / MCP=get_project_context)",
+};
+
 for (const [name, chatSchema] of chatTools) {
   const mcpSchema = mcpTools.get(name);
-  if (!mcpSchema) continue; // 顔ぶれの欠けは toolContractDrift の担当
 
   test(`${name}: 同じ項目の説明文が、チャットとMCPで一致する`, () => {
+    // **片側欠けを成功にしない。**「顔ぶれは別の番人が見る」と書いていたが、
+    // その番人 (toolContractDrift) が見ているのはチャットと検査用Zodだけで、
+    // **MCPスキーマを読んでいない** — 誰も見ていない隙間だった (Codexレビュー P3)
+    assert.ok(mcpSchema, `${name} が MCP 側に無い (共有しているツールが片方から消えている)`);
+
     const chat = fields(chatSchema);
     const mcp = fields(mcpSchema);
     const diff: string[] = [];
 
     for (const [key, chatText] of chat) {
       const mcpText = mcp.get(key);
-      if (mcpText === undefined) continue; // 片方にしかない項目は対象外
+      assert.ok(mcpText !== undefined, `${name}.${key} が MCP 側に無い (共有している項目が片方から消えている)`);
+      if (ENTRANCE_SPECIFIC[`${name}.${key}`]) {
+        // 違っていてよいが、**どちらも中身があること**は見る (片方を空にして揃えるのを防ぐ)
+        assert.ok(chatText.length > 10 && mcpText.length > 10, `${name}.${key} の説明が痩せている`);
+        continue;
+      }
       if (chatText !== mcpText) diff.push(`  ${key}\n    chat: ${chatText}\n    mcp : ${mcpText}`);
     }
 
@@ -94,12 +114,20 @@ test("番人が実際に説明文を読めている", () => {
 
 // #250: 宣言そのもの。**「Markdown で書いてよい」だけを言うと、節を増やす方へ効いてしまう**
 test("経緯メモの契約が、Markdown と「節を増やさない」を対で言っている", () => {
+  const update = fields(chatTools.get("update_cards"));
   const create = fields(chatTools.get("create_cards")).get("cards[].context") ?? "";
-  const write = fields(chatTools.get("update_cards")).get("updates[].context") ?? "";
+  const write = update.get("updates[].context") ?? "";
+  // **一番使わせている口。**「1件足すならこちらを使う」と誘導しているのに、
+  // 最初はここだけ Markdown の案内が無かった (Codexレビュー P2)
+  const append = update.get("updates[].context_append") ?? "";
 
-  for (const [label, text] of [["作成", create], ["上書き", write]] as const) {
+  for (const [label, text] of [["作成", create], ["上書き", write], ["追記", append]] as const) {
     assert.match(text, /Markdown/, `${label}の契約が Markdown と言っていない`);
-    assert.match(text, /節は増やさず/, `${label}の契約が「節を増やさない」と対で言っていない`);
     assert.match(text, /バックティック/, `${label}の契約が、文字として見せる書き方を案内していない`);
+  }
+
+  // **節の話は全文を書く口だけ。**追記で繰り返しても、説明が長くなるだけで効かない
+  for (const [label, text] of [["作成", create], ["上書き", write]] as const) {
+    assert.match(text, /節は増やさず/, `${label}の契約が「節を増やさない」と対で言っていない`);
   }
 });

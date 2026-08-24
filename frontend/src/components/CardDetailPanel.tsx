@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { cardRefId, remarkCardLinks } from "../cardLinks";
 import { api } from "../api";
 import { useAttachments } from "../hooks/useAttachments";
 import { useChatTurn } from "../hooks/useChatTurn";
@@ -213,7 +214,9 @@ export default function CardDetailPanel({
           <h3 className="mb-1 text-xs font-bold uppercase tracking-wide text-slate-500">経緯メモ</h3>
           {card.context ? (
             <div className="chat-md rounded-lg bg-slate-50 p-3 text-sm text-slate-700">
-              <Markdown remarkPlugins={[remarkGfm]}>{card.context}</Markdown>
+              <Markdown remarkPlugins={[remarkGfm, remarkCardLinks]} components={cardLinkComponents(onOpenCard)}>
+                {card.context}
+              </Markdown>
             </div>
           ) : (
             <p className="text-sm text-slate-500">まだありません。下のチャットで話すと決定事項が記録されます</p>
@@ -316,4 +319,36 @@ export default function CardDetailPanel({
       </section>
     </aside>
   );
+}
+
+/** #248: 経緯メモの `#123` を押せるようにする。
+ *
+ * `remarkCardLinks` が `data-card-id` を付けた `<a>` を作るので、それだけを差し替える。
+ * **普通のリンクはそのまま**通す (経緯メモにはPRやドキュメントのURLも書かれる)。
+ *
+ * 押しても**画面遷移はしない** — 開くのは親から渡された `onOpenCard` で、
+ * 板に無いカードを引き直すのも、存在しないときにトーストを出すのも、そちらが既にやっている。 */
+function cardLinkComponents(onOpenCard?: (id: number) => void) {
+  return {
+    a(props: any) {
+      const id = cardRefId(props);
+      if (id === null) return <a {...props} target="_blank" rel="noreferrer" />;
+
+      // href は落とす。**空文字のまま button へ渡すと React が警告する**
+      // (リンクではなくボタンとして描くので、そもそも行き先を持たない)
+      const { node: _node, href: _href, children, ...rest } = props;
+      return (
+        <button
+          {...rest}
+          type="button"
+          data-testid={`card-ref-${id}`}
+          onClick={() => onOpenCard?.(id)}
+          className="rounded px-0.5 font-medium text-indigo-600 underline decoration-dotted underline-offset-2 hover:bg-indigo-50 hover:decoration-solid"
+          title={`#${id} を開く`}
+        >
+          {children}
+        </button>
+      );
+    },
+  };
 }

@@ -13,6 +13,7 @@ import { attachmentsEnabled, jsonLimit } from "./demoMode.js";
 import { llmConfig } from "./config.js";
 import { log } from "./log.js";
 import { buildMcpServer } from "./mcp.js";
+import { argShape } from "./mcpLog.js";
 import { isAllowedOrigin, isBrowserCrossSite } from "./origin.js";
 import { resetPromptState } from "./promptState.js";
 import { assertTimezone } from "./timezone.js";
@@ -675,7 +676,18 @@ app.post("/mcp/:projectId", async (req, res) => {
     await withProject(projectId, async () => {
       // 書き込みはこの接続のプロジェクトに対して行う。UIへの通知は表示中のときだけ
       // #99: 接続先プロジェクトのroomへ送るだけでよい (購読していないクライアントには届かない)
-      const mcpServer = buildMcpServer((kind) => notifyView(kind, projectId));
+      // #247: **SDKのZodで弾かれた呼び出しはハンドラまで来ない**ので、そのままだと
+      // 記録に一切残らない。**使い方を間違え続けているツールが「呼ばれていない」に見える**のが
+      // 一番まずい (この記録の目的が「呼ばれている/いない」の可視化なので、結論が逆になる)。
+      // 受けた tools/call と、ハンドラが動いたかを突き合わせて、届かなかったぶんだけここで残す
+      const call = req.body?.method === "tools/call" ? req.body?.params : undefined;
+      let reached = false;
+      const mcpServer = buildMcpServer(
+        (kind) => notifyView(kind, projectId),
+        () => {
+          reached = true;
+        }
+      );
       const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
       res.on("close", () => {
         transport.close();
@@ -683,6 +695,10 @@ app.post("/mcp/:projectId", async (req, res) => {
       });
       await mcpServer.connect(transport);
       await transport.handleRequest(req, res, req.body);
+      if (call && !reached) {
+        // 引数はキー名だけ (値は残さない)。**どのキーが足りなかったのかは、キーの顔ぶれで分かる**
+        log("mcp", `${call?.name ?? "(名前なし)"} NG スキーマで拒否 (ハンドラまで届かず) | ${argShape(call?.arguments)} |`);
+      }
     });
   } catch (e) {
     console.error("mcp error:", e);

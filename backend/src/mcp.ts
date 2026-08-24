@@ -34,6 +34,9 @@ import {
   setProjectContext,
 } from "./db.js";
 import { boardDelta, formatBoardUpdate } from "./boardState.js";
+import { log } from "./log.js";
+// #247: MCP経由の呼び出しを記録する (キー名だけ。値は残さない)
+import { argShape, toolOutcome } from "./mcpLog.js";
 // #245: 列の一覧と引数の契約は toolArgs.ts が唯一の置き場 (チャットと同じものを指す)
 import { agentStatusValues, parseToolArgs, reorderableStatuses } from "./toolArgs.js";
 import { contextReference, contextTemplateHint } from "./contextTemplate.js";
@@ -97,8 +100,36 @@ function currentProject() {
 }
 
 // MCPクライアント(Claude Code等)向けのサーバー。変更系は onEvent でUIへブロードキャストする
-export function buildMcpServer(onEvent: (kind: ViewEvent) => void): McpServer {
+/** @param onToolHandled ツールのハンドラが動いたときに1度だけ呼ばれる (#247)。
+ *  **SDKのZodで弾かれた呼び出しはハンドラまで来ない**ので、入口 (index.ts) 側で
+ *  「受けたのに届かなかった」を検出するために要る。
+ *  実測: `query_log` を引数なしで呼ぶと**1行も記録されなかった** —
+ *  **使い方を間違え続けているツールが「呼ばれていない」に見える**のが一番まずい */
+export function buildMcpServer(onEvent: (kind: ViewEvent) => void, onToolHandled?: () => void): McpServer {
   const server = new McpServer({ name: "chatban", version: "0.1.0" });
+
+  // #247: **記録の絞り口はここ1つ。**ハンドラ10個に個別に入れない (#245 と同じ形 —
+  // 入口ごとに書くと必ずズレる)。`registerTool` そのものを包むので、**下の登録は1文字も変わらず、
+  // 引数の型がスキーマから付くのも保たれる** (包む関数を挟むと、そこで型が any に落ちる)。
+  // 残すのはツール名・通ったか・引数の**キー名**・所要時間だけで、**値は残さない** (理由は mcpLog.ts)
+  const registerTool = server.registerTool.bind(server) as (n: string, c: any, cb: any) => unknown;
+  server.registerTool = ((name: string, config: any, cb: any) =>
+    registerTool(name, config, async (args: any, extra: any) => {
+      const started = Date.now();
+      let outcome = "ok";
+      try {
+        const r = await cb(args, extra);
+        outcome = toolOutcome(r);
+        return r;
+      } catch (e) {
+        // 例外はSDKへそのまま返す。**記録だけ足す** (落ちたことこそ残したい)
+        outcome = `throw ${e instanceof Error ? e.message : String(e)}`.slice(0, 80);
+        throw e;
+      } finally {
+        log("mcp", `${name} ${outcome} | ${argShape(args)} | ${Date.now() - started}ms`);
+        onToolHandled?.();
+      }
+    })) as typeof server.registerTool;
 
   // #19: このサーバーは接続ごと (=プロジェクトごと) に組み立てられるので、
   // **有効な任意レーンだけを enum に入れられる。**#110 でメンバーの有無でスキーマを変えていたのと同じ形。

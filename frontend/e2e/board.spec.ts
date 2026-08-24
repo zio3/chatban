@@ -2276,6 +2276,38 @@ test("もともとリンクの文言に入っている #番号 は割らない (
   await expect(panel.getByRole("link", { name: "詳細 #55 はこちら" })).toHaveCount(1);
 });
 
+// **桁数だけで切ると、長い番号の先頭15桁がIDに化ける** (Codexレビュー P3)。
+// 実測では `#1234567890123456` が「15桁のリンク + 地の文の 6」に割れていた
+test("16桁以上の数字はカード番号として扱わない (#248)", async ({ page }) => {
+  const id = await cardWithContext(
+    "長い番号を含むカード",
+    "外部の番号 #1234567890123456 と、上限ぴったりの #123456789012345。"
+  );
+
+  await page.goto("/");
+  await page.getByTestId(`card-tile-${id}`).click();
+  const panel = page.getByTestId("card-detail-panel");
+
+  // 16桁以上は丸ごと素の文字 (先頭15桁だけを拾わない)
+  await expect(panel.getByTestId("card-ref-1234567890123456")).toHaveCount(0);
+  await expect(panel).toContainText("#1234567890123456");
+  // 上限の15桁は拾う (存在するかどうかでは決めない)
+  await expect(panel.getByTestId("card-ref-123456789012345")).toHaveCount(1);
+});
+
+// **普通のリンクに独自の属性を足さない。**react-markdown が渡す内部の値 (`node`) を
+// そのままDOMへ流すと `<a node="[object Object]">` になっていた (Codexレビュー P3)
+test("普通のリンクに内部プロパティが漏れない (#248)", async ({ page }) => {
+  const id = await cardWithContext("外部リンクを含むカード", "詳しくは [ここ](https://example.com/doc) を見る。");
+
+  await page.goto("/");
+  await page.getByTestId(`card-tile-${id}`).click();
+  const link = page.getByTestId("card-detail-panel").getByRole("link", { name: "ここ" });
+
+  await expect(link).toHaveCount(1);
+  await expect(link).not.toHaveAttribute("node", /.*/);
+});
+
 test("存在しないカードを指していたら、開かずに知らせる (#248)", async ({ page }) => {
   // **リンクにするかどうかは存在で決めない** (経緯メモは過去の記録なので、消えた番号も出てくる)。
   // 押した先で `openCard` が引き直し、無ければトーストになる

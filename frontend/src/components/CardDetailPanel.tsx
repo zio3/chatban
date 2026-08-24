@@ -331,12 +331,20 @@ export default function CardDetailPanel({
 function cardLinkComponents(onOpenCard?: (id: number) => void) {
   return {
     a(props: any) {
+      // **`node` は react-markdown がコンポーネントへ渡す内部の値**で、DOMへ流すと
+      // `<a node="[object Object]">` になる。**先に落とす** — 以前はカード参照側だけで
+      // 落としていて、普通のリンク全部に付いていた (Codexレビュー P3)
+      const { node: _node, href, children, ...rest } = props;
       const id = cardRefId(props);
-      if (id === null) return <a {...props} target="_blank" rel="noreferrer" />;
+      if (id === null)
+        return (
+          <a {...rest} href={href} target="_blank" rel="noreferrer">
+            {children}
+          </a>
+        );
 
-      // href は落とす。**空文字のまま button へ渡すと React が警告する**
+      // href は渡さない。**空文字のまま button へ渡すと React が警告する**
       // (リンクではなくボタンとして描くので、そもそも行き先を持たない)
-      const { node: _node, href: _href, children, ...rest } = props;
       return (
         <button
           {...rest}

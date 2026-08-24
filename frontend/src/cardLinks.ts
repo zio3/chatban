@@ -23,7 +23,11 @@ export function splitCardRefs(text: string): Array<string | number> {
   const out: Array<string | number> = [];
   let last = 0;
   // 全角の井桁・全角数字も拾う (日本語入力のままだとそうなる。#197 と同じ扱い)
-  const re = /[#＃]([0-9０-９]{1,15})/g;
+  // **末尾に数字が続かないことまで要求する。**桁数だけで切ると
+  // `#1234567890123456` の先頭15桁をIDとして拾い、残りの `6` が地の文になる
+  // (長い外部管理番号が、存在しないカードへのリンクに化ける)。
+  // `parseCardJump` は16桁以上を丸ごと拒否するので、そちらとも揃う (Codexレビュー P3)
+  const re = /[#＃]([0-9０-９]{1,15})(?![0-9０-９])/g;
   for (let m = re.exec(text); m; m = re.exec(text)) {
     const digits = m[1].replace(/[０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0));
     const id = Number(digits);

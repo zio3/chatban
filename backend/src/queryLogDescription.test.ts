@@ -79,17 +79,33 @@ test("説明の長さに歯止めを置く", () => {
   );
 });
 
-// #258: **`chat_messages` の説明は落としたが、列は残す。**
-// 説明を落としても指示は従えるが、**列ごと落とすとシステムプロンプトの
-// 「時期や条件で絞りたいときは query_log」が従えない指示になる**
-test("chat_messages は列だけ残す (説明は落とす)", () => {
-  assert.match(QUERY_LOG_DESCRIPTION, /chat_messages\(id, role, content, card_id, created_at/);
-  for (const w of ["過去の話を聞かれたらここを掘る", "いつ何を頼まれたか", "usage は所要時間"]) {
+// #262: **`chat_messages` を窓口から外した。**#258 は説明だけを落として列を残したが、
+// **能力のほうを畳んだ** — 費用ではなく思想の判断 (「チャットの話から絞るはやらない」zio)。
+// **#258 で戻した `role` の2値も一緒に落ちる**。前提が変わったのであって、あれが誤りだったのではない
+test("chat_messages は説明にも「引けるもの」にも出てこない", () => {
+  assert.ok(!QUERY_LOG_DESCRIPTION.includes("chat_messages"), "chat_messages がまだ案内されている");
+  for (const w of ["role は user=持ち主", "過去の話を聞かれたらここを掘る", "いつ何を頼まれたか"]) {
     assert.ok(!QUERY_LOG_DESCRIPTION.includes(w), `「${w}」が残っている`);
   }
-  const examples = QUERY_LOG_DESCRIPTION.split("\n").filter((l) => l.startsWith("例"));
-  const chatExamples = examples.filter((l) => l.includes("chat_messages"));
-  assert.deepEqual(chatExamples, [], "chat_messages の例文が残っている");
+});
+
+// **窓口そのものが閉じていること。**説明から消しても引けたままなら、閉じたことにならない
+// (#258 のときは実際そうで、説明だけ落ちて口は開いていた)
+test("引ける表の一覧から外れている (説明ではなく実体)", async () => {
+  const { PUBLIC_TABLES, PUBLIC_COLUMNS } = await import("./db.js");
+  assert.ok(!PUBLIC_TABLES.includes("chat_messages"), "許可リストに残っている");
+  // 専用列も落とす。**この一覧は「引ける表の列」**であって、DBに在る列の一覧ではない
+  for (const c of ["role", "content", "trace", "usage", "card_id"]) {
+    assert.ok(!PUBLIC_COLUMNS.includes(c), `${c} が引ける列に残っている`);
+  }
+});
+
+// **失う機能を名指しで固定する。**キーワードで会話を引く経路は残っている —
+// 落としたのは「時期や条件で絞る」だけで、「あんな話してたっけ」は答えられる
+test("会話をキーワードで引く経路は残っている (search_cards)", async () => {
+  const { buildTools } = await import("./chat.js");
+  const names = buildTools([]).map((t: any) => t.function.name);
+  assert.ok(names.includes("search_cards"), "会話を引く手段が1つも無くなっている");
 });
 
 // **従えない指示を作っていないこと。**説明を削るときに一番危ないのはこれ
@@ -97,19 +113,13 @@ test("query_log を使えと言っている用途は、説明から引ける", a
   const { buildSystemPrompt } = await import("./chat.js");
   const prompt = buildSystemPrompt();
 
-  if (/時期や条件で絞りたいとき.*query_log/.test(prompt)) {
-    assert.match(QUERY_LOG_DESCRIPTION, /chat_messages\(/, "会話ログの列が説明に無い (指示に従えない)");
-  }
+  // #262: **指示のほうを消した。**説明から chat_messages を落とすなら、
+  // システムプロンプトが query_log で会話を引けと言っていてはいけない (従えない指示になる)
+  assert.ok(
+    !/時期や条件で絞りたいとき.*query_log/.test(prompt),
+    "会話を query_log で絞れと、まだ指示している (説明からは落としたので従えない)"
+  );
   if (/project_context/.test(prompt)) {
     assert.match(QUERY_LOG_DESCRIPTION, /project_context\(/, "前提情報の列が説明に無い (版を読めない)");
   }
-});
-
-// #258 (Codexレビュー P3): **列の名前を間違えれば失敗するが、値を間違えても失敗しない。**
-// `WHERE role='human'` は `no such column` ではなく **0件で正常終了する**ので、
-// #256 の goal に残らない。**黙って空振りして「そんな会話は無かった」と答える**のが
-// 一番悪い形なので、2値だけは説明に残す
-test("role の取りうる値は残す (間違えても失敗しないので、記録に残らない)", () => {
-  assert.match(QUERY_LOG_DESCRIPTION, /user=持ち主/, "どちらが持ち主か分からない");
-  assert.match(QUERY_LOG_DESCRIPTION, /assistant=AI/, "AIの側が分からない");
 });

@@ -294,12 +294,25 @@ test("契約の例文は、落とした後も見分けが付く", () => {
       "SELECT title, status, summary, context, context_version, blocked_by FROM cards WHERE id=112",
       "SELECT title, status, summary, context, context_version, blocked_by FROM cards WHERE id=?",
     ],
+    // #262: 例文を `chat_messages` から `done_cards` に差し替えた。
+    // **引けなくなった表は許可リストから外れる**ので、名前も `?` に潰れる —
+    // 潰れること自体は正しい (許可リストに無い語は残さない) が、
+    // **「引ける表の例文」を確かめるテスト**なので、引ける表で確かめる
     [
-      "SELECT substr(created_at,1,13) h, COUNT(*) n FROM chat_messages GROUP BY 1 ORDER BY 1",
-      "SELECT substr(created_at,?,?) h, COUNT(*) n FROM chat_messages GROUP BY ? ORDER BY ?",
+      "SELECT substr(done_at,1,13) h, COUNT(*) n FROM done_cards GROUP BY 1 ORDER BY 1",
+      "SELECT substr(done_at,?,?) h, COUNT(*) n FROM done_cards GROUP BY ? ORDER BY ?",
     ],
   ];
   for (const [sql, want] of examples) assert.equal(redactSql(sql), want);
+
+  // #262: **窓口から外した表の名前は、ログにも残らない。**
+  // `PUBLIC_TABLES` が「引ける表」と「ログに平文で出してよい語」の両方を兼ねているので、
+  // 外すと自動的にこちらも閉じる (**一覧が1本しかないことの効き目**)
+  assert.equal(
+    redactSql("SELECT content FROM chat_messages WHERE role='user'"),
+    "SELECT ? FROM ? WHERE ?='…'",
+    "外した表の名前や列がログに平文で残っている"
+  );
 
   // **どの2本も、落とした後で同じ形にならない** (同じなら数えても区別が付かない)
   const shapes = examples.map(([, want]) => want);

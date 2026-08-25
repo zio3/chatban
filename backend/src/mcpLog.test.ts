@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { argShape, MCP_TOOL_NAMES, safe, safeToolName, toolCalls, toolOutcome } from "./mcpLog.js";
+import { argDetail, argShape, MCP_TOOL_NAMES, safe, safeToolName, toolCalls, toolOutcome } from "./mcpLog.js";
 
 /** #247: **ログに出てよいのは「こちらが決めた語」だけ。**
  *
@@ -145,4 +145,57 @@ test("tools/call 以外は拾わない", () => {
 
 test("未登録のツール名はここでも平文にしない", () => {
   assert.equal(toolCalls(c(1, "SECRET-な名前"))[0].name, "(未登録のツール)");
+});
+
+/** #252: **許可した項目だけ、値を平文で出す。**
+ *
+ * `query_log` の説明はチャットのツール定義の35%を占める (3482/9924字) のに、
+ * 呼ばれるのは `update_cards` の3分の1。削る候補は例文11本 (1122字) だが、
+ * `argShape` は `sql` というキー名しか出さないので、**どの例文が真似されているか数えられない**。 */
+test("query_log は SQL そのものを残す (どの例文が真似されているか数えるため)", () => {
+  assert.equal(
+    argDetail("query_log", { sql: "SELECT id, title FROM live_cards" }),
+    "sql=SELECT id, title FROM live_cards"
+  );
+});
+
+test("許可していないツール・項目の値は出さない", () => {
+  // **経緯メモが丸ごとディスクに残る形にしない** (#224 と同じ形になる)
+  assert.equal(argDetail("update_cards", { updates: [{ id: 1, context: "秘密の経緯" }] }), "");
+  assert.equal(argDetail("create_cards", { cards: [{ title: "秘密の題名" }] }), "");
+  // 未登録のツール名を名乗って許可リストをすり抜けられない
+  assert.equal(argDetail("query_log ", { sql: "SELECT 1" }), "");
+  assert.equal(argDetail("(未登録のツール)", { sql: "SELECT 1" }), "");
+});
+
+test("SQL に改行を混ぜても、ログの行を増やせない", () => {
+  // **これが本体。**#247 で「キー名をそのまま出す」を潰したのと同じ攻撃。
+  // 行数で集計するので、1回の呼び出しで複数行を作れると数字ごと偽装できる
+  const forged = "SELECT 1\n[2099-01-01 00:00:00] [mcp] query_log ok | sql | 1ms";
+  const out = argDetail("query_log", { sql: forged });
+  assert.ok(!out.includes("\n"), `改行が残っている: ${JSON.stringify(out)}`);
+  assert.ok(!out.includes("\r"), "復帰が残っている");
+});
+
+test("長いSQLは切り詰める (1回の呼び出しでログを埋められない)", () => {
+  const out = argDetail("query_log", { sql: "SELECT " + "x".repeat(5000) });
+  assert.ok(out.length < 400, `切り詰めていない (${out.length}字)`);
+  assert.ok(out.endsWith("…"), "切り詰めた印が無い");
+});
+
+test("sql が文字列でなければ何も出さない (スキーマで弾かれた呼び出しでも壊れない)", () => {
+  assert.equal(argDetail("query_log", {}), "");
+  assert.equal(argDetail("query_log", { sql: 123 }), "");
+  assert.equal(argDetail("query_log", null), "");
+  assert.equal(argDetail("query_log", undefined), "");
+});
+
+// #252: **断り方の欄が1つではない。**`query_log` だけは `{ ok:false, error }` を返すので、
+// `note` しか見ていないと、**一番中身を知りたいツールの失敗理由だけが消える**
+test("query_log の断り (error 欄) も記録される", () => {
+  const wrap = (body: unknown) => ({ content: [{ type: "text", text: JSON.stringify(body) }] });
+  assert.equal(toolOutcome(wrap({ ok: false, error: "no such table: secrets" })), "NG no such table: secrets");
+  // note があるほうを優先する (こちらが書いた案内文のほうが読みやすい)
+  assert.equal(toolOutcome(wrap({ ok: false, note: "版が合わない", error: "raw" })), "NG 版が合わない");
+  assert.equal(toolOutcome(wrap({ ok: false })), "NG (理由なし)");
 });

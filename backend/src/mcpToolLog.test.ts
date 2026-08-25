@@ -139,3 +139,48 @@ test("ツール名の許可リストが、実際に登録されているもの�
   const actual = (await client.listTools()).tools.map((t) => t.name).sort();
   assert.deepEqual([...MCP_TOOL_NAMES].sort(), actual, "mcpLog.ts の MCP_TOOL_NAMES を合わせること");
 });
+
+// #252: **説明を削る前に測る。**`query_log` の説明はチャットのツール定義の35%を占めるのに
+// (3482/9924字、2026-08-25実測)、呼ばれるのは `update_cards` の3分の1。
+// 削る候補は例文11本 (1122字) だが、キー名だけでは**どの例文が真似されているか数えられない**
+test("query_log は実行したSQLが記録される", async () => {
+  lines.length = 0;
+  await client.callTool({
+    name: "query_log",
+    arguments: { sql: "SELECT id, status, title FROM live_cards" },
+  });
+
+  const line = mcpLines()[0] ?? "";
+  assert.match(line, /query_log ok/, `記録されていない: ${line}`);
+  assert.match(line, /sql=SELECT id, status, title FROM live_cards/, `SQLが残っていない: ${line}`);
+});
+
+// **値を出す例外はここ1つに閉じている**こと。これが崩れたら記録ごと止めるべき性質
+test("他のツールは、値を出さないまま (例外が広がっていない)", async () => {
+  lines.length = 0;
+  await client.callTool({
+    name: "create_cards",
+    arguments: { cards: [{ title: "SECRET-題名", context: "SECRET-経緯", summary: "SECRET-要約" }] },
+  });
+  await client.callTool({ name: "search_cards", arguments: { terms: ["SECRET-検索語"] } });
+
+  for (const line of mcpLines()) assert.ok(!line.includes("SECRET"), `本文が記録に出ている: ${line}`);
+});
+
+// #247 で「キー名をそのまま出す」を潰したのと同じ攻撃。**行数で集計する**ので、
+// 1回の呼び出しで複数行を作れると数字ごと偽装できる
+test("SQLに改行を混ぜても、記録の行を増やせない", async () => {
+  lines.length = 0;
+  await client
+    .callTool({
+      name: "query_log",
+      arguments: { sql: "SELECT 1\n[2099-01-01 00:00:00] [mcp] query_log ok | sql | 1ms" },
+    })
+    .catch(() => {});
+
+  const out = mcpLines();
+  assert.equal(out.length, 1, `1回の呼び出しで${out.length}行出ている (偽装できる)`);
+  // **中身として残るのは構わない。**危ないのは「行が増えること」なので、
+  // 改行が潰れて1行に収まっていることを見る (偽の時刻が本文に混ざるのは無害)
+  assert.ok(!/[\r\n]/.test(out[0]), `改行が残っている: ${JSON.stringify(out[0])}`);
+});

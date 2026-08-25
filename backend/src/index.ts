@@ -13,7 +13,7 @@ import { attachmentsEnabled, jsonLimit } from "./demoMode.js";
 import { llmConfig } from "./config.js";
 import { log } from "./log.js";
 import { buildMcpServer } from "./mcp.js";
-import { argShape, toolCalls } from "./mcpLog.js";
+import { argDetail, argShape, toolCalls } from "./mcpLog.js";
 import { isAllowedOrigin, isBrowserCrossSite } from "./origin.js";
 import { resetPromptState } from "./promptState.js";
 import { assertTimezone } from "./timezone.js";
@@ -698,8 +698,14 @@ app.post("/mcp/:projectId", async (req, res) => {
       await mcpServer.connect(transport);
       await transport.handleRequest(req, res, req.body);
       for (const c of pending.values()) {
-        // 引数はキー名だけ (値は残さない)。**どのキーが足りなかったのかは、キーの顔ぶれで分かる**
-        log("mcp", `${c.name} NG スキーマで拒否 (ハンドラまで届かず) | ${argShape(c.args)} |`);
+        // 引数はキー名だけ (値は許可した項目のみ)。**どのキーが足りなかったのかは、キーの顔ぶれで分かる**
+        // #252: ここでも値の扱いをハンドラ側と揃える。**行を作る場所が2つある**ので、
+        // 片方だけ直すと「スキーマで弾かれたSQL」だけが測定から漏れる (一番見たい失敗例)
+        const detail = argDetail(c.name, c.args);
+        log(
+          "mcp",
+          `${c.name} NG スキーマで拒否 (ハンドラまで届かず) | ${argShape(c.args)} |` + (detail ? ` | ${detail}` : "")
+        );
       }
     });
   } catch (e) {

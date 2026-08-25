@@ -130,6 +130,41 @@ export function argShape(args: unknown): string {
   return line.length > MAX_LINE ? line.slice(0, MAX_LINE) + "…" : line;
 }
 
+/** #252: **値を平文で出してよい項目。**`mcpLog` の芯は「値は元から1文字も出さない」で、
+ * それは崩さない。ここは**穴ではなく例外の一覧**で、増やすときは理由を書くこと。
+ *
+ * `query_log.sql` … `query_log` の説明はチャットのツール定義の**35%を占める** (3482/9924字、
+ * 2026-08-25実測) のに、呼ばれるのは `update_cards` の3分の1。削る候補は例文11本 (1122字) だが、
+ * `argShape` は `sql` というキー名しか出さないので、**どの例文が真似されているか数えられない**。
+ * 測ってから削るために、SQLそのものを残す。
+ *
+ * **なぜSQLは出してよいか。**この窓口は readonly + テーブルの許可リスト (#168) を通った後で、
+ * 引けるのは接続中のプロジェクトの記録だけ。**新しい安全境界は要らない**。
+ * ただし文面はLLMが書いた外部入力なので、他の自由文と同じく `safe()` を通す
+ * (改行を残すと1回の呼び出しで偽の行を作れる — #247 で実証済み)。
+ *
+ * **リテラルに会話の断片が入りうる**ことは承知の上 (`WHERE title LIKE '%…%'`)。
+ * 長さを切っているのと、同じログに既にカードの題名が出ている (`[tool]` 行) ので、
+ * ここが新しい流出口になるわけではない。 */
+const LOGGED_VALUES: Record<string, readonly string[]> = {
+  query_log: ["sql"],
+};
+
+const MAX_VALUE = 300;
+
+/** 許可した項目だけ、値を平文で1行に足す。`sql=SELECT id, title FROM live_cards` の形。
+ * 許可されていないツール・項目は**何も返さない** (呼び出し側で足す文字も増えない) */
+export function argDetail(name: unknown, args: unknown): string {
+  const allowed = LOGGED_VALUES[safeToolName(name)];
+  if (!allowed) return "";
+  const parts: string[] = [];
+  for (const key of allowed) {
+    const v = (args as Record<string, unknown> | null | undefined)?.[key];
+    const text = safe(v, MAX_VALUE);
+    if (text) parts.push(`${key}=${text}`);
+  }
+  return parts.join(" ");
+}
 /** 応答から「通ったか / 断ったならどう言ったか」を取り出す。
  * **失敗が溜まっていく場所が要る** — `ok:false` が繰り返すツールは、契約が伝わっていない */
 export function toolOutcome(result: unknown): string {
@@ -143,9 +178,15 @@ export function toolOutcome(result: unknown): string {
   } catch {
     return "ok"; // JSONでない応答 (queryLogHelp など) は、断り方を持たないので通ったものとして扱う
   }
-  const { ok, note } = (body ?? {}) as { ok?: unknown; note?: unknown };
+  const { ok, note, error } = (body ?? {}) as { ok?: unknown; note?: unknown; error?: unknown };
+  // **断り方の欄が1つではない** (#252)。断りの多くは `note` だが、`query_log` だけは
+  // `{ ok:false, error }` を返す (SQLiteの例外をそのまま渡して直させる形)。
+  // `note` しか見ていなかったので、**一番中身を知りたいツールの失敗理由だけが
+  // 「(理由なし)」に落ちていた** — 説明のどこが伝わっていないかを測る材料が消えていた。
+  //
   // 断りの文はこちらが書いたものだが、**将来入力値を含むようになっても越えない**ように通す
-  if (ok === false) return `NG ${safe(note) || "(理由なし)"}`;
+  // (`error` は現に SQLite の例外文で、SQLの断片を含む)
+  if (ok === false) return `NG ${safe(note) || safe(error) || "(理由なし)"}`;
   return "ok";
 }
 

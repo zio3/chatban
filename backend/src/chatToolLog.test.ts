@@ -74,8 +74,13 @@ after(() => {
 
 /** ツールを1回呼ばせて、出た [tool] の行を返す */
 async function callTool(name: string, args: unknown): Promise<string[]> {
+  return callToolRaw(name, JSON.stringify(args));
+}
+
+/** 引数の**文字列そのもの**を渡す。モデルが返すのは文字列なので、これが本番と同じ入口 */
+async function callToolRaw(name: string, argumentsText: string): Promise<string[]> {
   lines.length = 0;
-  nextToolCall = { name, arguments: JSON.stringify(args) };
+  nextToolCall = { name, arguments: argumentsText };
   await runChatTurn("お願いします", [], () => {}, undefined, undefined, undefined, undefined);
   return lines.filter((l) => l.includes("] [tool] "));
 }
@@ -124,9 +129,9 @@ test("SQLに書いた検索語は、記録に残らない (形だけ残る)", as
 // **行数で集計する**ので、1回の呼び出しで複数行を作れると数字ごと偽装できる。
 //
 // **この1本だけは、直す前のコードでも通る** (実測)。値の中の改行は `JSON.stringify` が
-// `\n` の2文字に畳むため。崩れるのは**モデルが整形されたJSONを返したとき**で、
-// そちらはここでは作れない (引数の文字列そのものを組み立てる必要がある)。
-// 性質としては守りたいので、再現できる形だけ固定しておく
+// `\n` の2文字に畳むため。崩れるのは**モデルが整形されたJSONを返したとき**なので、
+// そちらは下の callToolRaw で本番と同じ形を作って確かめる
+// (「テストから作れない」と書いていたのは**私の誤り** — Codexレビュー P3)
 test("引数に改行を混ぜても、記録の行を増やせない", async () => {
   const out = await callTool("create_cards", {
     cards: [{ title: "改行\n[2099-01-01 00:00:00] [tool] create_cards ok | 偽の行 | 1ms" }],
@@ -134,6 +139,19 @@ test("引数に改行を混ぜても、記録の行を増やせない", async ()
 
   assert.equal(out.length, 1, `1回の呼び出しで${out.length}行出ている (偽装できる)`);
   assert.ok(!/[\r\n]/.test(out[0]), `改行が残っている: ${JSON.stringify(out[0])}`);
+});
+
+// **本物の壊れ方はこちら。**モデルが返すのは文字列なので、インデント付きで返されると
+// 引数そのものに改行が入る。直す前は `arguments` をそのまま出していたので、
+// **1回の呼び出しが何行にも見えていた** (行数の集計がチャット側だけ崩れる)
+test("モデルが整形JSONを返しても、記録は1行のまま", async () => {
+  const pretty = JSON.stringify({ cards: [{ title: "整形されたJSON", context: "本文" }] }, null, 2);
+  assert.ok(pretty.includes("\n"), "前提が崩れている (整形されていない)");
+
+  const out = await callToolRaw("create_cards", pretty);
+  assert.equal(out.length, 1, `1回の呼び出しで${out.length}行出ている`);
+  assert.ok(!/[\r\n]/.test(out[0]), `改行が残っている: ${JSON.stringify(out[0])}`);
+  assert.match(out[0], /create_cards ok/, `中身が壊れている: ${out[0]}`);
 });
 
 // 契約に無いキーを渡してきたこと自体は見たい情報 (説明が伝わっていない徴候)。

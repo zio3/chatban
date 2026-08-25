@@ -331,6 +331,18 @@ export function toolOutcome(result: unknown): string {
   return outcomeOf(body);
 }
 
+/** 例外で終わったときに残す語。**本文は出さない** (#254)。
+ *
+ * 例外文は入力値を含みうる — SQLiteのエラーはSQLをそのまま載せるし、下位層が組み立てた
+ * 文字列に利用者の言葉が入ることもある。**種類だけで「どのツールが落ちているか」は分かる。**
+ *
+ * **入口ごとに書かない。**チャットとMCPで別々に書いていたら、片方だけ `safe(e.message)` に
+ * なっていた (Codexレビュー P2)。`finally` で記録する目的が「例外で終わったターンを残す」
+ * ことなので、**そこだけ規則が逆だと、直したはずの穴が失敗時にだけ開く** */
+export function throwOutcome(e: unknown): string {
+  return `throw ${e instanceof Error ? e.name : "不明"}`;
+}
+
 /** 通ったか断られたかを、**封筒を剥がした結果そのもの**から読む (#254)。
  *
  * MCPはJSON文字列を `content[0].text` に包んで返すが、**チャット側の `execTool` は

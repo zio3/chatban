@@ -25,7 +25,7 @@ import { chatCompletion } from "./llm.js";
 import { getModel } from "./config.js";
 import { foldedContainer } from "./archive.js";
 import { suggestBootGraceMs } from "./demoMode.js";
-import { argDetail, argShape, outcomeOf, safe, safeToolName } from "./mcpLog.js";
+import { argDetail, argShape, outcomeOf, safeToolName, throwOutcome } from "./mcpLog.js";
 import { log } from "./log.js";
 import type { CustomLane, UiAction, ViewEvent } from "./types.js";
 
@@ -929,8 +929,10 @@ async function runChatTurnInner(
         try {
           result = await execTool(tc.function.name, args, events as Set<string>);
           outcome = outcomeOf(result);
-        } catch (e: any) {
-          outcome = `NG ${safe(e?.message ?? String(e))}`;
+        } catch (e) {
+          // 例外はそのまま投げ直す。**記録だけ足す**。
+          // 本文を出さない理由は throwOutcome に書いてある (MCP側と同じ規則 #254)
+          outcome = throwOutcome(e);
           throw e;
         } finally {
           const detail = argDetail(tc.function.name, args);

@@ -74,9 +74,36 @@ export function statusDescription(lanes: CustomLane[]): string {
 
 /** #106/#108: 記録へのSQL窓口の説明。チャットとMCPで同じものを使う。
  * 入口ごとに書き分けると必ずズレる (#92 #108 #114 で3回起きた) */
+/** **同じ事実を、散文と例文の両方で言わない** (#255)。
+ *
+ * 説明が3,259字まで太った原因は、行を足したことより**同じことを2回言っていた**こと。
+ * `length(context)` は散文にも例文にもあり、`WHERE id=112` も、`done_day` もそうだった。
+ *
+ * 迷ったら**例文だけで通じるならそちら**。SQLは形がそのまま答えなので、
+ * 「こう書ける」を1本見せるほうが短く、真似もされる (実測で真似されていたのは例文だけだった)。
+ * **例文からは読めない事実だけ散文に残す** — 並び順が組み込まれていること、
+ * 番号がプロジェクトごとであること、2つのビューに同じカードが出る時期があること。
+ *
+ * つまり片方に寄せる。**説明+例のセットは作らない。** */
 export const QUERY_LOG_DESCRIPTION = [
   "記録にSQLで問い合わせる(読み取り専用)。集計軸・期間・条件は自由に決めてよい。",
-  "DBは SQLite。方言はSQLiteに合わせる — 日付は date()/datetime()/strftime() と修飾子('start of month', '-2 months' など)を使い、date_trunc/INTERVAL/NOW() のような他DBの関数は無い。真偽値は 0/1。文字列連結は || 。日時はISO 8601風の文字列で入っている",
+  // #255: **「SQLiteなら知っている知識」は書かない。**以前はここで方言を185字かけて
+  // 説明していた (date_trunc が無い・真偽値は 0/1・連結は || ・日付関数と修飾子)。
+  //
+  // 実測 (2026-08-25、chat_messages.trace から復元したSQL 98本): **方言違反0件・失敗0件**。
+  // date_trunc / INTERVAL / NOW() / CURRENT_DATE / CONCAT / TRUE・FALSE / :: は1本も無く、
+  // SQLの文法で転んだ記録も1つも無かった。**事故を見て足した行ではなく、予防で書いた行**だった。
+  //
+  // **残すのは1つだけ** — 日時の入り方は方言ではなく**このDBのスキーマの事実**で、
+  // SQLiteを知っていても列がUNIX秒かTEXTか、UTCかローカルかは分からない。
+  // しかも現行の文は `localtime` を書いていなかった (例文は date('now','localtime') と
+  // 書いているのに)。**短くしながら精度は上がっている。**
+  //
+  // 「使われていない=不要」で消したのではない (#189)。**転んだ形跡が無い**うえ、
+  // 落とした知識はモデルが元から持っている、という2つが揃ったから消せた。
+  // done_cards が0件・SELECT * 違反が0件なのは**同じ根拠にならない** — 知られていないのか
+  // 規則が効いているのかを区別できないので、そちらは #252 の実測待ちのまま
+  "DBは SQLite。日時は 'YYYY-MM-DD HH:MM:SS' の文字列で、**ローカル時刻**で入っている",
   "見えるのは**接続中のプロジェクトの記録だけ**。別プロジェクトのカードや会話は見えない",
   // #181: この行は PUBLIC_TABLES から生成する。説明に手で書くと、テーブルを増減したときに
   // 説明・コード・テストの3箇所を人間が揃える前提になり、実際にズレた (project_context の漏れ)
@@ -84,10 +111,10 @@ export const QUERY_LOG_DESCRIPTION = [
   "chat_messages(id, role, content, trace, usage, card_id, created_at。role='user' が持ち主の発言、'assistant' がこのアシスタント。usage は所要時間とラウンド数だけ — トークン計測は #181 で撤去した) / project_context(id, text, version, updated_at)",
   "cards(id, title, status, summary, context, context_version, due, blocked_by, rejected, checked_at, done_at, trashed_at, sort, archived, created_at, updated_at)",
   "checked_at = 人が実物で確かめた日時 (nullなら未検収)。status とは別物で、done は列が動いたこと・checked_at は検収が進んだこと。片方からもう片方を推測しない。この窓口は読み取り専用で、checked_at を書く手段はどこにも無い (印を付けられるのは人間だけ)",
-  "会話で「#112」と呼ぶカードは cards.id = 112 のこと(主キー)。番号はプロジェクトごとに1から振られる。特定の1件を見るときは WHERE id=<番号> で引く",
+  "会話の「#112」は cards.id = 112 (主キー)。番号はプロジェクトごとに1から振られる",
   "日付の列を取り違えない。created_at=登録日 / updated_at=最終更新(その後の編集でも動く) / done_at=Doneへ確定した日 / checked_at=人が確かめた日。完了の集計には done_at を使う(created_at だと登録日を数えてしまう)",
   "done_at のうち 2026-08-10 以前のものは、列を作る前に終わったぶんを updated_at から埋めた近似値(完了後に触っていなければ最終更新=完了日時)。日単位の集計には使えるが、分単位の議論には使わない",
-  "done_cards ビューを使う。完了したもの(done_at が入っているもの)だけを、完了が新しい順に抜いたもの。日付は done_day 列に入っているので date() を書かなくてよい。live_cards の対で、生きている=live_cards / 終わった=done_cards",
+  "done_cards は完了したもの(done_at 入り)だけを、完了が新しい順に抜いたビュー。live_cards の対",
   // #175: **どの status がどちらに入るかを書く。**「生きている / 終わった」だけだと
   // review がどちらか分からず、実際に「live_cards に review が出ないバグがある」と誤報した
   // (2026-08-15。ビューは正しく、検収済みで消えていただけ)。
@@ -100,16 +127,23 @@ export const QUERY_LOG_DESCRIPTION = [
   // (起動時に `status=done AND archived=0` を回収する処理も無い)
   // 時間で消えると書くと、エージェントは「待てば直る」と判断してしまう
   "live_cards に入るのは **done 以外の列すべて** (todo / inprogress / review と、そのプロジェクトで有効な任意レーン)。加えて「Doneへ確定したが、まだ畳まれていないもの」も入る。done_cards は done_at が入っているものなので、**畳まれるまでは同じカードが両方に出る**(不整合ではない)。畳むのは**人が検収を押した瞬間だけ**で、押さなければ何も動かない — 時間が経てば消えると考えないこと。列で絞りたいなら status を書く: WHERE status='review'",
+  // #255: **散文で言ったことを、SQLで言い直さない。**外した例文5本はどれも
+  // 上の行が既に言っている事実の書き直しだった (length(context) は15行目、
+  // updated_at の意味は9行目、ゴミ箱は16行目、review+checked_at は7・12行目、
+  // done_day は11行目)。**列の一覧を見れば書ける**ものは、モデルが元から書ける。
+  //
+  // 実測 (2026-08-25、trace から復元したSQL 98本): 外した5本を真似したSQLは**0件**。
+  // 残した2本 (「1件の詳細」「経緯メモ全文」) は**18件と12件**で、どちらも
+  // **context と context_version を一緒に読む**という、列の一覧からは出てこない
+  // 組み合わせを教えている。**例文が仕事をしているのはここだけだった。**
+  //
+  // **0件を根拠に消したのではない** (#189)。0件のうえで「散文と重複している」が
+  // 揃ったものだけ外した。done_cards の例文を1本残してあるのは、ビューの存在自体は
+  // 例文でしか目に入らないため (ビューを作った経緯は store.ts の done_cards を参照)
   "例(いつ何件終わったか): SELECT done_day, COUNT(*) n FROM done_cards GROUP BY 1 ORDER BY 1 DESC",
-  "例(直近1週間に終わったもの): SELECT done_day, title FROM done_cards WHERE done_day >= date('now','localtime','-7 days')",
   "SELECT * は使わない。必要な列だけ挙げる。context(経緯メモ)は1件1,000字を超えるので、一覧では length(context) か substr(context,1,120) にし、全文が要るカードだけ id で絞って引き直す",
   "live_cards ビューを使う。cards から「生きているもの」(ゴミ箱でもアーカイブ済みでもないもの)だけを、ボードと同じ並びで抜いたもの。条件と並びを毎回書かなくてよく、書き忘れてゴミ箱のカードが混ざることもない。列は cards と同じ + sort_key(=COALESCE(sort,id))。ゴミ箱やアーカイブを見たいときだけ cards を直に引く",
-  "例(ボードの一覧): SELECT id, status, title, due, checked_at, length(context) ctx FROM live_cards",
   "例(1件の詳細。経緯メモの全文と版): SELECT title, status, summary, context, context_version, blocked_by FROM cards WHERE id=112",
-  "例(直近の動き。「なにやってたっけ」): SELECT id, status, title, summary, updated_at FROM live_cards ORDER BY updated_at DESC LIMIT 15",
-  "例(ゴミ箱の中身): SELECT id, title, trashed_at FROM cards WHERE trashed_at IS NOT NULL ORDER BY trashed_at DESC",
-  "例(検収待ちで、まだ人が確かめていないもの): SELECT id, title, summary FROM live_cards WHERE status='review' AND checked_at IS NULL",
-  "例(1件の経緯メモ全文): SELECT context, context_version FROM cards WHERE id=112",
   "例(いつ何を言われたか): SELECT created_at, substr(content,1,120) c FROM chat_messages WHERE role='user' ORDER BY id DESC LIMIT 30",
   "例: SELECT created_at, role, substr(content,1,120) FROM chat_messages WHERE date(created_at)='2026-08-09' ORDER BY id LIMIT 30",
   "例: SELECT substr(created_at,1,13) h, COUNT(*) n FROM chat_messages GROUP BY 1 ORDER BY 1",

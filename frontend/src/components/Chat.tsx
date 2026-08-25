@@ -19,6 +19,7 @@ const TOOL_LABELS: Record<string, string> = {
   restore_cards: "ゴミ箱から復元",
   reorder_cards: "並び順変更",
   search_cards: "経緯検索",
+  get_cards: "カード読取",
   query_log: "記録集計",
   update_project_context: "前提情報更新",
 };

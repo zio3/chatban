@@ -11,6 +11,7 @@ import { getBoardPromptSection } from "./promptState.js";
 import {
   trashCard,
   getCard,
+  getCards,
   listCards,
   PUBLIC_TABLES,
   queryLogHelp,
@@ -162,6 +163,42 @@ function withoutGoal(args: unknown): unknown {
   return rest;
 }
 
+/** #257 (Codexレビュー P2): **版を読む先は get_cards。**
+ *
+ * `get_cards` を足したのに、**操作のいちばん近くにある説明が `query_log` を指したまま**だった。
+ * 遠い説明 (ツールの description) を直して近い説明 (項目の description) を残すと、
+ * **近いほうが勝つ** — 実測23本がSQLで版を読んでいた経路は、ここが入口だった。
+ *
+ * チャットとMCPで同じ文言を使う (入口ごとに書き分けると必ずズレる #92 #108 #114) */
+export const CONTEXT_VERSION_DESCRIPTION =
+  "context を渡すときのみ必須。直前に get_cards で読んだ context_version をそのまま添える";
+
+/** #257: **カードを名指しで読む口。**
+ *
+ * 実測 (2026-08-25、`chat_messages.trace` から復元したSQL 98本): **23本がこれだった** —
+ * `context` と `context_version` を読むだけのSQLで、集計ではない。
+ * **一番多い用途に道具が無く、説明で肩代わりさせていた** (`search_cards` は断片しか返さず、
+ * `sync_board` は `summary` だけなので、全文を読むにはSQLを書くしかなかった)。
+ *
+ * 呼び出し側も安くなる: SQLは平均83字 (最長136)、`{"ids":[112]}` なら13字。
+ * **呼び出しは出力トークンなのでキャッシュが効かない**ぶん、効き方が大きい。 */
+export const GET_CARDS_DESCRIPTION =
+  "カードを番号で読む。経緯メモ(context)の全文と context_version を返すので、書き換える前はここで読む。会話の「#112」が id=112。ゴミ箱・アーカイブ済みも読める(名指しなら在ると答える)";
+
+const GET_CARDS_LIMIT = 10;
+
+/** **上限を置く。**経緯メモは1件1,000字を超えるので、まとめて読むと応答がそのまま費用になる。
+ * 断らずに切って、切ったことを言う (黙って減らすと「読んだつもり」が残る)。
+ *
+ * **チャットとMCPで同じ関数を使う** — 入口ごとに書くと必ず片方だけ直る (#92 #108 #114)。
+ * `searchResult` と同じ置き方 */
+export function readCards(ids: number[]): ReturnType<typeof getCards> & { note?: string } {
+  const r = getCards(ids.slice(0, GET_CARDS_LIMIT));
+  return ids.length > GET_CARDS_LIMIT
+    ? { ...r, note: `一度に読めるのは${GET_CARDS_LIMIT}件までです。残りは番号を分けて呼んでください` }
+    : r;
+}
+
 /** #256: **やりたいことを添えてもらう。**説明を削った (#255) 分、
  * **届かなかったときに本人から聞く**ための欄。
  *
@@ -282,12 +319,12 @@ export const SEARCH_DESCRIPTION = [
  * DBに触らない純粋関数にしてあるのはテストのため。 */
 export function searchResult<T extends { hits: unknown[] }>(r: T) {
   // スニペットは「当たった箇所の周辺」でしかないので、判断の核心が範囲外にあることが多い。
-  // 検索は「どのカードか」を絞るまでの道具と位置づけ、中身は query_log で読ませる
+  // 検索は「どのカードか」を絞るまでの道具と位置づけ、中身は get_cards で読ませる (#257)
   return {
     ...r,
     ...(r.hits.length > 0
       ? {
-          note: "snippetは当たった箇所の周辺のみ。理由や判断を答えるときは query_log で経緯メモの全文を読むこと (SELECT context FROM cards WHERE id=...)",
+    note: "snippetは当たった箇所の周辺のみ。理由や判断を答えるときは get_cards で経緯メモの全文を読むこと",
         }
       : {}),
   };
@@ -374,7 +411,7 @@ export function buildTools(lanes: CustomLane[]): OpenAI.Chat.Completions.ChatCom
                 blocked_by: { type: ["array", "null"], items: { type: "integer" }, description: `${BLOCKED_BY_DESCRIPTION}。全置換で、解除はnull` },
                 rejected: { type: "boolean", description: REJECTED_DESCRIPTION },
                 context: { type: "string", description: CONTEXT_WRITE_DESCRIPTION },
-                context_version: { type: "integer", description: "context を渡すときのみ必須。直前に query_log で読んだ context_version をそのまま添える" },
+                context_version: { type: "integer", description: CONTEXT_VERSION_DESCRIPTION },
                 context_append: { type: "string", description: CONTEXT_APPEND_DESCRIPTION },
               },
               required: ["id"],
@@ -437,6 +474,18 @@ export function buildTools(lanes: CustomLane[]): OpenAI.Chat.Completions.ChatCom
           terms: { type: "array", items: { type: "string" }, description: "検索語(最大10)。言い換え・英日表記を並べる" },
         },
         required: ["terms"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "get_cards",
+      description: GET_CARDS_DESCRIPTION,
+      parameters: {
+        type: "object",
+        properties: { ids: { type: "array", items: { type: "integer" }, description: "カード番号" } },
+        required: ["ids"],
       },
     },
   },
@@ -546,6 +595,8 @@ export async function execTool(name: string, rawArgs: any, events: Set<string>):
       const r = searchCards(args.terms);
       return searchResult(r);
     }
+    case "get_cards":
+      return readCards(args.ids as number[]);
     case "query_log": {
       // #181: scope は廃止 (cost 側の llm_calls を撤去したので窓口が1つになった)
       try {
@@ -602,7 +653,7 @@ export function buildSystemPrompt(cardFocus?: ReturnType<typeof getCard>, view?:
     "- 共通の前提・決まりごと(締切、方針、用語など)を伝えられたら update_project_context で前提情報に反映する。",
     "- 特定カードの経緯・決定事項・補足(「#22は◯◯方式でいくことにした」等)は update_cards の context_append でそのカードの経緯メモに1行足す。",
     "- summary は「いまどうなっているか」。進捗・完了報告は summary に一言で書き、詳細な根拠は経緯メモ(context)に書く。",
-    "- 過去の判断や経緯・過去の会話を聞かれたら(「なんで◯◯にしたんだっけ」「あんな話してたっけ」)、索引のタイトルだけで答えず search_cards で本文と会話ログを引く。言い換え・英日表記を自分で並べて渡し、空振りしたら語を変えて引き直す。検索結果のsnippetは断片なので、理由を答える前に query_log で経緯メモの全文を読む。時期や条件で絞りたいとき(「8/9の午前に何を話していたか」等)は query_log を使う。",
+    "- 過去の判断や経緯・過去の会話を聞かれたら(「なんで◯◯にしたんだっけ」「あんな話してたっけ」)、索引のタイトルだけで答えず search_cards で本文と会話ログを引く。言い換え・英日表記を自分で並べて渡し、空振りしたら語を変えて引き直す。検索結果のsnippetは断片なので、理由を答える前に get_cards で経緯メモの全文を読む。時期や条件で絞りたいとき(「8/9の午前に何を話していたか」等)は query_log を使う。",
     "- 削除と却下は文脈で使い分ける: 誤登録・重複・ダミー(「消して」「間違えた」)は delete_cards (ゴミ箱行きで復元可。返答で復元方法を説明する必要はない)。やらない決定(「見送り」「却下」「やらないことにした」)は削除せず update_cards で status=review + rejected=true にし、なぜやらないと決めたかを summary に一言・詳しい経緯を経緯メモ(context / context_append)に書いて「却下としてReviewに置きました。検収で確定します」と返す (検収後、決定としてDone列に残る)。",
     "- 「消して」がカードそのものを指すのか、タイトルや文言の一部の修正を指すのか曖昧なときは、操作せず確認する (実例:「#95だけ発言者の話が入っていて不自然なので消せますか?」はタイトルの修正依頼だったが、カードごと削除してしまった)。",
     "- ボードから退場するもの(完了・却下)は必ずReviewを通り、人間の検収チェックで確定する。チャットからdoneへ直行する経路は存在しない。",
@@ -695,6 +746,7 @@ export const TOOL_LABELS: Record<string, string> = {
   update_project_context: "前提情報を更新",
   reorder_cards: "並び順を変更",
   search_cards: "経緯を検索",
+  get_cards: "カードを読む",
   query_log: "記録を集計",
 };
 

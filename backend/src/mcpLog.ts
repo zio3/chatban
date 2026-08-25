@@ -81,6 +81,7 @@ export const MCP_TOOL_NAMES = [
   "delete_cards",
   "restore_cards",
   "search_cards",
+  "get_cards",
   "reorder_cards",
   "query_log",
   "get_project_context",

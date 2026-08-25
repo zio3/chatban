@@ -13,6 +13,9 @@ import {
   DUE_DESCRIPTION,
   SEARCH_DESCRIPTION,
   PROJECT_CONTEXT_WRITE_DESCRIPTION,
+  CONTEXT_VERSION_DESCRIPTION,
+  GET_CARDS_DESCRIPTION,
+  readCards,
   GOAL_DESCRIPTION,
   QUERY_LOG_DESCRIPTION,
   REJECTED_DESCRIPTION,
@@ -221,7 +224,7 @@ export function buildMcpServer(
               .number()
               .int()
               .optional()
-              .describe("context を渡すときのみ必須。直前に query_log で読んだ context_version をそのまま添える"),
+              .describe(CONTEXT_VERSION_DESCRIPTION),
             context_append: z.string().optional().describe(CONTEXT_APPEND_DESCRIPTION),
             due: z.string().nullable().optional().describe(`${DUE_DESCRIPTION}。解除はnull`),
             blocked_by: z.array(z.number().int()).nullable().optional().describe(`${BLOCKED_BY_DESCRIPTION}。全置換で、解除はnull`),
@@ -300,6 +303,20 @@ export function buildMcpServer(
       const gate = parseToolArgs("search_cards", { terms }, LANES);
       if (!gate.ok) return text({ ok: false, note: gate.note });
       return text(searchResult(searchCards(gate.args.terms)));
+    }
+  );
+
+  // #257: カードを名指しで読む。**実測で query_log の一番の仕事がこれだった** (98本中23本)
+  server.registerTool(
+    "get_cards",
+    {
+      description: GET_CARDS_DESCRIPTION,
+      inputSchema: { ids: z.array(z.number().int()).describe("カード番号") },
+    },
+    async ({ ids }) => {
+      const gate = parseToolArgs("get_cards", { ids }, LANES);
+      if (!gate.ok) return text({ ok: false, note: gate.note });
+      return text(readCards(gate.args.ids as number[]));
     }
   );
 

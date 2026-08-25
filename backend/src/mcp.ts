@@ -13,6 +13,7 @@ import {
   DUE_DESCRIPTION,
   SEARCH_DESCRIPTION,
   PROJECT_CONTEXT_WRITE_DESCRIPTION,
+  CONTEXT_VERSION_DESCRIPTION,
   GET_CARDS_DESCRIPTION,
   readCards,
   GOAL_DESCRIPTION,
@@ -223,7 +224,7 @@ export function buildMcpServer(
               .number()
               .int()
               .optional()
-              .describe("context を渡すときのみ必須。直前に query_log で読んだ context_version をそのまま添える"),
+              .describe(CONTEXT_VERSION_DESCRIPTION),
             context_append: z.string().optional().describe(CONTEXT_APPEND_DESCRIPTION),
             due: z.string().nullable().optional().describe(`${DUE_DESCRIPTION}。解除はnull`),
             blocked_by: z.array(z.number().int()).nullable().optional().describe(`${BLOCKED_BY_DESCRIPTION}。全置換で、解除はnull`),

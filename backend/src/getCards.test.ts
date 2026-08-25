@@ -77,3 +77,34 @@ test("チャットのツール定義に載っている (配線の抜けが無い
   const names = buildTools([]).map((t: any) => t.function.name);
   assert.ok(names.includes("get_cards"), `定義に無い: ${names.join(",")}`);
 });
+
+// #257 (Codexレビュー P2): **近い説明が勝つ。**
+// ツールの description を `get_cards` に直しても、`context_version` の項目説明が
+// 「直前に query_log で読んだ」のままだと、**操作のいちばん近くにある案内**が旧経路を指す。
+// 実測23本がSQLで版を読んでいた経路は、まさにここが入口だった
+test("版を読む先は get_cards に揃っている (両入口 + 常時読む案内)", async () => {
+  const { CONTEXT_VERSION_DESCRIPTION } = await import("./chat.js");
+  assert.match(CONTEXT_VERSION_DESCRIPTION, /get_cards/);
+  assert.ok(!CONTEXT_VERSION_DESCRIPTION.includes("query_log"), "版の説明が query_log を指している");
+
+  // チャットの定義から実際に引く (定数だけ直して配線を忘れる形を止める)
+  const update: any = buildTools([]).find((t: any) => t.function.name === "update_cards");
+  const cv = update.function.parameters.properties.updates.items.properties.context_version;
+  assert.equal(cv.description, CONTEXT_VERSION_DESCRIPTION, "チャット側が定数を使っていない");
+});
+
+// **カードの全文を読む用途だけ**を見る。条件で絞る・集計する案内は query_log のままでよい
+// (用途が違うので一括置換しない — Codexレビューの助言)
+test("カードの詳細を読む案内が query_log を指していない", async () => {
+  const { buildSystemPrompt } = await import("./chat.js");
+  const prompt = buildSystemPrompt();
+  // **文単位で見る。**同じ行に「全文は get_cards」と「時期や条件で絞るなら query_log」が
+  // 並ぶのは正しい状態 — 行ごと弾くと、用途の違いまで潰してしまう
+  const sentences = prompt.split(/[。\n]/).filter((x) => /経緯メモの全文|詳細\(経緯メモ\)/.test(x));
+
+  assert.ok(sentences.length > 0, "全文を読む案内が見つからない (文言が変わった?)");
+  for (const x of sentences) {
+    assert.ok(!x.includes("query_log"), `全文を読む案内が query_log を指している: ${x}`);
+    assert.ok(x.includes("get_cards"), `全文を読む案内が get_cards を指していない: ${x}`);
+  }
+});

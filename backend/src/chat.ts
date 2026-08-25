@@ -118,6 +118,16 @@ export const QUERY_LOG_DESCRIPTION = [
   "LLM呼び出しの記録 (トークン・単価・レイテンシ) はここには無い (#181で撤去)。速度やキャッシュの効きを見たいときは backend/logs/ のログを読む",
 ].join("\n");
 
+/** 会話の記録 (`chat_messages.trace`) に載せない項目を落とす。
+ *
+ * いまは `goal` (#256) だけ。**自由文なので潰せない**ぶん、残す場所を1つに絞る —
+ * 失敗したときのログ行だけが記録で、成功した回はどこにも残さない。 */
+function withoutGoal(args: unknown): unknown {
+  if (!args || typeof args !== "object" || !("goal" in args)) return args;
+  const { goal: _dropped, ...rest } = args as Record<string, unknown>;
+  return rest;
+}
+
 /** #256: **やりたいことを添えてもらう。**説明を削った (#255) 分、
  * **届かなかったときに本人から聞く**ための欄。
  *
@@ -968,7 +978,12 @@ async function runChatTurnInner(
               (detail ? ` | ${detail}` : "")
           );
         }
-        trace.push({ tool: tc.function.name, input: args, result });
+        // #256 (Codexレビュー P2): **trace はDBに残る。**`chat_messages.trace` に保存されるので、
+        // ログから外しただけでは「成功した回の目的は捕らない」が成立しない
+        // (ログは失敗時だけ、DBには全部、という**入口の中でねじれた状態**になっていた)。
+        // `goal` は自由文で語の許可リストが効かないぶん、**残す場所を1つに決める** —
+        // 記録はログ行だけ。会話の記録には載せない
+        trace.push({ tool: tc.function.name, input: withoutGoal(args), result });
         messages.push({ role: "tool", tool_call_id: tc.id, content: JSON.stringify(result) });
       }
       for (const e of events) onEvent(e as ViewEvent);

@@ -219,3 +219,32 @@ test("goal に改行を混ぜても、記録の行を増やせない", async () 
   assert.equal(out.length, 1, `1回の呼び出しで${out.length}行出ている`);
   assert.ok(!/[\r\n]/.test(out[0]), `改行が残っている: ${JSON.stringify(out[0])}`);
 });
+
+// #256 (Codexレビュー P2): **trace はDBに残る** (`chat_messages.trace`)。
+// ログから外しただけでは「成功した回の目的は捕らない」が成立していなかった —
+// **ログは失敗時だけ、DBには全部**という、入口の中でねじれた状態になっていた
+test("goal は会話の記録 (trace) にも残らない", async () => {
+  lines.length = 0;
+  nextToolCall = {
+    name: "query_log",
+    arguments: JSON.stringify({ sql: "SELECT id FROM live_cards", goal: "SECRET-成功した回の目的" }),
+  };
+  const res = await runChatTurn("お願いします", [], () => {}, undefined, undefined, undefined, undefined);
+
+  const call = res.trace.find((t: any) => t.tool === "query_log");
+  assert.ok(call, "trace に残っていない (配線が変わった?)");
+  assert.ok(!("goal" in (call!.input as any)), `trace に goal が残っている: ${JSON.stringify(call!.input)}`);
+  assert.match(JSON.stringify(call!.input), /SELECT id FROM live_cards/, "SQL まで落ちている");
+});
+
+// 失敗した回も同じ。**記録はログ行だけ**と決めたので、DBには置かない
+test("失敗した回でも trace には goal を残さない (記録の場所は1つ)", async () => {
+  nextToolCall = {
+    name: "query_log",
+    arguments: JSON.stringify({ sql: "SELECT id FROM 存在しない表", goal: "SECRET-失敗した回の目的" }),
+  };
+  const res = await runChatTurn("お願いします", [], () => {}, undefined, undefined, undefined, undefined);
+
+  const call = res.trace.find((t: any) => t.tool === "query_log");
+  assert.ok(!("goal" in (call!.input as any)), `trace に goal が残っている: ${JSON.stringify(call!.input)}`);
+});

@@ -1,6 +1,7 @@
 import { hooks } from "./hooks.js";
 import { log } from "./log.js";
 import { customLanes, db, projectReadonly } from "./store.js";
+import { PUBLIC_TABLES } from "./publicSchema.js";
 import { decodeUnicodeEscapes } from "./text.js";
 import type { CustomLane, Card, CardStatus } from "./types.js";
 
@@ -673,13 +674,10 @@ export function searchCards(terms: string[], limit = 10) {
 // #181: scope が2つ (cost / audit) だったが、cost 側の llm_calls / model_prices を撤去したので
 // **窓口は1つになった。**接続中のプロジェクトの記録だけを引く。
 // live_cards / done_cards はビュー (どちらも cards を見ている)
-export const PUBLIC_TABLES: readonly string[] = [
-  "cards",
-  "live_cards",
-  "done_cards",
-  "chat_messages",
-  "project_context",
-];
+// #252: 定数は publicSchema.ts へ移した (mcpLog.ts からも参照するため。
+// db.ts 経由で読むと store.ts ごと引き込み、モジュール評価で日常用DBが開く)。
+// 既存の読み手を壊さないよう、ここからも出しておく
+export { PUBLIC_COLUMNS, PUBLIC_TABLES } from "./publicSchema.js";
 
 /** #106追補: 会話ログなどプロジェクト側の記録をSQLで引く。
  * キーワード検索では「8/9の午前に何を話していたか」のような時間軸での切り出しができない。

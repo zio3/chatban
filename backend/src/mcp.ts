@@ -37,7 +37,7 @@ import {
 import { boardDelta, formatBoardUpdate } from "./boardState.js";
 import { log } from "./log.js";
 // #247: MCP経由の呼び出しを記録する (キー名だけ。値は残さない)
-import { argShape, safeToolName, toolOutcome } from "./mcpLog.js";
+import { argDetail, argShape, safeToolName, toolOutcome } from "./mcpLog.js";
 // #245: 列の一覧と引数の契約は toolArgs.ts が唯一の置き場 (チャットと同じものを指す)
 import { agentStatusValues, parseToolArgs, reorderableStatuses } from "./toolArgs.js";
 import { contextReference, contextTemplateHint } from "./contextTemplate.js";
@@ -117,7 +117,7 @@ export function buildMcpServer(
   // #247: **記録の絞り口はここ1つ。**ハンドラ10個に個別に入れない (#245 と同じ形 —
   // 入口ごとに書くと必ずズレる)。`registerTool` そのものを包むので、**下の登録は1文字も変わらず、
   // 引数の型がスキーマから付くのも保たれる** (包む関数を挟むと、そこで型が any に落ちる)。
-  // 残すのはツール名・通ったか・引数の**キー名**・所要時間だけで、**値は残さない** (理由は mcpLog.ts)
+  // 残すのはツール名・通ったか・引数の**キー名**・所要時間。**値は許可した項目だけ** (理由は mcpLog.ts)
   const registerTool = server.registerTool.bind(server) as (n: string, c: any, cb: any) => unknown;
   server.registerTool = ((name: string, config: any, cb: any) =>
     registerTool(name, config, async (args: any, extra: any) => {
@@ -134,7 +134,12 @@ export function buildMcpServer(
         outcome = `throw ${e instanceof Error ? e.name : "不明"}`;
         throw e;
       } finally {
-        log("mcp", `${safeToolName(name)} ${outcome} | ${argShape(args)} | ${Date.now() - started}ms`);
+        const detail = argDetail(name, args);
+        log(
+          "mcp",
+          `${safeToolName(name)} ${outcome} | ${argShape(args)} | ${Date.now() - started}ms` +
+            (detail ? ` | ${detail}` : "")
+        );
         onToolHandled?.(extra?.requestId);
       }
     })) as typeof server.registerTool;

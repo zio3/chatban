@@ -1,3 +1,4 @@
+import { PUBLIC_COLUMNS, PUBLIC_TABLES } from "./publicSchema.js";
 import { toolArgSchemas } from "./toolArgs.js";
 
 /** #247: **MCP経由の呼び出しを1行に畳む。**
@@ -130,6 +131,179 @@ export function argShape(args: unknown): string {
   return line.length > MAX_LINE ? line.slice(0, MAX_LINE) + "…" : line;
 }
 
+/** SQLのうち**平文で残してよい語**。`mcpLog` 全体と同じ規則 — こちらが決めた語だけを出す。
+ *
+ * 表・列の名前と、SQLの語彙 (キーワードと関数)。**それ以外の識別子は `?` に潰す。**
+ * 引用符の中だけ落としても足りなかった (Codexレビュー P2 の実測で気づいた):
+ * 壊れたSQLでは利用者の言葉が**引用符なしのトークンとして**そのまま残る。
+ *
+ * ```sql
+ * SELECT * FROM cards WHERE t = 顧客A-未公開買収計画   -- 構文エラーだが、文面はログに来る
+ * ```
+ *
+ * **抜けても壊れず、鈍るだけ** — 知らない語が `?` になって読みにくくなるだけで、
+ * 「どの例文を真似したか」は表・列・キーワードで十分に分かる。 */
+const SQL_WORDS = new Set(
+  [
+    ...PUBLIC_TABLES,
+    ...PUBLIC_COLUMNS,
+    // 句と演算子
+    "select", "from", "where", "group", "order", "by", "limit", "offset", "having", "with", "as",
+    "and", "or", "not", "is", "null", "in", "like", "glob", "between", "exists", "case", "when",
+    "then", "else", "end", "distinct", "all", "union", "except", "intersect", "join", "left",
+    "inner", "outer", "cross", "on", "using", "asc", "desc", "nulls", "first", "last", "collate",
+    "nocase", "escape", "values", "cast", "filter", "over", "partition",
+    // 関数と型
+    "count", "sum", "avg", "min", "max", "total", "length", "substr", "substring", "replace",
+    "trim", "ltrim", "rtrim", "upper", "lower", "coalesce", "ifnull", "nullif", "iif", "abs",
+    "round", "group_concat", "json_extract", "printf", "format", "instr",
+    "date", "time", "datetime", "julianday", "strftime", "unixepoch", "now", "localtime",
+    "integer", "text", "real", "blob", "numeric",
+    // 例文に出てくる別名 (残らないと「どの例文か」が読みにくくなる)
+    "n", "h", "c", "ctx",
+  ].map((w) => w.toLowerCase())
+);
+
+/** 識別子として1語ぶんを切り出す (ASCII英数と `_`、および非ASCII文字)。
+ * **非ASCIIも1語に含める**のが肝 — 日本語がそのまま素通りしては意味が無い */
+const WORD = /[A-Za-z0-9_\u0080-\uffff]+/g;
+
+/** 識別子のうち、許可した語だけ残す。**それ以外は数値も含めて `?`。**
+ *
+ * 最初は「`WHERE id=112` の形が見たい」として数値を残していたが、**そこから抜けられた**
+ * (Codexレビュー P2)。カード番号と、電話番号・口座番号・顧客番号は**見分けが付かない**:
+ *
+ * ```sql
+ * SELECT 4111111111111111 FROM cards
+ * SELECT * FROM cards WHERE id=090-1234-5678
+ * ```
+ *
+ * 測るのに要るのは**リテラルがそこに在ったこと**だけで、`WHERE id=?` でも
+ * 列・演算子・位置は分かる。**具体値は元から要らなかった。** */
+function redactWords(text: string): string {
+  return text.replace(WORD, (w) => (SQL_WORDS.has(w.toLowerCase()) ? w : "?"));
+}
+/** #252: **SQLから、文字列リテラルとコメントを落とす。**
+ *
+ * 測りたいのは**SQLの形** (どのビュー・どの列・どの関数を使ったか) で、リテラルは元からノイズ。
+ * 落としても目的は達せられるのに、残すと利用者の言葉がログへ複製される:
+ *
+ * ```sql
+ * SELECT id FROM live_cards WHERE title LIKE '%顧客A-未公開買収計画%'
+ * ```
+ *
+ * **最初は「readonly + テーブルの許可リスト (#168) を通った後だから安全」と書いたが、
+ * これは誤りだった** (Codexレビュー P2)。理由が2つとも成り立っていない:
+ *
+ *   - 記録は `finally` から出るので、**弾かれたSQLも残る**。「通った後」ではない
+ *   - 引ける先を絞ることと、**SQLの文面を残してよいこと**は別の境界。
+ *     リテラルは読み出す値と無関係に何でも書ける
+ *
+ * 環境変数で一時的に有効化する案 (Codex提示の最小案) は採らなかった。**測りたいのは
+ * 日常の使われ方**で、有効にした期間に偏るとそれが測れない。落として常時残すほうが目的に合う。
+ *
+ * **正規表現ではなく1文字ずつ見る。**閉じていない引用符 (構文エラーのSQLでは普通に起きる) を
+ * 正しく扱えないと、**壊れた入力のときだけ本文が残る**という一番まずい形になる。 */
+export function redactSql(sql: string): string {
+  // 開き記号 → 閉じ記号。SQLiteは '' " " ` ` [ ] のどれも受ける
+  const QUOTES: Record<string, string> = { "'": "'", '"': '"', "`": "`", "[": "]" };
+  let out = "";
+  let i = 0;
+  while (i < sql.length) {
+    const c = sql[i];
+
+    // -- 行コメント (改行まで)
+    if (c === "-" && sql[i + 1] === "-") {
+      while (i < sql.length && sql[i] !== "\n" && sql[i] !== "\r") i++;
+      out += " ";
+      continue;
+    }
+    // /* ブロックコメント */
+    if (c === "/" && sql[i + 1] === "*") {
+      const end = sql.indexOf("*/", i + 2);
+      i = end < 0 ? sql.length : end + 2;
+      out += " ";
+      continue;
+    }
+
+    const close = QUOTES[c];
+    if (close) {
+      // 中身は捨てて「リテラルがあった」ことだけ残す
+      i++;
+      while (i < sql.length) {
+        if (sql[i] === close) {
+          // 同じ記号が2つ続くのは中身側のエスケープ ('it''s')。まだ閉じていない
+          if (sql[i + 1] === close) i += 2;
+          else break;
+        } else i++;
+      }
+      const closed = i < sql.length;
+      out += `${c}…${closed ? close : ""}`;
+      i = closed ? i + 1 : i; // 閉じていなければ末尾まで食べ切っている
+      continue;
+    }
+
+    // 引用符の外。**ここも素通りさせない** — 壊れたSQLでは、利用者の言葉が
+    // 引用符なしのトークンとしてそのまま現れる (Codexレビュー P2)。
+    // 1語ぶんまとめて取り、許可した語かどうかで残すか `?` にするかを決める
+    WORD.lastIndex = i;
+    const m = WORD.exec(sql);
+    if (m && m.index === i) {
+      out += redactWords(m[0]);
+      i += m[0].length;
+      continue;
+    }
+
+    out += c;
+    i++;
+  }
+  return out;
+}
+
+/** #252: **失敗の理由を、こちらが決めた語に畳む。**
+ *
+ * SQLiteの例外文は入力をそのまま載せる (`unrecognized token near 顧客A-…`) ので、
+ * **生のまま残すとリテラルを落とした意味が無くなる** (Codexレビュー P2)。
+ * 測りたいのは「どこで詰まっているか」なので、分類だけで足りる。 */
+export function classifyQueryError(message: unknown): string {
+  const m = typeof message === "string" ? message.toLowerCase() : "";
+  if (!m) return "(理由なし)";
+  if (m.includes("no such table")) return "引けないテーブル";
+  if (m.includes("no such column")) return "無い列";
+  if (m.includes("no such function")) return "無い関数";
+  if (m.includes("readonly") || m.includes("read-only")) return "書き込もうとした";
+  if (m.includes("syntax error") || m.includes("unrecognized token") || m.includes("incomplete input"))
+    return "SQLの文法";
+  return "その他";
+}
+/** #252: **値を平文で出してよい項目。**`mcpLog` の芯は「値は元から1文字も出さない」で、
+ * それは崩さない。ここは**穴ではなく例外の一覧**で、増やすときは理由を書くこと。
+ *
+ * `query_log.sql` … `query_log` の説明はチャットのツール定義の**35%を占める** (3482/9924字、
+ * 2026-08-25実測) のに、呼ばれるのは `update_cards` の3分の1。削る候補は例文11本 (1122字) だが、
+ * `argShape` は `sql` というキー名しか出さないので、**どの例文が真似されているか数えられない**。
+ * 測ってから削るために、**SQLの形**を残す (中身は `redactSql` が落とす)。 */
+const LOGGED_VALUES: Record<string, Record<string, (v: string) => string>> = {
+  query_log: { sql: redactSql },
+};
+
+const MAX_VALUE = 300;
+
+/** 許可した項目だけ、値を平文で1行に足す。`sql=SELECT id, title FROM live_cards` の形。
+ * 許可されていないツール・項目は**何も返さない** (呼び出し側で足す文字も増えない) */
+export function argDetail(name: unknown, args: unknown): string {
+  const allowed = LOGGED_VALUES[safeToolName(name)];
+  if (!allowed) return "";
+  const parts: string[] = [];
+  for (const [key, redact] of Object.entries(allowed)) {
+    const v = (args as Record<string, unknown> | null | undefined)?.[key];
+    // **落としてから `safe()` に渡す。**順番が逆だと、`safe()` が改行を空白に潰した後で
+    // `--` 行コメントを見ることになり、コメントの終わりが分からなくなる
+    const text = typeof v === "string" ? safe(redact(v), MAX_VALUE) : "";
+    if (text) parts.push(`${key}=${text}`);
+  }
+  return parts.join(" ");
+}
 /** 応答から「通ったか / 断ったならどう言ったか」を取り出す。
  * **失敗が溜まっていく場所が要る** — `ok:false` が繰り返すツールは、契約が伝わっていない */
 export function toolOutcome(result: unknown): string {
@@ -143,9 +317,16 @@ export function toolOutcome(result: unknown): string {
   } catch {
     return "ok"; // JSONでない応答 (queryLogHelp など) は、断り方を持たないので通ったものとして扱う
   }
-  const { ok, note } = (body ?? {}) as { ok?: unknown; note?: unknown };
-  // 断りの文はこちらが書いたものだが、**将来入力値を含むようになっても越えない**ように通す
-  if (ok === false) return `NG ${safe(note) || "(理由なし)"}`;
+  const { ok, note, error } = (body ?? {}) as { ok?: unknown; note?: unknown; error?: unknown };
+  // **断り方の欄が1つではない** (#252)。断りの多くは `note` だが、`query_log` だけは
+  // `{ ok:false, error }` を返す (SQLiteの例外をそのまま渡して直させる形)。
+  // `note` しか見ていなかったので、**一番中身を知りたいツールの失敗理由だけが
+  // 「(理由なし)」に落ちていた** — 説明のどこが伝わっていないかを測る材料が消えていた。
+  //
+  // 断りの文はこちらが書いたものだが、**将来入力値を含むようになっても越えない**ように通す。
+  // `error` だけは違う — **SQLiteの例外文は入力をそのまま載せる**
+  // (`unrecognized token near 顧客A-…`) ので、`safe()` では足りず分類に畳む (Codexレビュー P2)
+  if (ok === false) return `NG ${safe(note) || (error !== undefined ? classifyQueryError(error) : "(理由なし)")}`;
   return "ok";
 }
 

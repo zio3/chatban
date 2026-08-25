@@ -272,8 +272,15 @@ export default function App() {
   // #108: 印はDBに持つ (checked_at)。以前は画面のローカル状態で、リロードで消えていた。
   // 一塊の完了を管理するフラグなので、確かめた記録として残す。
   // 書けるのはこの経路(REST)だけ — エージェントはSQL窓口で読めるが付けられない
+  //
+  // #251: **条件はここ1本。**以前は数える側が `checkedAt` だけを見ていて、
+  // 押す側だけが列を見ていた。Doneへ検収したカードは `checked_at` を持ったまま
+  // 24時間Done列に残るので、その間ずっと「検収済み1件をDoneへ」が押せる状態で出て、
+  // 押すと 0件で即returnして無反応になっていた (トーストも無し)。
+  // サーバーの mayEnterDone (status==="review" && checkedAt && !trashedAt) に合わせ、
+  // 確定する集合そのものを approvedIds にして**二度とズレない形にする**
   const approvedIds = useMemo(
-    () => new Set(cards.filter((t) => t.checkedAt).map((t) => t.id)),
+    () => new Set(cards.filter((t) => t.status === "review" && t.checkedAt && !t.trashedAt).map((t) => t.id)),
     [cards]
   );
   // 他の更新と同じく楽観更新 (moveCardと同じ形): 先に画面へ反映し、失敗したら戻す
@@ -289,7 +296,9 @@ export default function App() {
     });
   }, []);
   const commitApproved = useCallback(() => {
-    const ids = cards.filter((t) => t.status === "review" && t.checkedAt).map((t) => t.id);
+    // #251: 数えた集合をそのまま確定する (別々に絞り直さない)。
+    // ボタンは size===0 で disabled なので、ここに0件で来ることは無い
+    const ids = [...approvedIds];
     if (ids.length === 0) return;
     // 複数前提の一括確定API (#60): N件でもDone列の畳み直しは1回
     api
@@ -302,7 +311,7 @@ export default function App() {
       .catch((e) => {
         setToast({ message: `検収に失敗しました: ${e?.message ?? e}` });
       });
-  }, [cards]);
+  }, [approvedIds]);
 
 
   // ✨AI提案チップ (#75): ボードの文脈を読んだ提案を非同期で追加 (固定チップは即時表示の保険)

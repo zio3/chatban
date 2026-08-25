@@ -17,18 +17,33 @@ import path from "node:path";
  * ここ (node:test) から実行して確かめる手段が無い。**書いてあることを確かめる**のが精一杯。
  * 代わりに、**外れたら確実に落ちる**ように「どこへ出すか」まで固定している。 */
 
-const CONFIG = path.join(import.meta.dirname, "..", "..", "frontend", "playwright.config.ts");
+/** #253: playwright.config.ts の**実物を読む**。
+ *
+ * 最初は設定ファイルを生の文字列で検索していたが、**コメントアウトしても通った**
+ * (`// CHATBAN_LOG_DIR: "e2e-data/logs",` が正規表現に一致する)。webServer が
+ * backend用とfrontend用の2つあるので、**frontend側へ間違えて移しても見分けられない**
+ * という穴もあった。その場合、番人は緑のまま backend が日常ログへ書く (Codexレビュー P3)。
+ *
+ * default export を import すれば、コメントも別エントリも拾わない。 */
+async function backendWebServer() {
+  const mod = await import("../../frontend/playwright.config.js");
+  const servers = (mod.default as any).webServer as Array<any>;
+  // **cwd で特定する。**配列の順番に頼ると、入れ替えたときに黙って別のサーバーを見る
+  const backend = servers.find((w) => w.cwd === "../backend");
+  assert.ok(backend, "playwright.config.ts に cwd=../backend の webServer が無い (構成が変わった?)");
+  return backend;
+}
 
-test("E2Eのログは、日常使いの logs/ とは別のディレクトリへ出す", () => {
-  const src = fs.readFileSync(CONFIG, "utf8");
+test("E2Eのログは、日常使いの logs/ とは別のディレクトリへ出す", async () => {
+  const backend = await backendWebServer();
 
-  // **番人が本物を読めていること。**パスを間違えて空文字を読んでいたら全部素通りする (#180の教訓)
-  assert.match(src, /CHATBAN_DATA_DIR/, `${CONFIG} を読めていない (E2Eの設定に見えない)`);
+  // **番人が本物を見ていること。**別のものを掴んでいたら全部素通りする (#180の教訓)
+  assert.equal(backend.env?.CHATBAN_DATA_DIR, "e2e-data", "E2Eのbackend設定に見えない");
 
-  const m = /CHATBAN_LOG_DIR:\s*"([^"]+)"/.exec(src);
+  const dir = backend.env?.CHATBAN_LOG_DIR;
   assert.ok(
-    m,
-    "playwright.config.ts が CHATBAN_LOG_DIR を渡していない。**E2Eが日常使いと同じ " +
+    dir,
+    "playwright.config.ts の backend が CHATBAN_LOG_DIR を渡していない。**E2Eが日常使いと同じ " +
       "backend/logs/ に書くと、#247 で数えたい「どのツールが呼ばれているか」がテストで埋まる**"
   );
 
@@ -37,13 +52,12 @@ test("E2Eのログは、日常使いの logs/ とは別のディレクトリへ�
   //   - `clean-db.mjs` が実行のたびに消す = 残るのは直近1回ぶんだけ
   // どちらか片方でも外れると、狙った「綺麗な1回ぶんのログ」にならない
   assert.match(
-    m[1],
+    dir,
     /^e2e-data[\/\\]/,
-    `E2Eのログ出力先が e2e-data の下でない (${m[1]})。` +
+    `E2Eのログ出力先が e2e-data の下でない (${dir})。` +
       "e2e-data の下なら gitignore 済みで、clean-db.mjs が実行ごとに消してくれる"
   );
 });
-
 test("E2Eのデータ置き場そのものが gitignore されている", () => {
   const ignore = fs.readFileSync(path.join(import.meta.dirname, "..", "..", ".gitignore"), "utf8");
   // **`logs/` の行は当てにしない。**あれは「logs という名前のディレクトリ」にしか効かず、

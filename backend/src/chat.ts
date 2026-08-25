@@ -125,8 +125,13 @@ export const QUERY_LOG_DESCRIPTION = [
   // `project_context` の列は残す — 前提情報を更新する前に版を読む経路がここしかない
   // (チャットに `get_project_context` が無い。#257 のレビューで確認済み)
   // 列だけ残す。**説明を落としても指示は従える**が、列ごと落とすと
-  // システムプロンプトの「時期や条件で絞りたいときは query_log」が**従えない指示**になる
-  "chat_messages(id, role, content, card_id, created_at) / project_context(id, text, version, updated_at)",
+  // システムプロンプトの「時期や条件で絞りたいときは query_log」が**従えない指示**になる。
+  //
+  // **`role` の値だけは別扱い** (Codexレビュー P3)。**列の名前を間違えれば失敗するが、
+  // 値を間違えても失敗しない** — `WHERE role='human'` は `no such column` ではなく
+  // **0件で正常終了する**ので、「消しても間違っていたら goal に残る」という回収策が効かない。
+  // **黙って空振りして「そんな会話は無かった」と答える**のが一番悪い形なので、2値だけ残す
+  "chat_messages(id, role, content, card_id, created_at。role は user=持ち主 / assistant=AI) / project_context(id, text, version, updated_at)",
   "cards(id, title, status, summary, context, context_version, due, blocked_by, rejected, checked_at, done_at, trashed_at, sort, archived, created_at, updated_at)",
   "checked_at = 人が実物で確かめた日時 (nullなら未検収)。status とは別物で、done は列が動いたこと・checked_at は検収が進んだこと。片方からもう片方を推測しない。この窓口は読み取り専用で、checked_at を書く手段はどこにも無い (印を付けられるのは人間だけ)",
   "会話の「#112」は cards.id = 112 (主キー)。番号はプロジェクトごとに1から振られる",

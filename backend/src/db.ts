@@ -682,9 +682,13 @@ export function searchCards(terms: string[], limit = 10) {
 // 既存の読み手を壊さないよう、ここからも出しておく
 export { PUBLIC_COLUMNS, PUBLIC_TABLES } from "./publicSchema.js";
 
-/** #106追補: 会話ログなどプロジェクト側の記録をSQLで引く。
- * キーワード検索では「8/9の午前に何を話していたか」のような時間軸での切り出しができない。
- * 会話は揮発させる方針(#72)なので常時プロンプトには載せず、聞かれたときだけ掘る */
+/** #106追補: プロジェクト側の記録をSQLで引く。
+ * 集計軸を先に決め打ちしないので、「今週Doneにしたのは何件か」のような問いにその場で答えられる。
+ *
+ * **#262: 会話ログ (`chat_messages`) は対象外になった。**もとは「8/9の午前に何を話していたか」を
+ * 時間軸で切り出すのがこの関数の動機だったが、**その用途はやらないと決めた** (思想の判断)。
+ * 会話を引くのは `searchCards` のキーワード検索 (`chatHits`) だけ。
+ * 会話を揮発させる方針 (#72) は変わらない — 常時プロンプトには載せず、聞かれたときだけ掘る */
 export function queryProjectData(sql: string, limit = 200) {
   return runReadonly(projectReadonly(), sql, limit);
 }

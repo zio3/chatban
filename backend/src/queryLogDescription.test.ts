@@ -78,3 +78,38 @@ test("説明の長さに歯止めを置く", () => {
     `${QUERY_LOG_DESCRIPTION.length}字。伸ばすなら、その情報がMCPの毎セッションぶんの価値があるか先に考える`
   );
 });
+
+// #258: **`chat_messages` の説明は落としたが、列は残す。**
+// 説明を落としても指示は従えるが、**列ごと落とすとシステムプロンプトの
+// 「時期や条件で絞りたいときは query_log」が従えない指示になる**
+test("chat_messages は列だけ残す (説明は落とす)", () => {
+  assert.match(QUERY_LOG_DESCRIPTION, /chat_messages\(id, role, content, card_id, created_at/);
+  for (const w of ["過去の話を聞かれたらここを掘る", "いつ何を頼まれたか", "usage は所要時間"]) {
+    assert.ok(!QUERY_LOG_DESCRIPTION.includes(w), `「${w}」が残っている`);
+  }
+  const examples = QUERY_LOG_DESCRIPTION.split("\n").filter((l) => l.startsWith("例"));
+  const chatExamples = examples.filter((l) => l.includes("chat_messages"));
+  assert.deepEqual(chatExamples, [], "chat_messages の例文が残っている");
+});
+
+// **従えない指示を作っていないこと。**説明を削るときに一番危ないのはこれ
+test("query_log を使えと言っている用途は、説明から引ける", async () => {
+  const { buildSystemPrompt } = await import("./chat.js");
+  const prompt = buildSystemPrompt();
+
+  if (/時期や条件で絞りたいとき.*query_log/.test(prompt)) {
+    assert.match(QUERY_LOG_DESCRIPTION, /chat_messages\(/, "会話ログの列が説明に無い (指示に従えない)");
+  }
+  if (/project_context/.test(prompt)) {
+    assert.match(QUERY_LOG_DESCRIPTION, /project_context\(/, "前提情報の列が説明に無い (版を読めない)");
+  }
+});
+
+// #258 (Codexレビュー P3): **列の名前を間違えれば失敗するが、値を間違えても失敗しない。**
+// `WHERE role='human'` は `no such column` ではなく **0件で正常終了する**ので、
+// #256 の goal に残らない。**黙って空振りして「そんな会話は無かった」と答える**のが
+// 一番悪い形なので、2値だけは説明に残す
+test("role の取りうる値は残す (間違えても失敗しないので、記録に残らない)", () => {
+  assert.match(QUERY_LOG_DESCRIPTION, /user=持ち主/, "どちらが持ち主か分からない");
+  assert.match(QUERY_LOG_DESCRIPTION, /assistant=AI/, "AIの側が分からない");
+});

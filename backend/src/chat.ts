@@ -109,7 +109,29 @@ export const QUERY_LOG_DESCRIPTION = [
   // #181: この行は PUBLIC_TABLES から生成する。説明に手で書くと、テーブルを増減したときに
   // 説明・コード・テストの3箇所を人間が揃える前提になり、実際にズレた (project_context の漏れ)
   `引けるもの: ${PUBLIC_TABLES.join(" / ")}`,
-  "chat_messages(id, role, content, trace, usage, card_id, created_at。role='user' が持ち主の発言、'assistant' がこのアシスタント。usage は所要時間とラウンド数だけ — トークン計測は #181 で撤去した) / project_context(id, text, version, updated_at)",
+  // #258: **`chat_messages` の案内を落とした** (列定義・例文3本・勧め2行で約628字)。
+  // 実測 (2026-08-25、trace から復元したSQL 98本): 引いたのは**6本**で、うち3本は
+  // **撤去済みの `speaker` 列**を選び、半分は動作確認用プロジェクトだった。
+  // 実運用で「過去の話を掘った」と言えるのは**1本**。628字も割いてこの使われ方なので、
+  // **知らされていないから使われていない、とは言いにくい**。
+  //
+  // **引けること自体は残す。**`PUBLIC_TABLES` から生成される「引けるもの:」の行には出る —
+  // **能力は残し、授業料だけ落とす。**
+  //
+  // **消しても間違っていたら分かる。**列を知らないまま引けば `no such column` で失敗し、
+  // #256 の `goal` が「何が知りたかったか」を記録に残す。#255 で「削れないものが残る」と
+  // 書いた判別器が、そのままここで効く。
+  //
+  // `project_context` の列は残す — 前提情報を更新する前に版を読む経路がここしかない
+  // (チャットに `get_project_context` が無い。#257 のレビューで確認済み)
+  // 列だけ残す。**説明を落としても指示は従える**が、列ごと落とすと
+  // システムプロンプトの「時期や条件で絞りたいときは query_log」が**従えない指示**になる。
+  //
+  // **`role` の値だけは別扱い** (Codexレビュー P3)。**列の名前を間違えれば失敗するが、
+  // 値を間違えても失敗しない** — `WHERE role='human'` は `no such column` ではなく
+  // **0件で正常終了する**ので、「消しても間違っていたら goal に残る」という回収策が効かない。
+  // **黙って空振りして「そんな会話は無かった」と答える**のが一番悪い形なので、2値だけ残す
+  "chat_messages(id, role, content, card_id, created_at。role は user=持ち主 / assistant=AI) / project_context(id, text, version, updated_at)",
   "cards(id, title, status, summary, context, context_version, due, blocked_by, rejected, checked_at, done_at, trashed_at, sort, archived, created_at, updated_at)",
   "checked_at = 人が実物で確かめた日時 (nullなら未検収)。status とは別物で、done は列が動いたこと・checked_at は検収が進んだこと。片方からもう片方を推測しない。この窓口は読み取り専用で、checked_at を書く手段はどこにも無い (印を付けられるのは人間だけ)",
   "会話の「#112」は cards.id = 112 (主キー)。番号はプロジェクトごとに1から振られる",
@@ -145,11 +167,6 @@ export const QUERY_LOG_DESCRIPTION = [
   "SELECT * は使わない。必要な列だけ挙げる。context(経緯メモ)は1件1,000字を超えるので、一覧では length(context) か substr(context,1,120) にし、全文が要るカードだけ id で絞って引き直す",
   "live_cards ビューを使う。cards から「生きているもの」(ゴミ箱でもアーカイブ済みでもないもの)だけを、ボードと同じ並びで抜いたもの。条件と並びを毎回書かなくてよく、書き忘れてゴミ箱のカードが混ざることもない。列は cards と同じ + sort_key(=COALESCE(sort,id))。ゴミ箱やアーカイブを見たいときだけ cards を直に引く",
   "例(1件の詳細。経緯メモの全文と版): SELECT title, status, summary, context, context_version, blocked_by FROM cards WHERE id=112",
-  "例(いつ何を言われたか): SELECT created_at, substr(content,1,120) c FROM chat_messages WHERE role='user' ORDER BY id DESC LIMIT 30",
-  "例: SELECT created_at, role, substr(content,1,120) FROM chat_messages WHERE date(created_at)='2026-08-09' ORDER BY id LIMIT 30",
-  "例: SELECT substr(created_at,1,13) h, COUNT(*) n FROM chat_messages GROUP BY 1 ORDER BY 1",
-  "会話ログは常時プロンプトに載せていないので、過去の話を聞かれたらここを掘る。",
-  "「いつ何を頼まれたか」はここで辿れる。発言者の記録は持たない (#180: 個人利用なので、user は常に持ち主)。",
   "LLM呼び出しの記録 (トークン・単価・レイテンシ) はここには無い (#181で撤去)。速度やキャッシュの効きを見たいときは backend/logs/ のログを読む",
 ].join("\n");
 

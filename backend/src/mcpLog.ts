@@ -27,7 +27,18 @@ import { toolArgSchemas } from "./toolArgs.js";
  *   - 自由文 (断りの理由・例外) … 制御文字を落として長さを切る
  *
  * **値は元から1文字も出さない。**`context` をそのまま出すと経緯メモが丸ごとディスクに残り、
- * #224 (公開デモでプロンプト全文がディスクに残る) と同じ形になる。 */
+ * #224 (公開デモでプロンプト全文がディスクに残る) と同じ形になる。
+ *
+ * ## 入口が2つあるので、規則も2つになっていた (#254)
+ *
+ * ここはMCPのために書いたが、**同じ道具は内蔵チャットからも呼ばれる**。そちら (`chat.ts`) は
+ * 引数JSONを無加工で先頭200字残していて、**経緯メモの本文がディスクに落ちていた** — 同じ道具を
+ * 入口ごとに違う規則で記録していたことになる。CLAUDE.md の「入口で契約がズレると入口ごとに
+ * 違う汚れ方をする」が、契約ではなく記録側で起きた形。
+ *
+ * **なのでこのモジュールは入口に依存しない。**ファイル名は `mcpLog` のままだが、
+ * 中身はMCPとチャットの共通の規則で、DBにも `express` にも触らない
+ * (純粋であることは `mcpLogIsPure.test.ts` が固定している)。 */
 
 const MAX_LINE = 200;
 const MAX_FREE_TEXT = 60;
@@ -317,6 +328,15 @@ export function toolOutcome(result: unknown): string {
   } catch {
     return "ok"; // JSONでない応答 (queryLogHelp など) は、断り方を持たないので通ったものとして扱う
   }
+  return outcomeOf(body);
+}
+
+/** 通ったか断られたかを、**封筒を剥がした結果そのもの**から読む (#254)。
+ *
+ * MCPはJSON文字列を `content[0].text` に包んで返すが、**チャット側の `execTool` は
+ * 素のオブジェクトをそのまま返す**。断り方 (`ok` / `note` / `error`) は両方で同じなので、
+ * 読む部分だけを分けて、判断は1箇所に閉じておく */
+export function outcomeOf(body: unknown): string {
   const { ok, note, error } = (body ?? {}) as { ok?: unknown; note?: unknown; error?: unknown };
   // **断り方の欄が1つではない** (#252)。断りの多くは `note` だが、`query_log` だけは
   // `{ ok:false, error }` を返す (SQLiteの例外をそのまま渡して直させる形)。

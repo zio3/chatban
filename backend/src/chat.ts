@@ -25,6 +25,7 @@ import { chatCompletion } from "./llm.js";
 import { getModel } from "./config.js";
 import { foldedContainer } from "./archive.js";
 import { suggestBootGraceMs } from "./demoMode.js";
+import { argDetail, argShape, outcomeOf, safe, safeToolName } from "./mcpLog.js";
 import { log } from "./log.js";
 import type { CustomLane, UiAction, ViewEvent } from "./types.js";
 
@@ -907,14 +908,39 @@ async function runChatTurnInner(
       for (const tc of msg.tool_calls) {
         if (tc.type !== "function") continue;
         let args: any = {};
+        let broken = false;
         try {
           args = JSON.parse(tc.function.arguments || "{}");
         } catch {
           /* 引数パース失敗時は空で実行し、エラーはツール結果に出る */
+          broken = true;
         }
-        log("tool", `${tc.function.name} ${tc.function.arguments?.slice(0, 200)}`);
         onProgress?.(TOOL_LABELS[tc.function.name] ?? tc.function.name);
-        const result = await execTool(tc.function.name, args, events as Set<string>);
+        // #254: **MCP側と同じ規則で記録する** (`mcpLog` は入口に依存しない純粋関数)。
+        // 以前はここが引数JSONを無加工で先頭200字残していて、**経緯メモの本文が
+        // ディスクに落ちていた** — MCP側が「値は元から1文字も出さない」なのと正反対だった。
+        // 整形されたJSONなら改行で1回の呼び出しが複数行に見えるので、行数の集計もこちらだけ崩れる。
+        //
+        // **失敗しても1行残す** (finally)。ターンが例外で終わると `saveChatMessage` まで
+        // 届かず `trace` がDBに残らないので、**落ちたターンで何を呼んだかはここにしか無い**
+        const started = Date.now();
+        let outcome = "ok";
+        let result: unknown;
+        try {
+          result = await execTool(tc.function.name, args, events as Set<string>);
+          outcome = outcomeOf(result);
+        } catch (e: any) {
+          outcome = `NG ${safe(e?.message ?? String(e))}`;
+          throw e;
+        } finally {
+          const detail = argDetail(tc.function.name, args);
+          log(
+            "tool",
+            `${safeToolName(tc.function.name)} ${outcome} | ${broken ? "(引数が壊れている)" : argShape(args)} | ` +
+              `${Date.now() - started}ms` +
+              (detail ? ` | ${detail}` : "")
+          );
+        }
         trace.push({ tool: tc.function.name, input: args, result });
         messages.push({ role: "tool", tool_call_id: tc.id, content: JSON.stringify(result) });
       }

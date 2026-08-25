@@ -184,3 +184,38 @@ test("記録の作り替えでツールの実行は壊れていない", async ()
   await callTool("update_cards", { updates: [{ id, title: "変えたあとの題名" }] });
   assert.equal(getCard(id)!.title, "変えたあとの題名");
 });
+
+// #256: **やりたいことを添えてもらい、うまくいかなかった回だけ残す。**
+// 説明を削った (#255) ぶん、届かなかったときに本人から聞くための欄
+test("goal は、引けたときは記録に残らない", async () => {
+  const out = await callTool("query_log", {
+    sql: "SELECT id FROM live_cards",
+    goal: "SECRET-うまくいった回の目的",
+  });
+
+  const line = out[0] ?? "";
+  assert.match(line, /query_log ok/, `記録されていない: ${line}`);
+  assert.ok(!line.includes("SECRET"), `成功した回の目的まで残っている: ${line}`);
+});
+
+test("goal は、引けなかったときだけ記録に残る", async () => {
+  const out = await callTool("query_log", {
+    sql: "SELECT id FROM 存在しない表",
+    goal: "検収待ちのカードを数えたかった",
+  });
+
+  const line = out[0] ?? "";
+  assert.match(line, /query_log NG/, `失敗として記録されていない: ${line}`);
+  assert.match(line, /goal=検収待ちのカードを数えたかった/, `目的が残っていない: ${line}`);
+});
+
+// 自由文なので潰せない (SQLと違って語の許可リストが効かない)。**行を増やせないことだけは守る**
+test("goal に改行を混ぜても、記録の行を増やせない", async () => {
+  const out = await callTool("query_log", {
+    sql: "SELECT id FROM 存在しない表",
+    goal: "改行\n[2099-01-01 00:00:00] [tool] query_log ok | 偽の行 | 1ms",
+  });
+
+  assert.equal(out.length, 1, `1回の呼び出しで${out.length}行出ている`);
+  assert.ok(!/[\r\n]/.test(out[0]), `改行が残っている: ${JSON.stringify(out[0])}`);
+});

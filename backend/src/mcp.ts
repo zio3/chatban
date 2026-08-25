@@ -13,6 +13,7 @@ import {
   DUE_DESCRIPTION,
   SEARCH_DESCRIPTION,
   PROJECT_CONTEXT_WRITE_DESCRIPTION,
+  GOAL_DESCRIPTION,
   QUERY_LOG_DESCRIPTION,
   REJECTED_DESCRIPTION,
   REORDER_DESCRIPTION,
@@ -37,7 +38,7 @@ import {
 import { boardDelta, formatBoardUpdate } from "./boardState.js";
 import { log } from "./log.js";
 // #247: MCP経由の呼び出しを記録する (キー名だけ。値は残さない)
-import { argDetail, argShape, safeToolName, throwOutcome, toolOutcome } from "./mcpLog.js";
+import { argDetail, argShape, isFailure, safeToolName, throwOutcome, toolOutcome } from "./mcpLog.js";
 // #245: 列の一覧と引数の契約は toolArgs.ts が唯一の置き場 (チャットと同じものを指す)
 import { agentStatusValues, parseToolArgs, reorderableStatuses } from "./toolArgs.js";
 import { contextReference, contextTemplateHint } from "./contextTemplate.js";
@@ -133,7 +134,7 @@ export function buildMcpServer(
         outcome = throwOutcome(e);
         throw e;
       } finally {
-        const detail = argDetail(name, args);
+        const detail = argDetail(name, args, isFailure(outcome));
         log(
           "mcp",
           `${safeToolName(name)} ${outcome} | ${argShape(args)} | ${Date.now() - started}ms` +
@@ -311,6 +312,7 @@ export function buildMcpServer(
       description: QUERY_LOG_DESCRIPTION,
       inputSchema: {
         sql: z.string().describe("SELECT または WITH で始まる1文"),
+        goal: z.string().optional().describe(GOAL_DESCRIPTION),
       },
     },
     async ({ sql }) => {

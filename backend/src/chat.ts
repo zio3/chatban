@@ -25,7 +25,7 @@ import { chatCompletion } from "./llm.js";
 import { getModel } from "./config.js";
 import { foldedContainer } from "./archive.js";
 import { suggestBootGraceMs } from "./demoMode.js";
-import { argDetail, argShape, outcomeOf, safeToolName, throwOutcome } from "./mcpLog.js";
+import { argDetail, argShape, isFailure, outcomeOf, safeToolName, throwOutcome } from "./mcpLog.js";
 import { log } from "./log.js";
 import type { CustomLane, UiAction, ViewEvent } from "./types.js";
 
@@ -75,7 +75,7 @@ export function statusDescription(lanes: CustomLane[]): string {
 /** #106/#108: 記録へのSQL窓口の説明。チャットとMCPで同じものを使う。
  * 入口ごとに書き分けると必ずズレる (#92 #108 #114 で3回起きた) */
 export const QUERY_LOG_DESCRIPTION = [
-  "記録にSQLで問い合わせる(読み取り専用)。集計軸・期間・条件は自由に決めてよい。",
+  "記録にSQLで問い合わせる(読み取り専用)。集計軸・期間・条件は自由に決めてよい。**間違えても壊れないので、思ったとおりに書いて試してよい** — goal に「何が知りたいか」を添えておくと、引けなかったときにこちらが説明を直せる",
   "DBは SQLite。方言はSQLiteに合わせる — 日付は date()/datetime()/strftime() と修飾子('start of month', '-2 months' など)を使い、date_trunc/INTERVAL/NOW() のような他DBの関数は無い。真偽値は 0/1。文字列連結は || 。日時はISO 8601風の文字列で入っている",
   "見えるのは**接続中のプロジェクトの記録だけ**。別プロジェクトのカードや会話は見えない",
   // #181: この行は PUBLIC_TABLES から生成する。説明に手で書くと、テーブルを増減したときに
@@ -117,6 +117,22 @@ export const QUERY_LOG_DESCRIPTION = [
   "「いつ何を頼まれたか」はここで辿れる。発言者の記録は持たない (#180: 個人利用なので、user は常に持ち主)。",
   "LLM呼び出しの記録 (トークン・単価・レイテンシ) はここには無い (#181で撤去)。速度やキャッシュの効きを見たいときは backend/logs/ のログを読む",
 ].join("\n");
+
+/** #256: **やりたいことを添えてもらう。**説明を削った (#255) 分、
+ * **届かなかったときに本人から聞く**ための欄。
+ *
+ * 記録するのは**失敗した呼び出しだけ** (`mcpLog` の `FAILURE_ONLY_VALUES`)。
+ * 成功した回の目的は捕らない — 欲しいのは「説明が足りなかった瞬間」だけで、
+ * 実測では 98/98 が成功していた (2026-08-25) ので、残るのはごく僅か。
+ *
+ * **別ツールにしない。**`ask` ツールは自発的には **0/3回**しか呼ばれなかった
+ * (extractChoices のコメント) — 「呼ばなくても目的を達成できるツールは呼ばれない」。
+ * **引数なら、呼ぶときに必ず目に入る。**
+ *
+ * **任意にしてある。**必須にすると添え忘れがスキーマ拒否になり、
+ * **見たいだけの呼び出しが丸ごと失敗する**。窓口は読み取り専用で、間違えても壊れない。 */
+export const GOAL_DESCRIPTION =
+  "任意(推奨)。このSQLで何が知りたいか、ひとこと。うまく引けなかったときだけ記録して、説明のどこが足りないかを直す材料にする(成功した呼び出しでは残さない)";
 
 /** #115/#116: 列の意味と完了の条件はプロジェクトごとに違う。
  * 実例: あるプロジェクトは review=検収待ち、別のプロジェクトは review=相手待ち(返答・承認待ち)。
@@ -381,6 +397,7 @@ export function buildTools(lanes: CustomLane[]): OpenAI.Chat.Completions.ChatCom
         type: "object",
         properties: {
           sql: { type: "string", description: "SELECT または WITH で始まる1文" },
+          goal: { type: "string", description: GOAL_DESCRIPTION },
         },
         required: ["sql"],
       },
@@ -935,7 +952,7 @@ async function runChatTurnInner(
           outcome = throwOutcome(e);
           throw e;
         } finally {
-          const detail = argDetail(tc.function.name, args);
+          const detail = argDetail(tc.function.name, args, isFailure(outcome));
           log(
             "tool",
             `${safeToolName(tc.function.name)} ${outcome} | ${broken ? "(引数が壊れている)" : argShape(args)} | ` +

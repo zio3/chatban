@@ -215,3 +215,20 @@ test("SQLiteの失敗理由に入力が混じっても、記録には出ない",
   assert.ok(!line.includes("SECRET"), `例外文に入力が混じって出ている: ${line}`);
   assert.match(line, /query_log NG/, `失敗として記録されていない: ${line}`);
 });
+
+// #256: MCPからも同じ規則で残る (入口ごとに書き分けない)
+test("goal は引けなかったときだけ残る (MCPも同じ)", async () => {
+  lines.length = 0;
+  await client
+    .callTool({ name: "query_log", arguments: { sql: "SELECT id FROM live_cards", goal: "SECRET-成功した回" } })
+    .catch(() => {});
+  assert.ok(!(mcpLines()[0] ?? "").includes("SECRET"), `成功した回の目的が残っている: ${mcpLines()[0]}`);
+
+  lines.length = 0;
+  await client
+    .callTool({ name: "query_log", arguments: { sql: "SELECT id FROM 存在しない表", goal: "何件あるか見たかった" } })
+    .catch(() => {});
+  const line = mcpLines()[0] ?? "";
+  assert.match(line, /query_log NG/, `失敗として記録されていない: ${line}`);
+  assert.match(line, /goal=何件あるか見たかった/, `目的が残っていない: ${line}`);
+});

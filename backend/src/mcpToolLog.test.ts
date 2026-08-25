@@ -184,3 +184,34 @@ test("SQLに改行を混ぜても、記録の行を増やせない", async () =>
   // 改行が潰れて1行に収まっていることを見る (偽の時刻が本文に混ざるのは無害)
   assert.ok(!/[\r\n]/.test(out[0]), `改行が残っている: ${JSON.stringify(out[0])}`);
 });
+
+// #252 (Codexレビュー P2): **利用者の言葉がログへ複製されないこと。**
+// 「検索語をSQLに写す」のは異常系ではなく**普通の使い方**なので、ここは実際に流して確かめる
+test("SQLに書いた検索語は、記録に残らない (形だけ残る)", async () => {
+  lines.length = 0;
+  await client
+    .callTool({
+      name: "query_log",
+      arguments: { sql: "SELECT id FROM live_cards WHERE title LIKE '%SECRET-未公開の案件名%'" },
+    })
+    .catch(() => {});
+
+  const line = mcpLines()[0] ?? "";
+  assert.ok(line, "記録されていない");
+  assert.ok(!line.includes("SECRET"), `検索語が記録に出ている: ${line}`);
+  // **形は残る。**これが無いと「どの例文を真似したか」を測れず、変更の意味が消える
+  assert.match(line, /sql=SELECT id FROM live_cards WHERE title LIKE/, `SQLの形が残っていない: ${line}`);
+});
+
+// SQLiteの例外文は入力をそのまま載せる (`unrecognized token near …`)
+test("SQLiteの失敗理由に入力が混じっても、記録には出ない", async () => {
+  lines.length = 0;
+  await client
+    .callTool({ name: "query_log", arguments: { sql: "SELECT * FROM cards WHERE t = SECRET-未公開の案件名" } })
+    .catch(() => {});
+
+  const line = mcpLines()[0] ?? "";
+  assert.ok(line, "記録されていない");
+  assert.ok(!line.includes("SECRET"), `例外文に入力が混じって出ている: ${line}`);
+  assert.match(line, /query_log NG/, `失敗として記録されていない: ${line}`);
+});

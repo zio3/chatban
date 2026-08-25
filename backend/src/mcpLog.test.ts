@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { argDetail, argShape, MCP_TOOL_NAMES, safe, safeToolName, toolCalls, toolOutcome } from "./mcpLog.js";
+import { classifyQueryError, redactSql, argDetail, argShape, MCP_TOOL_NAMES, safe, safeToolName, toolCalls, toolOutcome } from "./mcpLog.js";
 
 /** #247: **ログに出てよいのは「こちらが決めた語」だけ。**
  *
@@ -178,7 +178,9 @@ test("SQL に改行を混ぜても、ログの行を増やせない", () => {
 });
 
 test("長いSQLは切り詰める (1回の呼び出しでログを埋められない)", () => {
-  const out = argDetail("query_log", { sql: "SELECT " + "x".repeat(5000) });
+  // **許可された語だけで長くする。**未知の語は `?` に潰れて短くなるので、
+  // それでは切り詰めを試したことにならない (最初はそれで書いてしまい、通ってしまった)
+  const out = argDetail("query_log", { sql: "SELECT " + Array(500).fill("id, title").join(", ") + " FROM cards" });
   assert.ok(out.length < 400, `切り詰めていない (${out.length}字)`);
   assert.ok(out.endsWith("…"), "切り詰めた印が無い");
 });
@@ -194,8 +196,102 @@ test("sql が文字列でなければ何も出さない (スキーマで弾か�
 // `note` しか見ていないと、**一番中身を知りたいツールの失敗理由だけが消える**
 test("query_log の断り (error 欄) も記録される", () => {
   const wrap = (body: unknown) => ({ content: [{ type: "text", text: JSON.stringify(body) }] });
-  assert.equal(toolOutcome(wrap({ ok: false, error: "no such table: secrets" })), "NG no such table: secrets");
+  assert.equal(toolOutcome(wrap({ ok: false, error: "no such table: secrets" })), "NG 引けないテーブル");
   // note があるほうを優先する (こちらが書いた案内文のほうが読みやすい)
   assert.equal(toolOutcome(wrap({ ok: false, note: "版が合わない", error: "raw" })), "NG 版が合わない");
+  // **SQLiteの例外文は入力をそのまま載せる。**分類に畳んで、断片を残さない
+  assert.equal(toolOutcome(wrap({ ok: false, error: "unrecognized token near SECRET-顧客名" })), "NG SQLの文法");
   assert.equal(toolOutcome(wrap({ ok: false })), "NG (理由なし)");
+});
+
+/** #252: **SQLの中身は残さない。**
+ *
+ * 最初は「readonly + テーブルの許可リスト (#168) を通った後だから安全」と書いたが、
+ * 理由が2つとも成り立っていなかった (Codexレビュー P2):
+ * 記録は `finally` から出るので**弾かれたSQLも残る**し、引ける先を絞ることと
+ * **文面を残してよいこと**は別の境界。リテラルは読み出す値と無関係に何でも書ける。 */
+test("SQLの文字列リテラルは中身を落とす (形だけ残す)", () => {
+  assert.equal(
+    redactSql("SELECT id FROM live_cards WHERE title LIKE '%顧客A-未公開買収計画%'"),
+    "SELECT id FROM live_cards WHERE title LIKE '…'"
+  );
+  // 測りたい「どの例文を真似したか」は、落としても分かる
+  assert.equal(
+    redactSql("SELECT done_day, COUNT(*) n FROM done_cards GROUP BY 1 ORDER BY 1 DESC"),
+    "SELECT done_day, COUNT(*) n FROM done_cards GROUP BY 1 ORDER BY 1 DESC"
+  );
+});
+
+test("引用符の書き方が変わっても落とせる", () => {
+  // '' は中身側のエスケープなので、ここで閉じたと勘違いしない
+  // t / u は表にも列にも無い語なので ? になる (許可した語しか出さない)
+  assert.equal(redactSql("SELECT 1 WHERE t = 'it''s 秘密' AND u = 'もう1つ'"), "SELECT 1 WHERE ? = '…' AND ? = '…'");
+  // SQLite は " ` [ ] も引用に使う
+  assert.equal(redactSql('SELECT "秘密" FROM cards'), 'SELECT "…" FROM cards');
+  assert.equal(redactSql("SELECT `秘密` FROM cards"), "SELECT `…` FROM cards");
+  assert.equal(redactSql("SELECT [秘密] FROM cards"), "SELECT […] FROM cards");
+});
+
+// **これが一番まずい形。**閉じていない引用符は構文エラーのSQLで普通に起きるので、
+// ここを取りこぼすと「壊れた入力のときだけ本文が残る」ことになる
+test("閉じていない引用符でも、末尾まで落とす", () => {
+  assert.equal(redactSql("SELECT * FROM cards WHERE t='閉じていない秘密"), "SELECT * FROM cards WHERE ?='…");
+  assert.ok(!redactSql("SELECT '秘密").includes("秘密"));
+});
+
+test("コメントも落とす (メモを書き込まれても残さない)", () => {
+  assert.ok(!redactSql("SELECT 1 -- 秘密のメモ").includes("秘密"));
+  assert.ok(!redactSql("SELECT /* 秘密 */ 1").includes("秘密"));
+  // 閉じていないブロックコメントも末尾まで
+  assert.ok(!redactSql("SELECT /* 秘密").includes("秘密"));
+  // 行コメントは改行までで終わり、その後のSQLは残る (形を測りたいので)
+  assert.match(redactSql("SELECT 1 -- メモ\nFROM done_cards"), /FROM done_cards/);
+});
+
+test("失敗の理由は、こちらが決めた語に畳む", () => {
+  assert.equal(classifyQueryError("no such table: secrets"), "引けないテーブル");
+  assert.equal(classifyQueryError("no such column: foo"), "無い列");
+  assert.equal(classifyQueryError("attempt to write a readonly database"), "書き込もうとした");
+  assert.equal(classifyQueryError('near "FRM": syntax error'), "SQLの文法");
+  // **入力の断片を載せる例外文でも、こちらの語しか出さない**
+  assert.equal(classifyQueryError("unrecognized token near SECRET-顧客名"), "SQLの文法");
+  assert.equal(classifyQueryError("何か知らない失敗"), "その他");
+  assert.equal(classifyQueryError(undefined), "(理由なし)");
+});
+
+test("argDetail はリテラルを落としたSQLを返す", () => {
+  assert.equal(
+    argDetail("query_log", { sql: "SELECT id FROM live_cards WHERE title LIKE '%SECRET%'" }),
+    "sql=SELECT id FROM live_cards WHERE title LIKE '…'"
+  );
+});
+
+// #252 (Codexレビュー P2 の実測で気づいた): **引用符の中だけ落としても足りない。**
+// 壊れたSQLでは、利用者の言葉が引用符なしのトークンとしてそのまま現れる
+test("引用符なしのトークンも、許可した語でなければ落とす", () => {
+  const out = redactSql("SELECT * FROM cards WHERE t = SECRET-未公開の案件名");
+  assert.ok(!out.includes("SECRET"), `落ちていない: ${out}`);
+  assert.ok(!out.includes("未公開"), `落ちていない: ${out}`);
+  // 表の名前とSQLの語彙は残る
+  assert.match(out, /SELECT \* FROM cards WHERE/);
+});
+
+// **これが無いと変更の意味が消える。**契約の説明に載っている例文が、
+// 落とした後も「どれを真似したか」分かる形で残ること
+test("契約の例文は、落とした後も見分けが付く", () => {
+  const examples = [
+    "SELECT done_day, COUNT(*) n FROM done_cards GROUP BY 1 ORDER BY 1 DESC",
+    "SELECT id, status, title, due, checked_at, length(context) ctx FROM live_cards",
+    "SELECT title, status, summary, context, context_version, blocked_by FROM cards WHERE id=112",
+    "SELECT substr(created_at,1,13) h, COUNT(*) n FROM chat_messages GROUP BY 1 ORDER BY 1",
+  ];
+  for (const sql of examples) {
+    // リテラルを含まない例文は**そのまま**残る
+    assert.equal(redactSql(sql), sql, `例文が潰れている: ${redactSql(sql)}`);
+  }
+  // リテラルを含む例文も、表・列・関数は残るので見分けが付く
+  assert.equal(
+    redactSql("SELECT done_day, title FROM done_cards WHERE done_day >= date('now','localtime','-7 days')"),
+    "SELECT done_day, title FROM done_cards WHERE done_day >= date('…','…','…')"
+  );
 });

@@ -681,6 +681,40 @@ export const PUBLIC_TABLES: readonly string[] = [
   "project_context",
 ];
 
+/** #252: `PUBLIC_TABLES` に出てくる列名の全部。**ログにSQLを残すときの許可リスト**で使う
+ * (`mcpLog.ts` の `redactSql` — ここに無い語は `?` に潰す)。
+ *
+ * **schemaの現物と合っているかは `publicColumns.test.ts` が pragma と突き合わせる。**
+ * ズレても壊れはせず、**知らない語が `?` になって読みにくくなる**だけ (鈍る方に倒れる)。 */
+export const PUBLIC_COLUMNS: readonly string[] = [
+  "archived",
+  "blocked_by",
+  "card_id",
+  "checked_at",
+  "content",
+  "context",
+  "context_version",
+  "created_at",
+  "done_at",
+  "done_day",
+  "due",
+  "id",
+  "project_id",
+  "rejected",
+  "role",
+  "sort",
+  "sort_key",
+  "status",
+  "summary",
+  "text",
+  "title",
+  "trace",
+  "trashed_at",
+  "updated_at",
+  "usage",
+  "version",
+];
+
 /** #106追補: 会話ログなどプロジェクト側の記録をSQLで引く。
  * キーワード検索では「8/9の午前に何を話していたか」のような時間軸での切り出しができない。
  * 会話は揮発させる方針(#72)なので常時プロンプトには載せず、聞かれたときだけ掘る */

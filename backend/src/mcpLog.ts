@@ -1,4 +1,4 @@
-import { PUBLIC_COLUMNS, PUBLIC_TABLES } from "./db.js";
+import { PUBLIC_COLUMNS, PUBLIC_TABLES } from "./publicSchema.js";
 import { toolArgSchemas } from "./toolArgs.js";
 
 /** #247: **MCP経由の呼び出しを1行に畳む。**
@@ -168,12 +168,20 @@ const SQL_WORDS = new Set(
  * **非ASCIIも1語に含める**のが肝 — 日本語がそのまま素通りしては意味が無い */
 const WORD = /[A-Za-z0-9_\u0080-\uffff]+/g;
 
-/** 識別子のうち、許可した語だけ残す。**数値はそのまま** (`WHERE id=112` の形が見たい) */
+/** 識別子のうち、許可した語だけ残す。**それ以外は数値も含めて `?`。**
+ *
+ * 最初は「`WHERE id=112` の形が見たい」として数値を残していたが、**そこから抜けられた**
+ * (Codexレビュー P2)。カード番号と、電話番号・口座番号・顧客番号は**見分けが付かない**:
+ *
+ * ```sql
+ * SELECT 4111111111111111 FROM cards
+ * SELECT * FROM cards WHERE id=090-1234-5678
+ * ```
+ *
+ * 測るのに要るのは**リテラルがそこに在ったこと**だけで、`WHERE id=?` でも
+ * 列・演算子・位置は分かる。**具体値は元から要らなかった。** */
 function redactWords(text: string): string {
-  return text.replace(WORD, (w) => {
-    if (/^[0-9]+$/.test(w)) return w;
-    return SQL_WORDS.has(w.toLowerCase()) ? w : "?";
-  });
+  return text.replace(WORD, (w) => (SQL_WORDS.has(w.toLowerCase()) ? w : "?"));
 }
 /** #252: **SQLから、文字列リテラルとコメントを落とす。**
  *

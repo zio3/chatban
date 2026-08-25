@@ -218,14 +218,14 @@ test("SQLの文字列リテラルは中身を落とす (形だけ残す)", () =>
   // 測りたい「どの例文を真似したか」は、落としても分かる
   assert.equal(
     redactSql("SELECT done_day, COUNT(*) n FROM done_cards GROUP BY 1 ORDER BY 1 DESC"),
-    "SELECT done_day, COUNT(*) n FROM done_cards GROUP BY 1 ORDER BY 1 DESC"
+    "SELECT done_day, COUNT(*) n FROM done_cards GROUP BY ? ORDER BY ? DESC"
   );
 });
 
 test("引用符の書き方が変わっても落とせる", () => {
   // '' は中身側のエスケープなので、ここで閉じたと勘違いしない
   // t / u は表にも列にも無い語なので ? になる (許可した語しか出さない)
-  assert.equal(redactSql("SELECT 1 WHERE t = 'it''s 秘密' AND u = 'もう1つ'"), "SELECT 1 WHERE ? = '…' AND ? = '…'");
+  assert.equal(redactSql("SELECT 1 WHERE t = 'it''s 秘密' AND u = 'もう1つ'"), "SELECT ? WHERE ? = '…' AND ? = '…'");
   // SQLite は " ` [ ] も引用に使う
   assert.equal(redactSql('SELECT "秘密" FROM cards'), 'SELECT "…" FROM cards');
   assert.equal(redactSql("SELECT `秘密` FROM cards"), "SELECT `…` FROM cards");
@@ -279,19 +279,51 @@ test("引用符なしのトークンも、許可した語でなければ落と�
 // **これが無いと変更の意味が消える。**契約の説明に載っている例文が、
 // 落とした後も「どれを真似したか」分かる形で残ること
 test("契約の例文は、落とした後も見分けが付く", () => {
-  const examples = [
-    "SELECT done_day, COUNT(*) n FROM done_cards GROUP BY 1 ORDER BY 1 DESC",
-    "SELECT id, status, title, due, checked_at, length(context) ctx FROM live_cards",
-    "SELECT title, status, summary, context, context_version, blocked_by FROM cards WHERE id=112",
-    "SELECT substr(created_at,1,13) h, COUNT(*) n FROM chat_messages GROUP BY 1 ORDER BY 1",
+  // **リテラル (文字列も数値も) は `?` になるが、表・列・関数・句は残る。**
+  // 「どの例文を真似したか」はその組み合わせで十分に分かる
+  const examples: Array<[string, string]> = [
+    [
+      "SELECT done_day, COUNT(*) n FROM done_cards GROUP BY 1 ORDER BY 1 DESC",
+      "SELECT done_day, COUNT(*) n FROM done_cards GROUP BY ? ORDER BY ? DESC",
+    ],
+    [
+      "SELECT id, status, title, due, checked_at, length(context) ctx FROM live_cards",
+      "SELECT id, status, title, due, checked_at, length(context) ctx FROM live_cards",
+    ],
+    [
+      "SELECT title, status, summary, context, context_version, blocked_by FROM cards WHERE id=112",
+      "SELECT title, status, summary, context, context_version, blocked_by FROM cards WHERE id=?",
+    ],
+    [
+      "SELECT substr(created_at,1,13) h, COUNT(*) n FROM chat_messages GROUP BY 1 ORDER BY 1",
+      "SELECT substr(created_at,?,?) h, COUNT(*) n FROM chat_messages GROUP BY ? ORDER BY ?",
+    ],
   ];
-  for (const sql of examples) {
-    // リテラルを含まない例文は**そのまま**残る
-    assert.equal(redactSql(sql), sql, `例文が潰れている: ${redactSql(sql)}`);
-  }
+  for (const [sql, want] of examples) assert.equal(redactSql(sql), want);
+
+  // **どの2本も、落とした後で同じ形にならない** (同じなら数えても区別が付かない)
+  const shapes = examples.map(([, want]) => want);
+  assert.equal(new Set(shapes).size, shapes.length, "落とした結果が別の例文と衝突している");
   // リテラルを含む例文も、表・列・関数は残るので見分けが付く
   assert.equal(
     redactSql("SELECT done_day, title FROM done_cards WHERE done_day >= date('now','localtime','-7 days')"),
     "SELECT done_day, title FROM done_cards WHERE done_day >= date('…','…','…')"
   );
+});
+
+// #252 (Codexレビュー P2): **数値を残すと、そこから抜けられた。**
+// 最初は「`WHERE id=112` の形が見たい」として数字をそのまま出していたが、
+// カード番号と電話番号・口座番号・顧客番号は**見分けが付かない**
+test("数値リテラルも落とす (カード番号と口座番号は見分けが付かない)", () => {
+  for (const [sql, leak] of [
+    ["SELECT 4111111111111111 FROM cards", "4111111111111111"],
+    ["SELECT * FROM cards WHERE id=090-1234-5678", "090"],
+    ["SELECT * FROM cards WHERE id=123.456", "123"],
+    ["SELECT * FROM cards WHERE id=-42", "42"],
+  ] as const) {
+    const out = redactSql(sql);
+    assert.ok(!out.includes(leak), `数値が残っている: ${sql} → ${out}`);
+  }
+  // 桁数からも復元できないこと (`?` は1個にまとまる)
+  assert.equal(redactSql("SELECT 4111111111111111 FROM cards"), "SELECT ? FROM cards");
 });

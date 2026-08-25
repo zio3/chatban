@@ -1,6 +1,7 @@
 import type OpenAI from "openai";
 import {
   CONTEXT_APPEND_DESCRIPTION,
+  CONTEXT_MARKDOWN_RULE,
   createCardsAsAgent,
   RESTORE_DESCRIPTION,
   restoreCardsAsAgent,
@@ -79,7 +80,7 @@ export const QUERY_LOG_DESCRIPTION = [
   // #181: この行は PUBLIC_TABLES から生成する。説明に手で書くと、テーブルを増減したときに
   // 説明・コード・テストの3箇所を人間が揃える前提になり、実際にズレた (project_context の漏れ)
   `引けるもの: ${PUBLIC_TABLES.join(" / ")}`,
-  "chat_messages(id, role, content, trace, usage, card_id, created_at。role='user' が持ち主の発言、'assistant' がこのアシスタント。usage は所要時間とラウンド数だけ — トークン計測は #181 で撤去した) / project_context(id, text, version, updated_at。全文は get_project_context のほうが読みやすい)",
+  "chat_messages(id, role, content, trace, usage, card_id, created_at。role='user' が持ち主の発言、'assistant' がこのアシスタント。usage は所要時間とラウンド数だけ — トークン計測は #181 で撤去した) / project_context(id, text, version, updated_at)",
   "cards(id, title, status, summary, context, context_version, due, blocked_by, rejected, checked_at, done_at, trashed_at, sort, archived, created_at, updated_at)",
   "checked_at = 人が実物で確かめた日時 (nullなら未検収)。status とは別物で、done は列が動いたこと・checked_at は検収が進んだこと。片方からもう片方を推測しない。この窓口は読み取り専用で、checked_at を書く手段はどこにも無い (印を付けられるのは人間だけ)",
   "会話で「#112」と呼ぶカードは cards.id = 112 のこと(主キー)。番号はプロジェクトごとに1から振られる。特定の1件を見るときは WHERE id=<番号> で引く",
@@ -176,7 +177,15 @@ export const SUMMARY_DESCRIPTION =
  * 「累積なので上書きすると前の情報が消える」が書いていなかった。
  * 実例: 外部エージェントが書き直すたびに無意識に要約し、経緯メモの情報が減った */
 export const CONTEXT_WRITE_DESCRIPTION =
-  "経緯メモの全文上書き。累積の記録なので、既存を読んでマージした全文を渡す(書き直すときに要約すると前の情報が消える)。渡すときは context_version も必須。1件足すだけなら context_append を使う — そちらは読む必要も版も要らない";
+  "経緯メモの全文上書き。累積の記録なので、既存を読んでマージした全文を渡す(書き直すときに要約すると前の情報が消える)。渡すときは context_version も必須。1件足すだけなら context_append を使う — そちらは読む必要も版も要らない。" +
+  CONTEXT_MARKDOWN_RULE;
+
+/** #250: **作成時の説明は入口ごとに書かない。**実測すると、同じ `context` なのに
+ * チャットは「相談や議論の流れから登録するときは必ず書く」まで言い、MCPは
+ * 「(経緯メモの初期値)」だけだった — **MCP から作るときだけ、書く理由が伝わっていなかった** */
+export const CONTEXT_CREATE_DESCRIPTION =
+  "登録に至った経緯・会話で出た論点・決まったこと。相談や議論の流れから登録するときは必ず書く (タイトルだけでは背景が失われる)。" +
+  CONTEXT_MARKDOWN_RULE;
 
 /** #153: 期限の契約。以前は「期限 YYYY-MM-DD」だけで、**渡した値が使われたかどうかが
  * 返り値から分からなかった** — `not-a-date` がそのまま保存された報告がある。
@@ -263,7 +272,7 @@ export function buildTools(lanes: CustomLane[]): OpenAI.Chat.Completions.ChatCom
                 // 作ってから update_cards で直す往復をしていた (Codexレビュー指摘)
                 status: { type: "string", enum: STATUS_VALUES, description: `省略時はtodo。${STATUS_DESC}` },
                 summary: { type: "string", description: SUMMARY_DESCRIPTION },
-                context: { type: "string", description: "登録に至った経緯・会話で出た論点・決まったこと。相談や議論の流れから登録するときは必ず書く (タイトルだけでは背景が失われる)" },
+                context: { type: "string", description: CONTEXT_CREATE_DESCRIPTION },
                 due: { type: "string", description: DUE_DESCRIPTION },
                 blocked_by: { type: "array", items: { type: "integer" }, description: BLOCKED_BY_DESCRIPTION },
               },
@@ -296,7 +305,7 @@ export function buildTools(lanes: CustomLane[]): OpenAI.Chat.Completions.ChatCom
                 blocked_by: { type: ["array", "null"], items: { type: "integer" }, description: `${BLOCKED_BY_DESCRIPTION}。全置換で、解除はnull` },
                 rejected: { type: "boolean", description: REJECTED_DESCRIPTION },
                 context: { type: "string", description: CONTEXT_WRITE_DESCRIPTION },
-                context_version: { type: "integer", description: "context を渡すときのみ必須。直前に読んだ contextVersion をそのまま添える" },
+                context_version: { type: "integer", description: "context を渡すときのみ必須。直前に query_log で読んだ context_version をそのまま添える" },
                 context_append: { type: "string", description: CONTEXT_APPEND_DESCRIPTION },
               },
               required: ["id"],
@@ -385,7 +394,7 @@ export function buildTools(lanes: CustomLane[]): OpenAI.Chat.Completions.ChatCom
         type: "object",
         properties: {
           text: { type: "string", description: "新しい前提情報の全文" },
-          version: { type: "integer", description: "直前に読んだ前提情報の version。合わないと更新されず現在値が返る" },
+          version: { type: "integer", description: "直前に query_log で `SELECT text, version FROM project_context WHERE id=1` を読んだ version。合わないと更新されず現在値が返る" },
         },
         required: ["text", "version"],
       },

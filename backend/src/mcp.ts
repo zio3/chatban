@@ -8,6 +8,7 @@ import {
 } from "./agentWrite.js";
 import {
   BLOCKED_BY_DESCRIPTION,
+  CONTEXT_CREATE_DESCRIPTION,
   CONTEXT_WRITE_DESCRIPTION,
   DUE_DESCRIPTION,
   SEARCH_DESCRIPTION,
@@ -163,7 +164,7 @@ export function buildMcpServer(
           z.object({
             title: z.string(),
             status: STATUS.optional().describe(`省略時はtodo。${STATUS_DESC}`),
-            context: z.string().optional().describe("登録に至った経緯・論点・決定事項 (経緯メモの初期値)"),
+            context: z.string().optional().describe(CONTEXT_CREATE_DESCRIPTION),
             summary: z.string().optional().describe(SUMMARY_DESCRIPTION),
             due: z.string().optional().describe(DUE_DESCRIPTION),
             blocked_by: z.array(z.number().int()).optional().describe(BLOCKED_BY_DESCRIPTION),

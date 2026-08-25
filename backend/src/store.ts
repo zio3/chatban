@@ -402,6 +402,17 @@ CREATE VIEW live_cards AS
     if (has()) throw new Error(`${table}.${column} の削除が反映されていません`);
     out.push(`${table}.${column}`);
   }
+
+  // #250: **前提情報の行が必ず在ることを、スキーマ側で保証する。**
+  // `getProjectContextRow()` は行が無ければ既定値を合成するので、画面もMCPも普通に動く。
+  // だが **`query_log` の生SQLには補完が無い**ので `WHERE id=1` が0行を返す。
+  // 契約に「query_log で版を読め」と書いた以上、**行が無い状態は仕様違反**になった。
+  //
+  // **ここに置くのは既存を直すため。**新規作成の側だけ直しても、
+  // 旧版で作られた既定プロジェクト (行が無い) は起動時に素通りして直らない (Codexレビュー P2)。
+  // スキーマはプロジェクトDBを開くたびに当たるので、次の起動で全部揃う。
+  // **雛形は入れない** — 節が最初から揃うと「足りない節を知らせる」案内が出なくなる
+  db.prepare("INSERT OR IGNORE INTO project_context (id, text) VALUES (1, '')").run();
 }
 
 export const admin = open(ADMIN_PATH);
@@ -519,7 +530,8 @@ function projectDb(id: number): Database.Database {
  *
  * 「接続を1つ足したら、閉じる側にも足す」を忘れると、Windowsでだけ壊れる。
  * 開ける場所が2つあるなら閉じる場所も2つ要る */
-function closeProjectDb(id: number): void {
+/** #250: テストから「次の起動」を再現するのにも使う (閉じて開き直すとスキーマが当たり直す) */
+export function closeProjectDb(id: number): void {
   for (const map of [handles, roHandles]) {
     const h = map.get(id);
     if (h) {
@@ -647,7 +659,9 @@ export function projectSummaries(): ProjectSummary[] {
 
 export function createProject(name: string): ProjectRow {
   const p = insertProject(name);
-  projectDb(p.id).prepare("INSERT OR IGNORE INTO project_context (id, text) VALUES (1, ?)").run(CONTEXT_TEMPLATE);
+  // #250: スキーマが空文字の行を先に作るので、**INSERT ではなく UPDATE**。
+  // まだ誰も書いていないときだけ入れる (既存の前提情報を雛形で潰さない)
+  projectDb(p.id).prepare("UPDATE project_context SET text = ? WHERE id = 1 AND text = ''").run(CONTEXT_TEMPLATE);
   log("project", `created #${p.id} ${name}`);
   return p;
 }
@@ -692,8 +706,8 @@ export function ensureInitialProject(): void {
         `中身が必要なら 2026-08-17 より前の版で一度起動して data/ 形式へ移してから上げ直してください`
     );
   }
+  // #250: 前提情報の行は ensureProjectSchema が作る (新規も既存も、開いた時点で揃う)
   const p = insertProject("マイプロジェクト");
-  projectDb(p.id); // ここで ensureProjectSchema が当たる
   setActiveProjectId(p.id);
   log("project", `initialized empty project #${p.id}`);
 }

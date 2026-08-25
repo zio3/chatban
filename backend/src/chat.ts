@@ -25,7 +25,7 @@ import { chatCompletion } from "./llm.js";
 import { getModel } from "./config.js";
 import { foldedContainer } from "./archive.js";
 import { suggestBootGraceMs } from "./demoMode.js";
-import { argDetail, argShape, outcomeOf, safeToolName, throwOutcome } from "./mcpLog.js";
+import { argDetail, argShape, isFailure, outcomeOf, safeToolName, throwOutcome } from "./mcpLog.js";
 import { log } from "./log.js";
 import type { CustomLane, UiAction, ViewEvent } from "./types.js";
 
@@ -151,6 +151,40 @@ export const QUERY_LOG_DESCRIPTION = [
   "「いつ何を頼まれたか」はここで辿れる。発言者の記録は持たない (#180: 個人利用なので、user は常に持ち主)。",
   "LLM呼び出しの記録 (トークン・単価・レイテンシ) はここには無い (#181で撤去)。速度やキャッシュの効きを見たいときは backend/logs/ のログを読む",
 ].join("\n");
+
+/** 会話の記録 (`chat_messages.trace`) に載せない項目を落とす。
+ *
+ * いまは `goal` (#256) だけ。**自由文なので潰せない**ぶん、残す場所を1つに絞る —
+ * 失敗したときのログ行だけが記録で、成功した回はどこにも残さない。 */
+function withoutGoal(args: unknown): unknown {
+  if (!args || typeof args !== "object" || !("goal" in args)) return args;
+  const { goal: _dropped, ...rest } = args as Record<string, unknown>;
+  return rest;
+}
+
+/** #256: **やりたいことを添えてもらう。**説明を削った (#255) 分、
+ * **届かなかったときに本人から聞く**ための欄。
+ *
+ * 記録するのは**失敗した呼び出しだけ** (`mcpLog` の `FAILURE_ONLY_VALUES`)。
+ * 成功した回の目的は捕らない — 欲しいのは「説明が足りなかった瞬間」だけで、
+ * 実測では 98/98 が成功していた (2026-08-25) ので、残るのはごく僅か。
+ *
+ * **別ツールにしない。**`ask` ツールは自発的には **0/3回**しか呼ばれなかった
+ * (extractChoices のコメント) — 「呼ばなくても目的を達成できるツールは呼ばれない」。
+ * **引数なら、呼ぶときに必ず目に入る。**
+ *
+ * **任意にしてある。**必須にすると添え忘れがスキーマ拒否になり、
+ * **見たいだけの呼び出しが丸ごと失敗する**。窓口は読み取り専用で、間違えても壊れない。
+ *
+ * **説明はここ1箇所だけ。**ツール説明の1行目にも「goal を添えておくと」と書きかけたが、
+ * それは #255 で決めた「**同じ事実を2回言わない**」を自分で破っていた。
+ * 引数の説明は呼ぶときに目に入るので、本文で言い直す必要が無い。
+ *
+ * **文脈を減らす話で文脈を増やしている**ことは自覚しておく (+79字)。
+ * 見合うのは、#255 で削った852字のうち**削れなかった残りを判別できるようになる**から。
+ * 判別が済んだら、この欄ごと畳んでよい。 */
+export const GOAL_DESCRIPTION =
+  "任意。自明なクエリには要らない。複雑なときや、引けるか不安なときだけ「何が知りたいか」をひとこと。引けなかった回だけ記録して、説明を直す材料にする";
 
 /** #115/#116: 列の意味と完了の条件はプロジェクトごとに違う。
  * 実例: あるプロジェクトは review=検収待ち、別のプロジェクトは review=相手待ち(返答・承認待ち)。
@@ -415,6 +449,7 @@ export function buildTools(lanes: CustomLane[]): OpenAI.Chat.Completions.ChatCom
         type: "object",
         properties: {
           sql: { type: "string", description: "SELECT または WITH で始まる1文" },
+          goal: { type: "string", description: GOAL_DESCRIPTION },
         },
         required: ["sql"],
       },
@@ -969,7 +1004,7 @@ async function runChatTurnInner(
           outcome = throwOutcome(e);
           throw e;
         } finally {
-          const detail = argDetail(tc.function.name, args);
+          const detail = argDetail(tc.function.name, args, isFailure(outcome));
           log(
             "tool",
             `${safeToolName(tc.function.name)} ${outcome} | ${broken ? "(引数が壊れている)" : argShape(args)} | ` +
@@ -977,7 +1012,12 @@ async function runChatTurnInner(
               (detail ? ` | ${detail}` : "")
           );
         }
-        trace.push({ tool: tc.function.name, input: args, result });
+        // #256 (Codexレビュー P2): **trace はDBに残る。**`chat_messages.trace` に保存されるので、
+        // ログから外しただけでは「成功した回の目的は捕らない」が成立しない
+        // (ログは失敗時だけ、DBには全部、という**入口の中でねじれた状態**になっていた)。
+        // `goal` は自由文で語の許可リストが効かないぶん、**残す場所を1つに決める** —
+        // 記録はログ行だけ。会話の記録には載せない
+        trace.push({ tool: tc.function.name, input: withoutGoal(args), result });
         messages.push({ role: "tool", tool_call_id: tc.id, content: JSON.stringify(result) });
       }
       for (const e of events) onEvent(e as ViewEvent);

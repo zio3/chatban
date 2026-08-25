@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { classifyQueryError, redactSql, argDetail, argShape, MCP_TOOL_NAMES, safe, safeToolName, toolCalls, toolOutcome, throwOutcome } from "./mcpLog.js";
+import { classifyQueryError, redactSql, argDetail, argShape, MCP_TOOL_NAMES, safe, safeToolName, isFailure, toolCalls, toolOutcome, throwOutcome } from "./mcpLog.js";
 
 /** #247: **ログに出てよいのは「こちらが決めた語」だけ。**
  *
@@ -346,4 +346,32 @@ test("Error でないものを投げられても、平文にしない", () => {
   assert.equal(throwOutcome("SECRET-文字列を投げた"), "throw 不明");
   assert.equal(throwOutcome({ message: "SECRET-オブジェクトを投げた" }), "throw 不明");
   assert.equal(throwOutcome(undefined), "throw 不明");
+});
+
+// ---- 失敗したときだけ出す欄 (#256) ----
+
+test("goal は failed のときだけ出る", () => {
+  const args = { sql: "SELECT id FROM cards", goal: "何が知りたかったか" };
+  assert.ok(!argDetail("query_log", args).includes("goal"), "成功時に出ている");
+  assert.match(argDetail("query_log", args, true), /goal=何が知りたかったか/);
+});
+
+// **既定は false。**outcome を知らない呼び出し側が足しても、漏れる方には倒れない
+test("failed を渡さなければ出さない (既定は安全側)", () => {
+  assert.ok(!argDetail("query_log", { sql: "SELECT 1", goal: "SECRET" }).includes("SECRET"));
+});
+
+test("goal は長さを切る (自由文は潰せないので短くする)", () => {
+  const out = argDetail("query_log", { sql: "SELECT 1", goal: "あ".repeat(500) }, true);
+  assert.ok(out.length < 200, `切れていない: ${out.length}字`);
+});
+
+test("他のツールの goal は出ない (例外が広がっていない)", () => {
+  assert.equal(argDetail("create_cards", { goal: "SECRET-目的" }, true), "");
+});
+
+test("ok 以外はすべて失敗として扱う (断りも例外も届かなかったことに変わりはない)", () => {
+  assert.equal(isFailure("ok"), false);
+  assert.equal(isFailure("NG 版が合わない"), true);
+  assert.equal(isFailure("throw SqliteError"), true);
 });

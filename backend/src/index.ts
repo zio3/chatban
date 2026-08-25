@@ -701,7 +701,8 @@ app.post("/mcp/:projectId", async (req, res) => {
         // 引数はキー名だけ (値は許可した項目のみ)。**どのキーが足りなかったのかは、キーの顔ぶれで分かる**
         // #252: ここでも値の扱いをハンドラ側と揃える。**行を作る場所が2つある**ので、
         // 片方だけ直すと「スキーマで弾かれたSQL」だけが測定から漏れる (一番見たい失敗例)
-        const detail = argDetail(c.name, c.args);
+        // スキーマで弾かれた = ハンドラまで届いていない。**これも失敗**なので goal を残す
+    const detail = argDetail(c.name, c.args, true);
         log(
           "mcp",
           `${c.name} NG スキーマで拒否 (ハンドラまで届かず) | ${argShape(c.args)} |` + (detail ? ` | ${detail}` : "")

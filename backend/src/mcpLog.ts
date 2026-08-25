@@ -298,22 +298,56 @@ const LOGGED_VALUES: Record<string, Record<string, (v: string) => string>> = {
   query_log: { sql: redactSql },
 };
 
+/** #256: **失敗したときだけ出してよい項目。**上の一覧より狭い例外。
+ *
+ * `query_log.goal` (このSQLで何が知りたいか) は**エージェントが書いた自由文**で、
+ * SQLと違って**語の許可リストで潰せない** — 利用者の言葉がそのまま入りうる。
+ * それでも要るのは、#255 で説明を削るときに**削れないものが残った**から:
+ * `done_cards` が0件・`SELECT *` 違反が0件なのは、**知られていないのか規則が効いているのか
+ * 区別できない** (#189)。区別するには**届かなかったときに本人から聞く**しかない。
+ *
+ * **だから成功した呼び出しでは捕らない。**欲しいのは「説明が届かなかった瞬間」だけで、
+ * 実測では 98/98 が成功していた = 残るのはごく僅か。長さも `MAX_GOAL` で切る。 */
+const FAILURE_ONLY_VALUES: Record<string, string[]> = {
+  query_log: ["goal"],
+};
+
 const MAX_VALUE = 300;
+/** 自由文なので短く切る。**知りたいのは詰まった方向**で、文章そのものではない */
+const MAX_GOAL = 80;
 
 /** 許可した項目だけ、値を平文で1行に足す。`sql=SELECT id, title FROM live_cards` の形。
- * 許可されていないツール・項目は**何も返さない** (呼び出し側で足す文字も増えない) */
-export function argDetail(name: unknown, args: unknown): string {
-  const allowed = LOGGED_VALUES[safeToolName(name)];
-  if (!allowed) return "";
+ * 許可されていないツール・項目は**何も返さない** (呼び出し側で足す文字も増えない)。
+ *
+ * `failed` を渡すと、失敗したときだけ出す項目 (`FAILURE_ONLY_VALUES`) も足す。
+ * **既定は false** — 呼び出し側が outcome を知らないまま呼んでも、漏れる方には倒れない */
+export function argDetail(name: unknown, args: unknown, failed = false): string {
+  const tool = safeToolName(name);
+  const allowed = LOGGED_VALUES[tool];
   const parts: string[] = [];
-  for (const [key, redact] of Object.entries(allowed)) {
-    const v = (args as Record<string, unknown> | null | undefined)?.[key];
+  const bag = args as Record<string, unknown> | null | undefined;
+
+  for (const [key, redact] of Object.entries(allowed ?? {})) {
+    const v = bag?.[key];
     // **落としてから `safe()` に渡す。**順番が逆だと、`safe()` が改行を空白に潰した後で
     // `--` 行コメントを見ることになり、コメントの終わりが分からなくなる
     const text = typeof v === "string" ? safe(redact(v), MAX_VALUE) : "";
     if (text) parts.push(`${key}=${text}`);
   }
+  if (failed) {
+    for (const key of FAILURE_ONLY_VALUES[tool] ?? []) {
+      const v = bag?.[key];
+      const text = typeof v === "string" ? safe(v, MAX_GOAL) : "";
+      if (text) parts.push(`${key}=${text}`);
+    }
+  }
   return parts.join(" ");
+}
+
+/** 記録の上で「失敗」と見なすか。`toolOutcome` / `outcomeOf` / `throwOutcome` が返す語で判断する
+ * (`ok` 以外はすべて失敗 — 断りも例外も「届かなかった」ことに変わりはない) */
+export function isFailure(outcome: string): boolean {
+  return outcome !== "ok";
 }
 /** 応答から「通ったか / 断ったならどう言ったか」を取り出す。
  * **失敗が溜まっていく場所が要る** — `ok:false` が繰り返すツールは、契約が伝わっていない */

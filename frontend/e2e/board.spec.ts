@@ -1526,7 +1526,10 @@ test("先に始まっていた提案生成は、チャットが始まったら�
   // 中断そのものはサーバーのログに残るので、その行が増えたかで判定する
   const abortLines = (): number => {
     const today = new Date().toLocaleDateString("sv-SE"); // YYYY-MM-DD
-    const file = path.join("..", "backend", "logs", `chatban-${today}.log`);
+    // #253: **E2E専用のログを読む。**以前は `backend/logs/` を読んでいたが、そこは
+    // 日常使いの開発サーバー(8787)も書くので、**裏で動いているセッションの ABORTED を
+    // 数えて誤合格しうる**。playwright.config.ts の CHATBAN_LOG_DIR と対で覚えること
+    const file = path.join("..", "backend", "e2e-data", "logs", `chatban-${today}.log`);
     if (!fs.existsSync(file)) return 0;
     return fs.readFileSync(file, "utf-8").split("\n").filter((l) => l.includes("ABORTED")).length;
   };

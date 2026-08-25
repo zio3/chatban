@@ -11,6 +11,7 @@ import { getBoardPromptSection } from "./promptState.js";
 import {
   trashCard,
   getCard,
+  getCards,
   listCards,
   PUBLIC_TABLES,
   queryLogHelp,
@@ -162,6 +163,32 @@ function withoutGoal(args: unknown): unknown {
   return rest;
 }
 
+/** #257: **カードを名指しで読む口。**
+ *
+ * 実測 (2026-08-25、`chat_messages.trace` から復元したSQL 98本): **23本がこれだった** —
+ * `context` と `context_version` を読むだけのSQLで、集計ではない。
+ * **一番多い用途に道具が無く、説明で肩代わりさせていた** (`search_cards` は断片しか返さず、
+ * `sync_board` は `summary` だけなので、全文を読むにはSQLを書くしかなかった)。
+ *
+ * 呼び出し側も安くなる: SQLは平均83字 (最長136)、`{"ids":[112]}` なら13字。
+ * **呼び出しは出力トークンなのでキャッシュが効かない**ぶん、効き方が大きい。 */
+export const GET_CARDS_DESCRIPTION =
+  "カードを番号で読む。経緯メモ(context)の全文と context_version を返すので、書き換える前はここで読む。会話の「#112」が id=112。ゴミ箱・アーカイブ済みも読める(名指しなら在ると答える)";
+
+const GET_CARDS_LIMIT = 10;
+
+/** **上限を置く。**経緯メモは1件1,000字を超えるので、まとめて読むと応答がそのまま費用になる。
+ * 断らずに切って、切ったことを言う (黙って減らすと「読んだつもり」が残る)。
+ *
+ * **チャットとMCPで同じ関数を使う** — 入口ごとに書くと必ず片方だけ直る (#92 #108 #114)。
+ * `searchResult` と同じ置き方 */
+export function readCards(ids: number[]): ReturnType<typeof getCards> & { note?: string } {
+  const r = getCards(ids.slice(0, GET_CARDS_LIMIT));
+  return ids.length > GET_CARDS_LIMIT
+    ? { ...r, note: `一度に読めるのは${GET_CARDS_LIMIT}件までです。残りは番号を分けて呼んでください` }
+    : r;
+}
+
 /** #256: **やりたいことを添えてもらう。**説明を削った (#255) 分、
  * **届かなかったときに本人から聞く**ための欄。
  *
@@ -287,7 +314,7 @@ export function searchResult<T extends { hits: unknown[] }>(r: T) {
     ...r,
     ...(r.hits.length > 0
       ? {
-          note: "snippetは当たった箇所の周辺のみ。理由や判断を答えるときは query_log で経緯メモの全文を読むこと (SELECT context FROM cards WHERE id=...)",
+    note: "snippetは当たった箇所の周辺のみ。理由や判断を答えるときは get_cards で経緯メモの全文を読むこと",
         }
       : {}),
   };
@@ -443,6 +470,18 @@ export function buildTools(lanes: CustomLane[]): OpenAI.Chat.Completions.ChatCom
   {
     type: "function",
     function: {
+      name: "get_cards",
+      description: GET_CARDS_DESCRIPTION,
+      parameters: {
+        type: "object",
+        properties: { ids: { type: "array", items: { type: "integer" }, description: "カード番号" } },
+        required: ["ids"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
       name: "query_log",
       description: QUERY_LOG_DESCRIPTION,
       parameters: {
@@ -546,6 +585,8 @@ export async function execTool(name: string, rawArgs: any, events: Set<string>):
       const r = searchCards(args.terms);
       return searchResult(r);
     }
+    case "get_cards":
+      return readCards(args.ids as number[]);
     case "query_log": {
       // #181: scope は廃止 (cost 側の llm_calls を撤去したので窓口が1つになった)
       try {
@@ -695,6 +736,7 @@ export const TOOL_LABELS: Record<string, string> = {
   update_project_context: "前提情報を更新",
   reorder_cards: "並び順を変更",
   search_cards: "経緯を検索",
+  get_cards: "カードを読む",
   query_log: "記録を集計",
 };
 

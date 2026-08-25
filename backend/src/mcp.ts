@@ -13,6 +13,8 @@ import {
   DUE_DESCRIPTION,
   SEARCH_DESCRIPTION,
   PROJECT_CONTEXT_WRITE_DESCRIPTION,
+  GET_CARDS_DESCRIPTION,
+  readCards,
   GOAL_DESCRIPTION,
   QUERY_LOG_DESCRIPTION,
   REJECTED_DESCRIPTION,
@@ -300,6 +302,20 @@ export function buildMcpServer(
       const gate = parseToolArgs("search_cards", { terms }, LANES);
       if (!gate.ok) return text({ ok: false, note: gate.note });
       return text(searchResult(searchCards(gate.args.terms)));
+    }
+  );
+
+  // #257: カードを名指しで読む。**実測で query_log の一番の仕事がこれだった** (98本中23本)
+  server.registerTool(
+    "get_cards",
+    {
+      description: GET_CARDS_DESCRIPTION,
+      inputSchema: { ids: z.array(z.number().int()).describe("カード番号") },
+    },
+    async ({ ids }) => {
+      const gate = parseToolArgs("get_cards", { ids }, LANES);
+      if (!gate.ok) return text({ ok: false, note: gate.note });
+      return text(readCards(gate.args.ids as number[]));
     }
   );
 

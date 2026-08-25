@@ -116,6 +116,7 @@ export function toolArgSchemas(lanes: CustomLane[]) {
       ids,
     }),
     search_cards: z.strictObject({ terms: z.array(z.string()) }),
+    get_cards: z.strictObject({ ids }),
     query_log: z.strictObject({ sql: z.string(), goal: z.string().optional() }),
     update_project_context: z.strictObject({ text: z.string(), version: z.number().int() }),
   };

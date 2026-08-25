@@ -9,9 +9,10 @@ import { reorderResult, searchResult } from "./chat.js";
 // 説明文は既に共通定数だったのに応答の組み立ては入口ごとに書かれていて、
 // **外部エージェントだけが注意書きを受け取れない**状態になっていた。
 
-test("searchResult: 当たりがあるときだけ query_log へ誘導する", () => {
+// #257: 誘導先は query_log から get_cards へ変わった (全文を読むのに道具ができた)
+test("searchResult: 当たりがあるときだけ get_cards へ誘導する", () => {
   const hit = searchResult({ hits: [{ id: 1 }] }) as any;
-  assert.match(hit.note, /query_log/);
+  assert.match(hit.note, /get_cards/);
   assert.match(hit.note, /snippet/);
   assert.equal((searchResult({ hits: [] }) as any).note, undefined);
 });

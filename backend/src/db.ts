@@ -830,3 +830,22 @@ export function setChecked(id: number, checked: boolean): { card?: Card; error?:
     .run(checked ? new Date().toLocaleString("sv-SE") : null, id);
   return { card: getCard(id) };
 }
+
+/** #257: **カードを名指しで読む。**`getCard` の複数版で、**経緯メモの全文と版を返す**。
+ *
+ * これが無かったので、`context_version` を読むのに毎回SQLを書かせていた
+ * (実測: `query_log` 98本のうち **23本がこれ**。しかも23本とも `context_version` 込み)。
+ * 一番多い用途に道具が無く、**説明で教えて肩代わりさせていた**形。
+ *
+ * ゴミ箱・アーカイブ済みも返す。**名指しで聞かれたものは在るなら在ると答える** —
+ * 見えないことと存在しないことは違う (`live_cards` に出ないのは板の話)。 */
+export function getCards(cardIds: number[]): { cards: Card[]; missing: number[] } {
+  const cards: Card[] = [];
+  const missing: number[] = [];
+  for (const id of cardIds) {
+    const c = getCard(id);
+    if (c) cards.push(c);
+    else missing.push(id);
+  }
+  return { cards, missing };
+}

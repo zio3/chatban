@@ -52,14 +52,29 @@ test("散文が言っている事実を、例文で言い直さない", () => {
 // **例文が仕事をしているのはここだけだった** (実測: 18件と12件で真似されている)。
 // context と context_version を一緒に読むのは、列の一覧からは出てこない組み合わせ
 test("context と context_version を一緒に読む例は残す", () => {
-  assert.match(QUERY_LOG_DESCRIPTION, /context, context_version FROM cards WHERE id=/, "経緯メモ全文の例が消えている");
   assert.match(QUERY_LOG_DESCRIPTION, /例\(1件の詳細/, "1件の詳細の例が消えている");
+  assert.match(QUERY_LOG_DESCRIPTION, /context, context_version/, "版を一緒に読む形が消えている");
+});
+
+// **同じ事実を散文と例文の両方で言わない** (#255)。太った原因は行を足したことより、
+// **同じことを2回言っていた**こと。片方に寄せる — 例文で通じるなら例文だけにする
+test("散文と例文で同じことを2回言わない", () => {
+  const lines = QUERY_LOG_DESCRIPTION.split("\n");
+  const examples = lines.filter((l) => l.startsWith("例")).join("\n");
+  const prose = lines.filter((l) => !l.startsWith("例")).join("\n");
+
+  for (const w of ["length(context)", "WHERE id=<番号>", "date() を書かなくてよい"]) {
+    assert.ok(
+      !(examples.includes(w) && prose.includes(w)),
+      `「${w}」が散文と例文の両方にある。どちらか一方に寄せる`
+    );
+  }
 });
 
 // 説明が伸びたら気づく。**上限そのものに意味は無い**が、伸ばすときに一度立ち止まる線になる
 test("説明の長さに歯止めを置く", () => {
   assert.ok(
-    QUERY_LOG_DESCRIPTION.length < 2800,
+    QUERY_LOG_DESCRIPTION.length < 2600,
     `${QUERY_LOG_DESCRIPTION.length}字。伸ばすなら、その情報がMCPの毎セッションぶんの価値があるか先に考える`
   );
 });

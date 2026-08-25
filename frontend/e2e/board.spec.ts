@@ -153,6 +153,26 @@ test("Review列: 検収OKチェック→一括確定でdoneになる (チェッ�
   await expect.poll(() => getCardStatus(id)).toBe("done");
 });
 
+// #251: Doneへ検収したカードは `checked_at` を持ったままDone列に24時間残る。
+// 数える側だけが列を見ていなかったので、その間ずっと「検収済み1件をDoneへ」が押せる状態で出て、
+// **押しても何も起きなかった** (確定する側は列で絞るので0件、即returnでトーストも無し)。
+// 実機で見つかった順に、まず「Doneのカードが数に混ざらない」ことを固定する
+test("Doneへ確定したカードは「検収済みN件をDoneへ」に数えられない (#251)", async ({ page }) => {
+  await createCard("E2E: 検収の数え方 — Reviewに残る未検収", "review");
+  await page.goto("/");
+  const button = page.getByTestId("approve-commit");
+  await expect(button).toBeVisible();
+  // 他のテストが置いていったぶんがあり得るので、**この1件で増えないこと**を見る
+  const before = Number((await button.textContent())?.match(/(\d+)件/)?.[1] ?? -1);
+  expect(before).toBeGreaterThanOrEqual(0);
+
+  await createDoneCard("E2E: 検収の数え方 — Doneへ確定済み");
+  // Done列に出てから見る (board:changed が届いた = 数え直しも済んでいる)
+  await expect(page.getByTestId("column-done")).toContainText("Doneへ確定済み");
+  await expect(button).toContainText(`検収済み${before}件をDoneへ`);
+  if (before === 0) await expect(button).toBeDisabled();
+});
+
 test("プロジェクト: 切り替えるとボードが入れ替わり、#IDは1から振り直される (#86)", async ({ page }) => {
   const inFirst = await createCard("E2E: 元プロジェクトのタスク");
 

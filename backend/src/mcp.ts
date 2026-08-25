@@ -37,7 +37,7 @@ import {
 import { boardDelta, formatBoardUpdate } from "./boardState.js";
 import { log } from "./log.js";
 // #247: MCP経由の呼び出しを記録する (キー名だけ。値は残さない)
-import { argDetail, argShape, safeToolName, toolOutcome } from "./mcpLog.js";
+import { argDetail, argShape, safeToolName, throwOutcome, toolOutcome } from "./mcpLog.js";
 // #245: 列の一覧と引数の契約は toolArgs.ts が唯一の置き場 (チャットと同じものを指す)
 import { agentStatusValues, parseToolArgs, reorderableStatuses } from "./toolArgs.js";
 import { contextReference, contextTemplateHint } from "./contextTemplate.js";
@@ -128,10 +128,9 @@ export function buildMcpServer(
         outcome = toolOutcome(r);
         return r;
       } catch (e) {
-        // 例外はSDKへそのまま返す。**記録だけ足す** (落ちたことこそ残したい)
-        // **例外の本文は出さない** (入力値を含みうる。SQLiteのエラーはSQLをそのまま載せる)。
-        // 種類だけで「どのツールが落ちているか」は分かる (Codexレビュー P2)
-        outcome = `throw ${e instanceof Error ? e.name : "不明"}`;
+        // 例外はSDKへそのまま返す。**記録だけ足す** (落ちたことこそ残したい)。
+        // 本文を出さない理由は throwOutcome に書いてある (チャット側と同じ規則 #254)
+        outcome = throwOutcome(e);
         throw e;
       } finally {
         const detail = argDetail(name, args);

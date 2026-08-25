@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { classifyQueryError, redactSql, argDetail, argShape, MCP_TOOL_NAMES, safe, safeToolName, toolCalls, toolOutcome } from "./mcpLog.js";
+import { classifyQueryError, redactSql, argDetail, argShape, MCP_TOOL_NAMES, safe, safeToolName, toolCalls, toolOutcome, throwOutcome } from "./mcpLog.js";
 
 /** #247: **ログに出てよいのは「こちらが決めた語」だけ。**
  *
@@ -326,4 +326,24 @@ test("数値リテラルも落とす (カード番号と口座番号は見分け
   }
   // 桁数からも復元できないこと (`?` は1個にまとまる)
   assert.equal(redactSql("SELECT 4111111111111111 FROM cards"), "SELECT ? FROM cards");
+});
+
+// ---- 例外で終わったとき (#254) ----
+
+// **本文は出さない。**例外文は入力値を含みうる (SQLiteのエラーはSQLをそのまま載せる)。
+// チャットとMCPの両方がこの1本を使うので、ここが規則そのもの
+test("例外は種類だけ残す (本文は出さない)", () => {
+  class SqliteError extends Error {}
+  const e = new SqliteError("unrecognized token near SECRET-未公開の案件名");
+  e.name = "SqliteError";
+
+  const out = throwOutcome(e);
+  assert.equal(out, "throw SqliteError");
+  assert.ok(!out.includes("SECRET"), `例外文が残っている: ${out}`);
+});
+
+test("Error でないものを投げられても、平文にしない", () => {
+  assert.equal(throwOutcome("SECRET-文字列を投げた"), "throw 不明");
+  assert.equal(throwOutcome({ message: "SECRET-オブジェクトを投げた" }), "throw 不明");
+  assert.equal(throwOutcome(undefined), "throw 不明");
 });

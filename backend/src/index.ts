@@ -509,9 +509,13 @@ app.post("/api/chat", async (req, res) => {
   await handleChat(req, res);
 });
 
+// #263: **件数は受け取らない。**返るのは常に直近 CHAT_LOG_LIMIT 件。
+// 以前は `limit` をそのまま渡していたので `?limit=99999` で全会話が返ったが、
+// 渡している呼び出し元は1つも無かった。`cardId` の扱いは変えていない
+// (未指定=メインチャット / 指定=そのカード専用)
 app.get("/api/chat/log", (req, res) => {
   const cardId = req.query.cardId != null ? Number(req.query.cardId) : undefined;
-  res.json({ messages: listChatMessages(Number(req.query.limit ?? 50), cardId) });
+  res.json({ messages: listChatMessages(cardId) });
 });
 
 // カード専用チャット (#24): 対象カードの全詳細をシステムプロンプトに注入し、会話はcard_id付きで分離保存

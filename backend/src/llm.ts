@@ -71,14 +71,44 @@ const NEEDS_REASONING_NONE = /gpt-5\.6-luna/;
  *
  * 「入力トークンが多い」はメトリクスで分かるが、何が入っているかは実物を見ないと分からない。
  * scripts/prompt-breakdown.ts は組み立て直した近似なので、こちらは本物。
- * purpose ごとに最新1回を上書きし、round ごとに追記する (1ターンの中で messages が
- * どう伸びるかが、ツール呼び出しのコストそのもの)。
+ * purpose (と プロジェクト) ごとに1ファイル。**round ごとに追記し、ターンをまたいでも
+ * 積み続ける** (messages がどう伸びるかが、ツール呼び出しのコストそのもの)。
+ * 作り直す条件は `startsNewDump` にある。
  *
  * 既定でON。1回20〜60KB程度の書き込みで、logs/ は gitignore 済み。
  * 止めたいときは CHATBAN_LOG_BODIES=0 (#259 で日次ログの本文と同じスイッチになった)。
  *
  * #224: **公開デモでは既定でOFF** (logBodiesEnabled)。訪問者が打った本文が
  * そのままディスクに平文で残るため。判断は demoMode.ts に寄せてあり、ここは値を見るだけ */
+/** ダンプを**作り直すか、足すか** (#264)。
+ *
+ * **ターンでは切れていない。**もとのコメントは「同じターンの2round目以降は足す」と
+ * 書いていたが、実装が見ているのは**現在の総メッセージ数と、保存済みの先頭 round のそれ**。
+ * 画面の通常経路は次のターンで履歴が増えるので、**ターンをまたいでも足し続ける**。
+ *
+ * 実測 (2026-08-26): `last-request-p32-chat.json` は `rounds=6`、
+ * `messageCount` が `2,4,4,6,6,8` と伸びていた。単調でないのは、
+ * 履歴が短くなった回に作り直しが入るため。
+ *
+ * 作り直すのは3つの場合だけ:
+ *
+ *   1. まだ無い (初回・壊れていた)
+ *   2. **モデルが変わった** — 別のモデルのプロンプトを1つのファイルに混ぜない
+ *   3. **総メッセージ数が、保存済みの先頭 round 以下になった** — 履歴のリセットや
+ *      新しい会話の始まり。**`<=` なので、同じ数でも作り直す**
+ *
+ * この振る舞いは意図して残している。キャッシュの効き方は**ターンをまたいで**
+ * プレフィックスが安定しているかで決まるので、1ターンで切ると見たいものが見えない。
+ * ただし**本文がディスクに残る量も伸びる**ので、止め方は #259 のスイッチが持つ。
+ *
+ * **なぜ切り出したか:** この判断を `docs/security.md` で説明したときに2回続けて
+ * 読み違えた (「最新ターンで上書き」「直前の round と比べている」)。
+ * **コメントは実装とずれるが、テストはずれると落ちる。** */
+export function startsNewDump(prev: any, model: string, messageCount: number): boolean {
+  if (!prev || prev.model !== model) return true;
+  return messageCount <= (prev.rounds?.[0]?.messageCount ?? 0);
+}
+
 function dumpRequest(
   purpose: string,
   model: string,
@@ -99,15 +129,13 @@ function dumpRequest(
     })();
     const file = path.join(dir, `last-request-p${pid}-${purpose}.json`);
 
-    // 同じターンの2round目以降は、前のroundを消さずに足す。
-    // 1ターンの中で何がどれだけ積まれたかを、あとから1ファイルで追える
     let prev: any = null;
     try {
       prev = JSON.parse(fs.readFileSync(file, "utf-8"));
     } catch {
       /* 初回・壊れていたら作り直す */
     }
-    const isNewTurn = !prev || prev.model !== model || params.messages.length <= (prev.rounds?.[0]?.messageCount ?? 0);
+    const isNewTurn = startsNewDump(prev, model, params.messages.length);
 
     const toolsJson = params.tools ? JSON.stringify(params.tools) : "";
     const messagesJson = JSON.stringify(params.messages);

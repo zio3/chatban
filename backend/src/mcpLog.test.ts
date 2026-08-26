@@ -57,6 +57,8 @@ test("本文を出すログの呼び出し側が、helper を通っている", (
   for (const [name, s] of [["index.ts", index], ["llm.ts", src("./llm.ts")]] as const) {
     assert.ok(!/FAILED[^`]*\$\{e\?\.message \?\? e\}/.test(s), `${name} の FAILED 行が生の e.message を出している`);
   }
+  // 提案の失敗だけ小文字で "failed" と書くので、上の大文字の検査から漏れていた (3周目 P3)
+  assert.ok(index.includes("suggestions failed: ${logError(e)}"), "提案の失敗が logError を通っていない");
 });
 
 test("本文を止めると、失敗した query_log の goal も長さだけになる", () => {

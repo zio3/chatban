@@ -439,8 +439,12 @@ export function logBody(text: unknown, max = 120, quote = true): string {
  * (`messagesRoute.ts` は非2xx応答の本文を400字まで `Error.message` に入れる)。
  * 秘密は `redactSecrets` が既に落としているが、**本文は落ちていなかった**。
  *
- * **伏せるのはログだけで、HTTP応答はそのまま返す。**画面に出るのは打った本人で、
- * 消えると「なぜ失敗したか」が分からなくなる。ディスクに残るかどうかが、ここでの境目 */
+ * **伏せるのはログだけ。**画面に出るのは打った本人で、消えると「なぜ失敗したか」が
+ * 分からなくなる。ディスクに残るかどうかが、ここでの境目。
+ *
+ * **「HTTP応答はそのまま」ではない** (3周目 P3 — 厳密でない書き方をしていた)。
+ * チャットAPIが返すのは `llm.ts` が `redactSecrets` を掛けたあとの `message` で、
+ * 提案APIは本文を返さず空配列を返す。**本文のスイッチでは伏せない**、が正確な言い方 */
 export function logError(e: unknown, max = 400): string {
   const msg = typeof (e as any)?.message === "string" ? (e as any).message : String(e ?? "");
   return logBody(msg, max, false);

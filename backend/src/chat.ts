@@ -26,7 +26,7 @@ import { chatCompletion } from "./llm.js";
 import { getModel } from "./config.js";
 import { foldedContainer } from "./archive.js";
 import { suggestBootGraceMs } from "./demoMode.js";
-import { argDetail, argShape, isFailure, outcomeOf, safeToolName, throwOutcome } from "./mcpLog.js";
+import { argDetail, argShape, choicesDetail, isFailure, outcomeOf, safeToolName, throwOutcome } from "./mcpLog.js";
 import { log } from "./log.js";
 import type { CustomLane, UiAction, ViewEvent } from "./types.js";
 
@@ -1095,7 +1095,8 @@ async function runChatTurnInner(
   const picked = extractChoices(reply);
   if (picked.options.length > 0) {
     // 抽出前の生テキストを残す。保存されるのは抽出後なので、記法の書かれ方を後から追えるのはここだけ
-    log("choices", `raw=${JSON.stringify(reply)} options=${JSON.stringify(picked.options)}`);
+    // #259: 本文かどうかの判断と伏せ方は mcpLog に寄せた (呼ぶ側で書くと掛け忘れる)
+    log("choices", choicesDetail(reply, picked.options));
     reply = picked.text;
     uiActions.push({ type: "ask", options: picked.options });
   }

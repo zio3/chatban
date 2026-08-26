@@ -5,7 +5,8 @@ import { currentProjectId } from "./store.js";
 import { log } from "./log.js";
 import { llmConfig, redactSecrets } from "./config.js";
 import { messagesCompletion } from "./messagesRoute.js";
-import { promptDumpEnabled } from "./demoMode.js";
+import { logBodiesEnabled } from "./demoMode.js";
+import { logError } from "./mcpLog.js";
 
 // #181: 計測系を撤去した。ここにあったもの:
 //  - fetchBillingUsage() — OrcaRouter専用の課金サマリーAPI (残高表示)
@@ -74,16 +75,16 @@ const NEEDS_REASONING_NONE = /gpt-5\.6-luna/;
  * どう伸びるかが、ツール呼び出しのコストそのもの)。
  *
  * 既定でON。1回20〜60KB程度の書き込みで、logs/ は gitignore 済み。
- * 止めたいときは CHATBAN_DUMP_PROMPT=0。
+ * 止めたいときは CHATBAN_LOG_BODIES=0 (#259 で日次ログの本文と同じスイッチになった)。
  *
- * #224: **公開デモでは既定でOFF** (promptDumpEnabled)。訪問者が打った本文が
+ * #224: **公開デモでは既定でOFF** (logBodiesEnabled)。訪問者が打った本文が
  * そのままディスクに平文で残るため。判断は demoMode.ts に寄せてあり、ここは値を見るだけ */
 function dumpRequest(
   purpose: string,
   model: string,
   params: Omit<OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming, "model">
 ) {
-  if (!promptDumpEnabled()) return;
+  if (!logBodiesEnabled()) return;
   try {
     const dir = path.join(process.cwd(), "logs");
     fs.mkdirSync(dir, { recursive: true });
@@ -220,7 +221,9 @@ export async function chatCompletion(
     if (opts?.signal?.aborted) {
       log("llm", `-- ${purpose} model=${model} ABORTED after ${Date.now() - t0}ms (呼び出し側が中断)`);
     } else {
-      log("llm", `!! ${purpose} model=${model} FAILED after ${Date.now() - t0}ms: ${e?.status ?? ""} ${e?.message ?? e}`);
+      // #259: 上流のエラー本文には**入力やプロンプトが反射されうる**ので、本文のスイッチに従う。
+      // 秘密 (キー) は上の redactSecrets が既に落としている。**別の理由で別の場所が守る**
+      log("llm", `!! ${purpose} model=${model} FAILED after ${Date.now() - t0}ms: ${e?.status ?? ""} ${logError(e)}`);
       if (isUpstreamRefusal(e?.status)) refused = true;
     }
     throw e;

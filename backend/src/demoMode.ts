@@ -49,15 +49,53 @@ export function suggestBootGraceMs(env: NodeJS.ProcessEnv = process.env): number
   return isDemoMode(env) ? DEMO_SUGGEST_GRACE_MS : 60_000;
 }
 
-/** プロンプトのダンプ (LLMへ送った中身の実物) を書き出すか。**デモでは止める** —
+/** **`backend/logs/` に**本文を残すか。**デモでは止める** —
+ *
+ * **効く先はログだけ。**会話そのものの保存 (`chat_messages`) は止めない —
+ * 画面に出す記録なので、消したら製品が成り立たない (Codexレビュー P3)。
+ *
  * #213 が「訪問者のファイルを乗せない」なら、こちらは**訪問者の入力を残さない**。
  *
  * 認証なしで誰でも打てるので、書いた本文がそのまま VPS のディスクに平文で残る。
- * 蓄積はせず purpose ごとに最新1回の上書きだが、**残るのが「最後に触った人の会話」**
- * であることは変わらず、デモの朝のリセット (#211) の対象にも入っていない。
+ * デモの朝のリセット (#211) の対象にも入っていない。
  *
  * 個人利用では調査の役に立つ道具なので、デモ以外では既定ONのまま。
- * 明示すればどちらでも勝てる (CHATBAN_DUMP_PROMPT=1 でデモでも出せる) */
-export function promptDumpEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
-  return boolEnv(env.CHATBAN_DUMP_PROMPT) ?? !isDemoMode(env);
+ * 明示すればどちらでも勝てる (CHATBAN_LOG_BODIES=1 でデモでも出せる)。
+ *
+ * #259: **`backend/logs/` へ本文が出る経路を、この1つの値でまとめて決める。**
+ * `[chat] REQ` の発言 (index.ts) / `[choices] raw=` の生テキスト (chat.ts) /
+ * `last-request-*.json` のプロンプトダンプ (llm.ts) / 失敗した `query_log` の
+ * `goal` (mcpLog.ts、#256)。もとは3つ目だけを見る `promptDumpEnabled` だったが、
+ * **残りが掛け忘れ**になっていた (デモでダンプは止まるのに発言の先頭120字は残る、という穴)。
+ * 用途はどれも「本文を見せたくない」で同じなので、**スイッチは増やさず1つのまま**広げた。
+ *
+ * **経路の数は書かない。**「3つ」と数えて出したら4つ目 (`goal`) が見つかり、
+ * 数えなおした次の周で5つ目 (上流のエラー本文) が出た (Codexレビュー P2)。
+ * 数は増えるので、**増えたときに黙って嘘になる書き方をしない**。
+ *
+ * ## 何が対象で、何が対象でないか
+ *
+ * 対象は**会話とLLMのやりとりの本文** — 打った発言・モデルの返答・LLMへ送ったプロンプト・
+ * 上流がエラーに反射した本文・失敗した `query_log` の `goal`。
+ *
+ * **プロジェクト名は対象外** (Codexレビュー2周目 P2-2)。自由文ではあるが、
+ * **管理DBの `projects.name` に完全な名前が残る**ので、ログ行だけ伏せても隠したことにならない。
+ * **片方だけ隠すのは、隠せているつもりになるぶん悪い。**
+ * (ファイル名 `data/projects/<id>-<名前>.db` にも入るが、こちらは `slug()` が加工した形で、
+ * 改名しても追従しない。**「ファイル名そのもの」ではない** — 3周目 P3 で直した)
+ *
+ * カードの表題も対象外。`mcpLog` は値を出さないが、**「ログに一切出ない」わけではない** —
+ * `db.ts` は置けない `status` を渡されたときに表題を出す (公開経路からは事前検証で届かない)。
+ *
+ * **切っても行そのものは消さない。**行が消えると、そのターンが在ったことまで
+ * 分からなくなる (#254 で「落ちたターンで何を呼んだか」を残したのと同じ理屈)。
+ * 本文の代わりに長さを出す。ダンプはファイルなので、書かないだけでよい */
+export function logBodiesEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return boolEnv(env.CHATBAN_LOG_BODIES) ?? !isDemoMode(env);
+}
+
+/** 本文を伏せたときの代わりの表示。**長さだけ残す** (#259)。
+ * サロゲートペアを1字と数えるので、絵文字混じりでも「字」の見た目と合う */
+export function maskedBody(text: string): string {
+  return `(伏せた ${[...String(text ?? "")].length}字)`;
 }

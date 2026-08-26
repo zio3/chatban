@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { isDemoMode, attachmentsEnabled, jsonLimit, suggestBootGraceMs, DEMO_SUGGEST_GRACE_MS, promptDumpEnabled } from "./demoMode.js";
+import { isDemoMode, attachmentsEnabled, jsonLimit, suggestBootGraceMs, DEMO_SUGGEST_GRACE_MS, logBodiesEnabled, maskedBody } from "./demoMode.js";
 
 // #213: DEMO_MODE は**既定値のセットであって、モード分岐ではない**。
 // ここで固定するのは「何が既定になるか」と「個別指定が勝つこと」の2点。
@@ -46,10 +46,29 @@ test("数値でない SUGGEST_BOOT_GRACE_MS は既定に倒す (NaNで猶予が�
 // #224: 公開デモでは訪問者が打った本文がそのまま VPS のディスクに平文で残っていた。
 // #213 (添付の入口を閉じる) と同じ系譜で、**個別の環境変数をserviceに書き足すのではなく
 // DEMO_MODE の既定値として持つ** — 書き忘れても既定で守られる側に倒す
-test("プロンプトのダンプはデモでは既定OFF、それ以外は既定ON", () => {
-  assert.equal(promptDumpEnabled(env({})), true, "個人利用では調査の道具として要る");
-  assert.equal(promptDumpEnabled(env({ DEMO_MODE: "on" })), false, "訪問者の入力を残さない");
+test("ログに本文を残すかはデモでは既定OFF、それ以外は既定ON", () => {
+  assert.equal(logBodiesEnabled(env({})), true, "個人利用では調査の道具として要る");
+  assert.equal(logBodiesEnabled(env({ DEMO_MODE: "on" })), false, "訪問者の入力を残さない");
   // 明示すればどちらでも勝てる (デモで調査したい場面はありうる)
-  assert.equal(promptDumpEnabled(env({ DEMO_MODE: "on", CHATBAN_DUMP_PROMPT: "1" })), true);
-  assert.equal(promptDumpEnabled(env({ CHATBAN_DUMP_PROMPT: "0" })), false);
+  assert.equal(logBodiesEnabled(env({ DEMO_MODE: "on", CHATBAN_LOG_BODIES: "1" })), true);
+  assert.equal(logBodiesEnabled(env({ CHATBAN_LOG_BODIES: "0" })), false);
+});
+
+// #259: 旧 CHATBAN_DUMP_PROMPT はプロンプトダンプ (llm.ts) だけを見ていて、
+// 日次ログの `[chat] REQ` と `[choices] raw=` が掛け忘れになっていた。
+// **スイッチは増やさず1つのまま**広げたので、古い名前が復活していないことを見張る
+test("古い名前のスイッチは効かない (1つに寄せたので分岐が復活していない)", () => {
+  assert.equal(
+    logBodiesEnabled(env({ DEMO_MODE: "on", CHATBAN_DUMP_PROMPT: "1" })),
+    false,
+    "撤去した環境変数がまだ読まれている"
+  );
+});
+
+// **伏せても行は消さない** (#254 と同じ理屈)。長さが残れば「何か打たれた」ことは追える
+test("伏せた本文は長さだけになる", () => {
+  assert.equal(maskedBody("こんにちは"), "(伏せた 5字)");
+  assert.equal(maskedBody(""), "(伏せた 0字)");
+  // サロゲートペアを2字と数えると、見た目の字数とズレる
+  assert.equal(maskedBody("\u{1F600}\u{1F600}"), "(伏せた 2字)");
 });

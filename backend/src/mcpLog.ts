@@ -1,3 +1,4 @@
+import { logBodiesEnabled, maskedBody } from "./demoMode.js";
 import { PUBLIC_COLUMNS, PUBLIC_TABLES } from "./publicSchema.js";
 import { toolArgSchemas } from "./toolArgs.js";
 
@@ -338,7 +339,11 @@ export function argDetail(name: unknown, args: unknown, failed = false): string 
   if (failed) {
     for (const key of FAILURE_ONLY_VALUES[tool] ?? []) {
       const v = bag?.[key];
-      const text = typeof v === "string" ? safe(v, MAX_GOAL) : "";
+      // #259: **これも本文なので、本文のスイッチに従う。**もとはスイッチと無関係に出ていた
+      // (Codexレビュー P2 で発覚 — 「本文が残る経路は3つ」と数えたうちに入っていなかった)。
+      // 伏せても「失敗した呼び出しが在った」ことは残るので、#256 の目的のうち
+      // 「規則が届いていないのか、知られていないのか」の切り分けだけが落ちる
+      const text = typeof v === "string" ? (logBodiesEnabled() ? safe(v, MAX_GOAL) : maskedBody(v)) : "";
       if (text) parts.push(`${key}=${text}`);
     }
   }
@@ -415,4 +420,39 @@ export function toolCalls(body: unknown): Array<{ id: unknown; name: string; arg
     out.push({ id: msg.id, name: safeToolName(msg.params?.name), args: msg.params?.arguments });
   }
   return out;
+}
+
+/** #259: **日次ログに本文を載せるときの共通の形。**ONなら先頭 `max` 字、OFFなら長さだけ。
+ *
+ * ここに置くのは、このモジュールが**入口に依存しないログの規則**だから (#254 と同じ理由)。
+ * 呼ぶ側で `logBodiesEnabled()` を書くと、また掛け忘れが起きる — 実際に起きた (#259 の P2)。 */
+export function logBody(text: unknown, max = 120, quote = true): string {
+  const s = typeof text === "string" ? text : String(text ?? "");
+  if (!logBodiesEnabled()) return maskedBody(s);
+  const cut = s.slice(0, max);
+  return quote ? `"${cut}"` : cut;
+}
+
+/** 上流 (LLM) のエラー本文 (#259 Codexレビュー2周目 P2)。**これも本文が入りうる。**
+ *
+ * 互換宛先の中には、受け取った入力やプロンプトを**そのままエラーに反射して返すもの**がある
+ * (`messagesRoute.ts` は非2xx応答の本文を400字まで `Error.message` に入れる)。
+ * 秘密は `redactSecrets` が既に落としているが、**本文は落ちていなかった**。
+ *
+ * **伏せるのはログだけ。**画面に出るのは打った本人で、消えると「なぜ失敗したか」が
+ * 分からなくなる。ディスクに残るかどうかが、ここでの境目。
+ *
+ * **「HTTP応答はそのまま」ではない** (3周目 P3 — 厳密でない書き方をしていた)。
+ * チャットAPIが返すのは `llm.ts` が `redactSecrets` を掛けたあとの `message` で、
+ * 提案APIは本文を返さず空配列を返す。**本文のスイッチでは伏せない**、が正確な言い方 */
+export function logError(e: unknown, max = 400): string {
+  const msg = typeof (e as any)?.message === "string" ? (e as any).message : String(e ?? "");
+  return logBody(msg, max, false);
+}
+
+/** 選択肢つき応答の1行 (#259)。**生テキストも選択肢も、どちらもモデルが書いた本文**なので
+ * 一緒に伏せる。抽出前後の違いでしかなく、中身は同じ文章 */
+export function choicesDetail(reply: unknown, options: unknown[]): string {
+  if (!logBodiesEnabled()) return `raw=${maskedBody(typeof reply === "string" ? reply : "")} options=${options.length}件`;
+  return `raw=${JSON.stringify(reply)} options=${JSON.stringify(options)}`;
 }

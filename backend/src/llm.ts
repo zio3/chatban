@@ -71,14 +71,63 @@ const NEEDS_REASONING_NONE = /gpt-5\.6-luna/;
  *
  * 「入力トークンが多い」はメトリクスで分かるが、何が入っているかは実物を見ないと分からない。
  * scripts/prompt-breakdown.ts は組み立て直した近似なので、こちらは本物。
- * purpose ごとに最新1回を上書きし、round ごとに追記する (1ターンの中で messages が
- * どう伸びるかが、ツール呼び出しのコストそのもの)。
+ * purpose (と プロジェクト) ごとに1ファイル。**round ごとに追記し、ターンをまたいでも
+ * 積み続ける** (messages がどう伸びるかが、ツール呼び出しのコストそのもの)。
+ * 作り直す条件は `startsNewDump` にある。
  *
  * 既定でON。1回20〜60KB程度の書き込みで、logs/ は gitignore 済み。
  * 止めたいときは CHATBAN_LOG_BODIES=0 (#259 で日次ログの本文と同じスイッチになった)。
  *
  * #224: **公開デモでは既定でOFF** (logBodiesEnabled)。訪問者が打った本文が
  * そのままディスクに平文で残るため。判断は demoMode.ts に寄せてあり、ここは値を見るだけ */
+/** ダンプを**作り直すか、足すか** (#264)。
+ *
+ * **ターンでは切れていない。**もとのコメントは「同じターンの2round目以降は足す」と
+ * 書いていたが、実装が見ているのは**現在の総メッセージ数と、保存済みの先頭 round のそれ**。
+ * 画面の通常経路は次のターンで履歴が増えるので、**ターンをまたいでも足し続ける**。
+ *
+ * 実測 (2026-08-26): `last-request-p32-chat.json` は `rounds=6`、
+ * `messageCount` が `2,4,4,6,6,8` と伸びていた。**この6roundは1ファイルに残っており、
+ * 作り直しは起きていない。**単調でないのは、`4→4` `6→6` が**ターンの境目**で、
+ * 前のターンの末尾と次のターンの先頭の総数がたまたま同じになったため
+ * (比べる相手は直前ではなく**先頭の2**なので、同じでも足す側に入る)。
+ *
+ * 作り直すのは:
+ *
+ *   1. `prev` が falsy。**読み込みが失敗したとき全般** (`dumpRequest` の try は
+ *      `JSON.parse` だけでなく `readFileSync` も囲むので、権限やI/Oのエラーも入る) に加えて、
+ *      **正常に読めても `null` / `false` / 空文字なら**ここに落ちる
+ *      (3周目レビュー: 「読めてさえいれば作り直さない」はまだ強かった)
+ *   2. **モデルが変わった** — 別のモデルのプロンプトを1つのファイルに混ぜない。
+ *      `model` が**欠けている**ファイルもここに入る (`undefined !== model`)
+ *   3. **総メッセージ数が、保存済みの先頭 round 以下になった** — 履歴のリセットや
+ *      新しい会話の始まり。**`<=` なので、同じ数でも作り直す**
+ *
+ * 逆に**足す側**に入るのは、同じ `model` の truthy な `prev` で、
+ * **`messageCount <= (先頭の messageCount ?? 0)` が false のとき**。
+ * 「先頭より大きいとき」と言い換えたくなるが、**数値でない値が入っていると一致しない**
+ * (`5 <= "oops"` も `5 > "oops"` も false。4周目レビュー)。式のまま書く。
+ * `rounds` が欠けている・空・先頭の `messageCount` が無い場合は `?? 0` で**先頭を 0**
+ * として扱うので、件数が正なら足す側になる。
+ *
+ * **ただし `rounds` が「`null`/`undefined` 以外で、反復できない値」だと、足す側に
+ * 入ったあとで落ちる** — 下の `[...prev.rounds]` が例外になり、`dumpRequest` の catch が
+ * 拾って**その回のダンプごと書かれない** (足しも作り直しもしない、という第3の結果)。
+ * `null`/`undefined` は `?? []` が受け止めるので落ちない。
+ * 文字列も例外にならず、1文字ずつの配列として**壊れたまま書かれる**。
+ *
+ * この振る舞いは意図して残している。キャッシュの効き方は**ターンをまたいで**
+ * プレフィックスが安定しているかで決まるので、1ターンで切ると見たいものが見えない。
+ * ただし**本文がディスクに残る量も伸びる**ので、止め方は #259 のスイッチが持つ。
+ *
+ * **なぜ切り出したか:** この判断を `docs/security.md` で説明したときに2回続けて
+ * 読み違えた (「最新ターンで上書き」「直前の round と比べている」)。
+ * **コメントは実装とずれるが、テストはずれると落ちる。** */
+export function startsNewDump(prev: any, model: string, messageCount: number): boolean {
+  if (!prev || prev.model !== model) return true;
+  return messageCount <= (prev.rounds?.[0]?.messageCount ?? 0);
+}
+
 function dumpRequest(
   purpose: string,
   model: string,
@@ -99,15 +148,14 @@ function dumpRequest(
     })();
     const file = path.join(dir, `last-request-p${pid}-${purpose}.json`);
 
-    // 同じターンの2round目以降は、前のroundを消さずに足す。
-    // 1ターンの中で何がどれだけ積まれたかを、あとから1ファイルで追える
     let prev: any = null;
     try {
       prev = JSON.parse(fs.readFileSync(file, "utf-8"));
     } catch {
-      /* 初回・壊れていたら作り直す */
+      /* 読めなければ prev は null のまま = 作り直す。**JSONの不正だけでなく、
+         ファイルが無い・権限が無い・I/Oが失敗した場合も含む** */
     }
-    const isNewTurn = !prev || prev.model !== model || params.messages.length <= (prev.rounds?.[0]?.messageCount ?? 0);
+    const isNewTurn = startsNewDump(prev, model, params.messages.length);
 
     const toolsJson = params.tools ? JSON.stringify(params.tools) : "";
     const messagesJson = JSON.stringify(params.messages);

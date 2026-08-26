@@ -1,6 +1,46 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+
+// #259 (Codexレビュー P2/P3): **各consumerがOFF時に実際に伏せることを見張る。**
+// 掛け忘れが起きたのは「スイッチはあるが、繋がっていない場所があった」からなので、
+// helper だけを試すテストでは再発を捕まえられない
+import { argDetail as argDetail259, choicesDetail, logBody } from "./mcpLog.js";
+
+/** その場だけ本文を止める。**既定 (ON) に必ず戻す** — 他のテストが後ろで動く */
+function withBodiesOff<T>(fn: () => T): T {
+  const before = process.env.CHATBAN_LOG_BODIES;
+  process.env.CHATBAN_LOG_BODIES = "0";
+  try {
+    return fn();
+  } finally {
+    if (before === undefined) delete process.env.CHATBAN_LOG_BODIES;
+    else process.env.CHATBAN_LOG_BODIES = before;
+  }
+}
+
+test("本文を止めると、発言 (REQ) は長さだけになる", () => {
+  assert.equal(logBody("これは伏せられる本文"), '"これは伏せられる本文"', "既定はONのまま");
+  assert.equal(withBodiesOff(() => logBody("これは伏せられる本文")), "(伏せた 10字)");
+});
+
+test("本文を止めると、選択肢つき応答は生テキストも選択肢も残らない", () => {
+  const line = withBodiesOff(() => choicesDetail("本文つきの返答", ["はい", "いいえ"]));
+  assert.equal(line, "raw=(伏せた 7字) options=2件");
+  assert.ok(!line.includes("はい"), "選択肢の文言が残っている (抽出前後の違いでしかない)");
+});
+
+// **4つ目の経路** — `query_log` が失敗したときの `goal` (#256)。
+// 「本文が残る経路は3つ」と数えていて、これだけスイッチと無関係に出ていた
+test("本文を止めると、失敗した query_log の goal も長さだけになる", () => {
+  const args = { sql: "SELECT * FROM live_cards", goal: "顧客Aの未公開案件を探したい" };
+  assert.ok(argDetail259("query_log", args, true).includes("顧客A"), "既定はONのまま (#256 の目的)");
+  const off = withBodiesOff(() => argDetail259("query_log", args, true));
+  assert.ok(off.includes("goal=(伏せた 14字)"), `goal が伏せられていない: ${off}`);
+  assert.ok(!off.includes("顧客A"), "自由文がログに平文で残っている");
+  assert.ok(off.includes("sql="), "SQLの形まで消してはいけない (伏せるのは本文だけ)");
+});
+
 import { classifyQueryError, redactSql, argDetail, argShape, MCP_TOOL_NAMES, safe, safeToolName, isFailure, toolCalls, toolOutcome, throwOutcome } from "./mcpLog.js";
 
 /** #247: **ログに出てよいのは「こちらが決めた語」だけ。**

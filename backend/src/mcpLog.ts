@@ -1,3 +1,4 @@
+import { logBodiesEnabled, maskedBody } from "./demoMode.js";
 import { PUBLIC_COLUMNS, PUBLIC_TABLES } from "./publicSchema.js";
 import { toolArgSchemas } from "./toolArgs.js";
 
@@ -338,7 +339,11 @@ export function argDetail(name: unknown, args: unknown, failed = false): string 
   if (failed) {
     for (const key of FAILURE_ONLY_VALUES[tool] ?? []) {
       const v = bag?.[key];
-      const text = typeof v === "string" ? safe(v, MAX_GOAL) : "";
+      // #259: **これも本文なので、本文のスイッチに従う。**もとはスイッチと無関係に出ていた
+      // (Codexレビュー P2 で発覚 — 「本文が残る経路は3つ」と数えたうちに入っていなかった)。
+      // 伏せても「失敗した呼び出しが在った」ことは残るので、#256 の目的のうち
+      // 「規則が届いていないのか、知られていないのか」の切り分けだけが落ちる
+      const text = typeof v === "string" ? (logBodiesEnabled() ? safe(v, MAX_GOAL) : maskedBody(v)) : "";
       if (text) parts.push(`${key}=${text}`);
     }
   }
@@ -415,4 +420,20 @@ export function toolCalls(body: unknown): Array<{ id: unknown; name: string; arg
     out.push({ id: msg.id, name: safeToolName(msg.params?.name), args: msg.params?.arguments });
   }
   return out;
+}
+
+/** #259: **日次ログに本文を載せるときの共通の形。**ONなら先頭 `max` 字、OFFなら長さだけ。
+ *
+ * ここに置くのは、このモジュールが**入口に依存しないログの規則**だから (#254 と同じ理由)。
+ * 呼ぶ側で `logBodiesEnabled()` を書くと、また掛け忘れが起きる — 実際に起きた (#259 の P2)。 */
+export function logBody(text: unknown, max = 120): string {
+  const s = typeof text === "string" ? text : String(text ?? "");
+  return logBodiesEnabled() ? `"${s.slice(0, max)}"` : maskedBody(s);
+}
+
+/** 選択肢つき応答の1行 (#259)。**生テキストも選択肢も、どちらもモデルが書いた本文**なので
+ * 一緒に伏せる。抽出前後の違いでしかなく、中身は同じ文章 */
+export function choicesDetail(reply: unknown, options: unknown[]): string {
+  if (!logBodiesEnabled()) return `raw=${maskedBody(typeof reply === "string" ? reply : "")} options=${options.length}件`;
+  return `raw=${JSON.stringify(reply)} options=${JSON.stringify(options)}`;
 }

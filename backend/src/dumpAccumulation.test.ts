@@ -110,19 +110,20 @@ test("JSONとして読めても、falsy や model 欠落なら作り直す", () 
   assert.equal(startsNewDump({ rounds: [{ messageCount: 2 }] }, "gpt-x", 99), true, "model 欠落を見ていない");
 });
 
-// **helper が足す側を返しても、書き込みまで行くとは限らない。**
-// `dumpRequest` は `[...prev.rounds]` で広げるので、`rounds` が**反復できない値**だと
-// 例外になり、catch がその回のダンプごと落とす (足しも作り直しもしない第3の結果)。
-//
-// **文字列は例外にならない** — 最初この検査を「配列でなければ落ちる」と書いたが、
-// 文字列は1文字ずつの配列になるだけで、壊れたまま書かれる。落ちるのは反復できない値のとき
-test("rounds が反復できない値だと、足す側を返したあと書き込みで落ちる", () => {
+// **これは番人ではなく、説明の例** (4周目レビュー)。`dumpRequest` を呼ばずに
+// spread を再現しているだけなので、production 側の spread/catch/write が変わっても通る。
+// それでも置くのは、**helper の答え (足す側) と、実際に書かれるかが一致しない**ことを
+// 一度書き留めておかないと、helper のテストだけを見て「足された」と誤解するため
+test("helper が足す側を返しても、書き込みまで行くとは限らない (説明の例)", () => {
   const broken = { model: "gpt-x", rounds: 42 };
   assert.equal(startsNewDump(broken, "gpt-x", 5), false, "helper は足す側を返す");
-  assert.throws(() => [...(broken.rounds as any)], TypeError, "dumpRequest の spread が落ちる形");
+  // `dumpRequest` の `[...(prev.rounds ?? [])]` にあたる形
+  assert.throws(() => [...(broken.rounds as any)], TypeError, "反復できない値は spread で落ちる");
 
-  // 文字列は落ちない (1文字ずつの配列になる)。**壊れたまま書かれる**ほうの形
-  assert.deepEqual([...("ab" as any)], ["a", "b"]);
+  // **落ちない側を2つ。**「反復できなければ落ちる」だと広すぎる
+  const missing: { rounds?: unknown[] } = {};
+  assert.deepEqual([...(missing.rounds ?? [])], [], "null/undefined は ?? [] が受け止める");
+  assert.deepEqual([...("ab" as any)], ["a", "b"], "文字列は1文字ずつの配列になり、壊れたまま書かれる");
 });
 
 // **繋がっていることを見張る側** (#259 で同じ穴を作ったので対で置く)。

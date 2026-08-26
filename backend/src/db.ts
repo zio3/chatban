@@ -469,8 +469,17 @@ export function saveChatMessage(
     );
 }
 
-/** cardId未指定=メインチャット(card_id IS NULL)、指定=そのカード専用の会話 */
-export function listChatMessages(limit = 50, cardId?: number): {
+/** 画面のチャット欄が復元する件数。**既定ではなく上限** (#263) —
+ * `GET /api/chat/log` は件数を受け取らないので、これが返る件数そのものになる */
+export const CHAT_LOG_LIMIT = 50;
+
+/** cardId未指定=メインチャット(card_id IS NULL)、指定=そのカード専用の会話。
+ *
+ * #263: **件数は引数で受け取らない。**以前は `limit` を取り、経路の入口 (`/api/chat/log`)
+ * がクエリをそのまま渡していたので、`?limit=99999` で全会話が返った。
+ * 渡している呼び出し元は1つも無かった (実測) ので、**口ごと閉じた**。
+ * 「直近50件が既定」と書いた文書に対して、**既定であって上限ではない**状態が残っていた */
+export function listChatMessages(cardId?: number): {
   role: "user" | "assistant";
   content: string;
   trace: unknown;
@@ -478,7 +487,7 @@ export function listChatMessages(limit = 50, cardId?: number): {
   createdAt: string;
 }[] {
   const where = cardId != null ? "WHERE card_id = ?" : "WHERE card_id IS NULL";
-  const params = cardId != null ? [cardId, limit] : [limit];
+  const params = cardId != null ? [cardId, CHAT_LOG_LIMIT] : [CHAT_LOG_LIMIT];
   const rows = db()
     .prepare(`SELECT * FROM (SELECT * FROM chat_messages ${where} ORDER BY id DESC LIMIT ?) ORDER BY id`)
     .all(...params) as any[];

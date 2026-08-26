@@ -14,7 +14,17 @@ export const PUBLIC_TABLES: readonly string[] = [
   "cards",
   "live_cards",
   "done_cards",
-  "chat_messages",
+  // #262: **`chat_messages` を外した。**行も表も残っているが、SQLの窓口からは引けない。
+  //
+  // > チャットの話から、絞るは不要。というかやりません。**ツールの思想にない方向ですね** (zio)
+  //
+  // **ここ1本で3か所に効く** — #168 の許可リスト (db.ts) / 説明の「引けるもの:」行 (chat.ts) /
+  // ログの伏せ字 (mcpLog.ts)。**入口ごとに違う一覧を持たない**のが「MCPからだけ外す」案を
+  // 採らなかった理由で、それを作ると CLAUDE.md が繰り返し事故と呼ぶ
+  // 「入口で契約がズレると入口ごとに違う汚れ方をする」形を、自分から作ることになる。
+  //
+  // 会話をキーワードで引く経路は `search_cards` に残っている (db.ts の `chatHits`)。
+  // 失うのは「時期や条件で絞る」だけ。
   "project_context",
 ];
 
@@ -23,12 +33,12 @@ export const PUBLIC_TABLES: readonly string[] = [
  *
  * **schemaの現物と合っているかは `publicColumns.test.ts` が pragma と突き合わせる。**
  * ズレても壊れはせず、**知らない語が `?` になって読みにくくなる**だけ (鈍る方に倒れる)。 */
+// #262: `chat_messages` を外したので、その専用列 (card_id / content / role / trace / usage) も落とした。
+// **この一覧は「引ける表の列」**であって、DBに在る列の一覧ではない。
 export const PUBLIC_COLUMNS: readonly string[] = [
   "archived",
   "blocked_by",
-  "card_id",
   "checked_at",
-  "content",
   "context",
   "context_version",
   "created_at",
@@ -38,16 +48,13 @@ export const PUBLIC_COLUMNS: readonly string[] = [
   "id",
   "project_id",
   "rejected",
-  "role",
   "sort",
   "sort_key",
   "status",
   "summary",
   "text",
   "title",
-  "trace",
   "trashed_at",
   "updated_at",
-  "usage",
   "version",
 ];

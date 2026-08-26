@@ -132,7 +132,9 @@ backend/data/
   **summary**(いまどうなっているか。カードに出る) /
   context(経緯メモ) / **context_version**(経緯メモの楽観ロック) / due / blocked_by(依存) / rejected(却下) /
   sort / archived / **trashed_at**(ゴミ箱)
-- `chat_messages`: 会話永続化 (card_id NULLがメイン、値ありがカードチャット)
+- `chat_messages`: 会話永続化 (card_id NULLがメイン、値ありがカードチャット)。
+  **#262 でSQL窓口 (`query_log`) の対象から外した** — AIが引けるのは `search_cards` の
+  キーワード検索だけ。記録は残っているが、時期や条件で絞る口は持たない
 - `project_context`: そのプロジェクトの前提 (プロンプトに常駐)
 
 #179 で担当者・割り振りを廃止し (個人利用に特化)、`cards.assignee` / `assign_reason` と

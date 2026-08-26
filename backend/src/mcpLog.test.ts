@@ -2,10 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 
-// #259 (Codexレビュー P2/P3): **各consumerがOFF時に実際に伏せることを見張る。**
-// 掛け忘れが起きたのは「スイッチはあるが、繋がっていない場所があった」からなので、
-// helper だけを試すテストでは再発を捕まえられない
-import { argDetail as argDetail259, choicesDetail, logBody } from "./mcpLog.js";
+// #259: 本文を伏せる規則のテスト。**helper を試すものと、繋がっていることを試すものを分ける** —
+// 2周目のCodexレビューで「helperを直接叩くだけなので、index.ts を生の message に戻しても
+// テストは通る」と指摘された (前回指摘した掛け忘れの再発を検出できない)。下の
+// 「呼び出し側が helper を通っている」がその穴を塞ぐ側
+import fs from "node:fs";
+import { argDetail as argDetail259, choicesDetail, logBody, logError } from "./mcpLog.js";
 
 /** その場だけ本文を止める。**既定 (ON) に必ず戻す** — 他のテストが後ろで動く */
 function withBodiesOff<T>(fn: () => T): T {
@@ -32,6 +34,31 @@ test("本文を止めると、選択肢つき応答は生テキストも選択�
 
 // **4つ目の経路** — `query_log` が失敗したときの `goal` (#256)。
 // 「本文が残る経路は3つ」と数えていて、これだけスイッチと無関係に出ていた
+test("本文を止めると、上流のエラー本文も長さだけになる", () => {
+  // 互換宛先が入力やプロンプトを反射して返すことがある (messagesRoute.ts が400字まで拾う)
+  const e = new Error("messages 400: {\"error\":\"invalid prompt: 顧客Aの未公開案件について\"}");
+  assert.ok(logError(e).includes("顧客A"), "既定はONのまま (失敗の原因を読むため)");
+  assert.ok(!withBodiesOff(() => logError(e)).includes("顧客A"), "エラー本文が平文で残っている");
+  assert.equal(logError(e), e.message, "ONのときは引用符などを足さない (既存のログの形を変えない)");
+});
+
+// **繋がっていることを見張る側。**helper を直接叩くテストは、呼び出し側が helper を
+// 使わなくなっても通ってしまう。掛け忘れは3回とも「値はあるが繋がっていない」で起きた
+test("本文を出すログの呼び出し側が、helper を通っている", () => {
+  const src = (f: string) => fs.readFileSync(new URL(f, import.meta.url), "utf-8");
+  const index = src("./index.ts");
+  const chat = src("./chat.ts");
+
+  assert.ok(index.includes("REQ ${logBody(message)}"), "index.ts の REQ が logBody を通っていない");
+  assert.ok(!/REQ \$\{?String\(message\)/.test(index), "index.ts が生の message をログに入れている");
+  assert.ok(chat.includes("choicesDetail(reply, picked.options)"), "chat.ts が choicesDetail を通っていない");
+  assert.ok(!chat.includes("raw=${JSON.stringify(reply)}"), "chat.ts が生の reply をログに入れている");
+  // 上流のエラー本文 (2周目 P2)。**LLMを呼ぶ経路のFAILED行だけを見る**
+  for (const [name, s] of [["index.ts", index], ["llm.ts", src("./llm.ts")]] as const) {
+    assert.ok(!/FAILED[^`]*\$\{e\?\.message \?\? e\}/.test(s), `${name} の FAILED 行が生の e.message を出している`);
+  }
+});
+
 test("本文を止めると、失敗した query_log の goal も長さだけになる", () => {
   const args = { sql: "SELECT * FROM live_cards", goal: "顧客Aの未公開案件を探したい" };
   assert.ok(argDetail259("query_log", args, true).includes("顧客A"), "既定はONのまま (#256 の目的)");

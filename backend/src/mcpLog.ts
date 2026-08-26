@@ -426,9 +426,24 @@ export function toolCalls(body: unknown): Array<{ id: unknown; name: string; arg
  *
  * ここに置くのは、このモジュールが**入口に依存しないログの規則**だから (#254 と同じ理由)。
  * 呼ぶ側で `logBodiesEnabled()` を書くと、また掛け忘れが起きる — 実際に起きた (#259 の P2)。 */
-export function logBody(text: unknown, max = 120): string {
+export function logBody(text: unknown, max = 120, quote = true): string {
   const s = typeof text === "string" ? text : String(text ?? "");
-  return logBodiesEnabled() ? `"${s.slice(0, max)}"` : maskedBody(s);
+  if (!logBodiesEnabled()) return maskedBody(s);
+  const cut = s.slice(0, max);
+  return quote ? `"${cut}"` : cut;
+}
+
+/** 上流 (LLM) のエラー本文 (#259 Codexレビュー2周目 P2)。**これも本文が入りうる。**
+ *
+ * 互換宛先の中には、受け取った入力やプロンプトを**そのままエラーに反射して返すもの**がある
+ * (`messagesRoute.ts` は非2xx応答の本文を400字まで `Error.message` に入れる)。
+ * 秘密は `redactSecrets` が既に落としているが、**本文は落ちていなかった**。
+ *
+ * **伏せるのはログだけで、HTTP応答はそのまま返す。**画面に出るのは打った本人で、
+ * 消えると「なぜ失敗したか」が分からなくなる。ディスクに残るかどうかが、ここでの境目 */
+export function logError(e: unknown, max = 400): string {
+  const msg = typeof (e as any)?.message === "string" ? (e as any).message : String(e ?? "");
+  return logBody(msg, max, false);
 }
 
 /** 選択肢つき応答の1行 (#259)。**生テキストも選択肢も、どちらもモデルが書いた本文**なので

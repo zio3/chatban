@@ -13,7 +13,7 @@ import { attachmentsEnabled, jsonLimit } from "./demoMode.js";
 import { llmConfig } from "./config.js";
 import { log } from "./log.js";
 import { buildMcpServer } from "./mcp.js";
-import { argDetail, argShape, logBody, toolCalls } from "./mcpLog.js";
+import { argDetail, argShape, logBody, logError, toolCalls } from "./mcpLog.js";
 import { isAllowedOrigin, isBrowserCrossSite } from "./origin.js";
 import { resetPromptState } from "./promptState.js";
 import { assertTimezone } from "./timezone.js";
@@ -496,7 +496,8 @@ async function handleChat(req: Request, res: Response, cardId?: number) {
     if (wasRefused !== upstreamRefused()) broadcastBoard();
     res.json(result);
   } catch (e: any) {
-    log("chat", `#${id}${where} FAILED ${Date.now() - t0}ms: ${e?.message ?? e}`);
+    // #259: 上流のエラー本文が再掲される経路 (llm.ts と同じ理由でスイッチに従う)
+    log("chat", `#${id}${where} FAILED ${Date.now() - t0}ms: ${logError(e)}`);
     // #212: 上流に断られたことを板にも流す。**失敗そのものは板を変えない**ので、
     // ここで流さないと画面は次のリロードまで気づけない (E2Eで実際に踏んだ)
     if (wasRefused !== upstreamRefused()) broadcastBoard();
@@ -541,7 +542,8 @@ app.post("/api/suggestions", async (_req, res) => {
   try {
     res.json({ suggestions: await generateSuggestions() });
   } catch (e: any) {
-    log("chat", `suggestions failed: ${e?.message ?? e}`);
+    // #259: ここもLLMの呼び出しなので、上流のエラー本文が入りうる (同じスイッチ)
+    log("chat", `suggestions failed: ${logError(e)}`);
     res.json({ suggestions: [] });
   }
 });

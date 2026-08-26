@@ -9,7 +9,7 @@ import { generateSuggestions, runChatTurn } from "./chat.js";
 import { warnIfConfigNotIgnored } from "./config.js";
 import { hooks } from "./hooks.js";
 import { upstreamRefused } from "./llm.js";
-import { attachmentsEnabled, jsonLimit } from "./demoMode.js";
+import { attachmentsEnabled, jsonLimit, logBodiesEnabled, maskedBody } from "./demoMode.js";
 import { llmConfig } from "./config.js";
 import { log } from "./log.js";
 import { buildMcpServer } from "./mcp.js";
@@ -458,7 +458,10 @@ async function handleChat(req: Request, res: Response, cardId?: number) {
   const where = cardId != null ? ` CARD-CHAT(card=${cardId})` : "";
   log(
     "chat",
-    `#${id}${where} REQ "${String(message).slice(0, 120)}" (history=${history?.length ?? 0}${attachments?.length ? ` attachments=${attachments.length}` : ""})`
+    // #259: 本文を出すかは demoMode の1つの値で決める。伏せても行と長さは残す
+    `#${id}${where} REQ ${
+      logBodiesEnabled() ? `"${String(message).slice(0, 120)}"` : maskedBody(message)
+    } (history=${history?.length ?? 0}${attachments?.length ? ` attachments=${attachments.length}` : ""})`
   );
   // クライアント切断もログに残す (再起動巻き添え・ブラウザ側中断の追跡用)
   res.on("close", () => {

@@ -49,15 +49,31 @@ export function suggestBootGraceMs(env: NodeJS.ProcessEnv = process.env): number
   return isDemoMode(env) ? DEMO_SUGGEST_GRACE_MS : 60_000;
 }
 
-/** プロンプトのダンプ (LLMへ送った中身の実物) を書き出すか。**デモでは止める** —
+/** 会話の**本文**をディスクに残すか。**デモでは止める** —
  * #213 が「訪問者のファイルを乗せない」なら、こちらは**訪問者の入力を残さない**。
  *
  * 認証なしで誰でも打てるので、書いた本文がそのまま VPS のディスクに平文で残る。
- * 蓄積はせず purpose ごとに最新1回の上書きだが、**残るのが「最後に触った人の会話」**
- * であることは変わらず、デモの朝のリセット (#211) の対象にも入っていない。
+ * デモの朝のリセット (#211) の対象にも入っていない。
  *
  * 個人利用では調査の役に立つ道具なので、デモ以外では既定ONのまま。
- * 明示すればどちらでも勝てる (CHATBAN_DUMP_PROMPT=1 でデモでも出せる) */
-export function promptDumpEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
-  return boolEnv(env.CHATBAN_DUMP_PROMPT) ?? !isDemoMode(env);
+ * 明示すればどちらでも勝てる (CHATBAN_LOG_BODIES=1 でデモでも出せる)。
+ *
+ * #259: **本文が残る経路は3つあり、この1つの値で全部を決める。**
+ * `[chat] REQ` の発言 (index.ts) / `[choices] raw=` の生テキスト (chat.ts) /
+ * `last-request-*.json` のプロンプトダンプ (llm.ts)。もとは3つ目だけを見る
+ * `promptDumpEnabled` だったが、**残り2つが掛け忘れ**になっていた (デモでダンプは
+ * 止まるのに発言の先頭120字は残る、という穴)。用途はどれも「本文を見せたくない」で
+ * 同じなので、**スイッチは増やさず1つのまま**広げた (名前だけ実態に合わせて改名)。
+ *
+ * **切っても行そのものは消さない。**行が消えると、そのターンが在ったことまで
+ * 分からなくなる (#254 で「落ちたターンで何を呼んだか」を残したのと同じ理屈)。
+ * 本文の代わりに長さを出す。ダンプはファイルなので、書かないだけでよい */
+export function logBodiesEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return boolEnv(env.CHATBAN_LOG_BODIES) ?? !isDemoMode(env);
+}
+
+/** 本文を伏せたときの代わりの表示。**長さだけ残す** (#259)。
+ * サロゲートペアを1字と数えるので、絵文字混じりでも「字」の見た目と合う */
+export function maskedBody(text: string): string {
+  return `(伏せた ${[...String(text ?? "")].length}字)`;
 }

@@ -24,7 +24,7 @@ import path from "node:path";
 // llm.js を読み込む前にデータディレクトリを一時領域へ向ける
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "chatban-llmtest-"));
 process.env.CHATBAN_DATA_DIR = dataDir;
-process.env.CHATBAN_DUMP_PROMPT = "0"; // logs/ を汚さない
+process.env.CHATBAN_LOG_BODIES = "0"; // logs/ を汚さない
 
 const { chatCompletion } = await import("./llm.js");
 const { __setLlmConfigForTest } = await import("./config.js");

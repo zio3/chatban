@@ -87,16 +87,42 @@ test("実測した messageCount の並びが、そのまま1ファイルに積�
 });
 
 
-// #264 (Codexレビュー P3): **prev が半端な形でも、作り直さない。**
-// 旧式のインラインの式と同じ挙動 (`rounds?.[0]?.messageCount ?? 0` が 0 になる)。
-// 壊れた構造は「作り直す理由」ではない — 作り直すのは **JSONとして読めなかったとき**で、
-// それは `dumpRequest` の try/catch が `prev = null` にすることで起きる
+// #264: **足す側に入る条件を、そのまま書き下す。**
+// 同じ `model` の truthy な `prev` で、`rounds` が欠落/空、または先頭の `messageCount` が
+// 無く、現在の件数が正なら、先頭を 0 として扱って足す (旧式のインラインの式と同じ挙動)。
+//
+// **「半端なら作り直す」でも「読めれば作り直さない」でもない** — 3周のレビューで
+// どちらの言い方もずれていた。条件を言い換えずに、そのまま固定する
 test("rounds が空・messageCount が無くても、足す側に入る", () => {
   assert.equal(startsNewDump({ model: "gpt-x", rounds: [] }, "gpt-x", 1), false);
   assert.equal(startsNewDump({ model: "gpt-x" }, "gpt-x", 1), false);
   assert.equal(startsNewDump({ model: "gpt-x", rounds: [{}] }, "gpt-x", 1), false);
   // ただし 0 件のときに 0 を渡せば作り直す (`<=` なので)
   assert.equal(startsNewDump({ model: "gpt-x", rounds: [] }, "gpt-x", 0), true);
+});
+
+// **読めても作り直す形がある** (3周目レビュー P2)。`prev` が falsy になる値と、
+// `model` が欠けているファイル。「読めてさえいれば作り直さない」と書いていたが違った
+test("JSONとして読めても、falsy や model 欠落なら作り直す", () => {
+  for (const prevValue of [null, false, "", 0]) {
+    assert.equal(startsNewDump(prevValue, "gpt-x", 99), true, `${JSON.stringify(prevValue)} で足す側に入った`);
+  }
+  assert.equal(startsNewDump({ rounds: [{ messageCount: 2 }] }, "gpt-x", 99), true, "model 欠落を見ていない");
+});
+
+// **helper が足す側を返しても、書き込みまで行くとは限らない。**
+// `dumpRequest` は `[...prev.rounds]` で広げるので、`rounds` が**反復できない値**だと
+// 例外になり、catch がその回のダンプごと落とす (足しも作り直しもしない第3の結果)。
+//
+// **文字列は例外にならない** — 最初この検査を「配列でなければ落ちる」と書いたが、
+// 文字列は1文字ずつの配列になるだけで、壊れたまま書かれる。落ちるのは反復できない値のとき
+test("rounds が反復できない値だと、足す側を返したあと書き込みで落ちる", () => {
+  const broken = { model: "gpt-x", rounds: 42 };
+  assert.equal(startsNewDump(broken, "gpt-x", 5), false, "helper は足す側を返す");
+  assert.throws(() => [...(broken.rounds as any)], TypeError, "dumpRequest の spread が落ちる形");
+
+  // 文字列は落ちない (1文字ずつの配列になる)。**壊れたまま書かれる**ほうの形
+  assert.deepEqual([...("ab" as any)], ["a", "b"]);
 });
 
 // **繋がっていることを見張る側** (#259 で同じ穴を作ったので対で置く)。

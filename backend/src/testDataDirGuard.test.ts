@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import fs from "node:fs";
 import os from "node:os";
+import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
@@ -103,16 +104,31 @@ test("外から渡された行き先は、必ず一時領域へ上書きされ�
   assert.equal(r.status, 0, `testEnv.ts の読み込みに失敗した: ${r.stderr}`);
   const [dataDir, logDir] = JSON.parse(r.stdout.trim()) as [string, string];
 
-  for (const [name, dir] of [["CHATBAN_DATA_DIR", dataDir], ["CHATBAN_LOG_DIR", logDir]]) {
+  // **前方一致では足りない** (Codexレビュー 3周目 P3)。`os.tmpdir()` そのものを返す退行でも
+  // 通ってしまい、その場合は**全テストプロセスが同じ `chatban-admin.db` を共有する**ので
+  // 隔離が崩れる。一時領域の隣にある別ディレクトリ (`...\Temp-old` 等) も前方一致する。
+  // **一時領域の直下にある、専用の接頭辞つきディレクトリ**であることまで見る
+  for (const [name, dir, prefix] of [
+    ["CHATBAN_DATA_DIR", dataDir, "chatban-test-data-"],
+    ["CHATBAN_LOG_DIR", logDir, "chatban-test-log-"],
+  ] as const) {
     assert.notEqual(
       dir,
       SENTINEL,
       `${name} が外から渡された値のまま。本番のパスが入っていれば、実データの管理DBを開く (#265)`
     );
+    assert.equal(
+      path.dirname(dir),
+      os.tmpdir(),
+      `${name} が一時領域の直下ではない (${dir})`
+    );
     assert.ok(
-      dir.startsWith(os.tmpdir()),
-      `${name} が一時領域の外を指している (${dir})`
+      path.basename(dir).startsWith(prefix),
+      `${name} が専用のディレクトリを指していない (${dir})`
     );
   }
-});
 
+  // **2つが同じ場所だと、ログとDBが混ざる。**上の検査は接頭辞が違うので普通は通らないが、
+  // 「同じ1つを両方に配る」形にした退行を名指しで止めておく
+  assert.notEqual(dataDir, logDir, "データとログが同じディレクトリを指している");
+});

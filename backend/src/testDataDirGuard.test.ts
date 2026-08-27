@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import fs from "node:fs";
+import os from "node:os";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
@@ -62,11 +63,56 @@ test("行き先の指定が無いままのテスト実行は、store.ts の入�
   );
 });
 
-/** **いま実際に一時領域を指しているか。**上の2つはソースと設定を見るだけなので、
- * 読み込みの順序が変わって効かなくなった (先に store.ts が評価される等) 場合に気づけない。 */
-test("テスト実行中の行き先は、実データの data/ ではない (#265)", () => {
-  const dir = process.env.CHATBAN_DATA_DIR;
-  assert.ok(dir, "CHATBAN_DATA_DIR が置かれていない");
-  assert.notEqual(dir, "data", "実データのディレクトリを指している");
-  assert.ok(!/[\/]backend[\/]data$/.test(dir!), `実データのディレクトリを指している (${dir})`);
+/** **外から渡された値を必ず上書きするか** (Codexレビュー 2周目 P2)。
+ *
+ * ここが**この件の最重要条件**。`CHATBAN_DATA_DIR` は README にも載る正式な本番設定なので、
+ * シェルやCIに本番の絶対パスが入ったまま `npm test` を流すと実データを開く。
+ * `store.ts` の番人も「変数がある」ので黙って通す。
+ *
+ * **前の形はこれを見張れていなかった。**このプロセスに届く時点で `testEnv.ts` が既に
+ * 一時領域へ書き換えた後なので、**元から値が在ったのかどうかが分からない**。
+ * `??=` に戻しても、環境変数の無い普通の `npm test` は全件通ってしまう —
+ * 手で `CHATBAN_DATA_DIR=... npm test` と付けたときしか落ちない検査だった。
+ *
+ * だから**子プロセスに目印の値を渡して**、`testEnv.ts` を通した後に何になっているかを見る。
+ * 目印がそのまま残っていたら上書きしていない。
+ *
+ * ついでに、前の形は「バックスラッシュかスラッシュ」のつもりの文字クラスが
+ * **スラッシュだけ**になっていた (ヒアドキュメントでバックスラッシュが1つ食われた) ので、
+ * Windows の絶対パスを弾けていなかった。**書いたつもりの検査が別物になっていた**わけで、
+ * 目印方式なら区切り文字に依存しない。 */
+const SENTINEL = "SENTINEL-DO-NOT-USE";
+
+test("外から渡された行き先は、必ず一時領域へ上書きされる (#265)", () => {
+  const r = spawnSync(
+    process.execPath,
+    [
+      tsxBin,
+      "--import",
+      "./src/testEnv.ts",
+      "--eval",
+      'console.log(JSON.stringify([process.env.CHATBAN_DATA_DIR, process.env.CHATBAN_LOG_DIR]))',
+    ],
+    {
+      cwd: fileURLToPath(new URL("..", import.meta.url)),
+      env: { ...process.env, CHATBAN_DATA_DIR: SENTINEL, CHATBAN_LOG_DIR: SENTINEL },
+      encoding: "utf-8",
+    }
+  );
+
+  assert.equal(r.status, 0, `testEnv.ts の読み込みに失敗した: ${r.stderr}`);
+  const [dataDir, logDir] = JSON.parse(r.stdout.trim()) as [string, string];
+
+  for (const [name, dir] of [["CHATBAN_DATA_DIR", dataDir], ["CHATBAN_LOG_DIR", logDir]]) {
+    assert.notEqual(
+      dir,
+      SENTINEL,
+      `${name} が外から渡された値のまま。本番のパスが入っていれば、実データの管理DBを開く (#265)`
+    );
+    assert.ok(
+      dir.startsWith(os.tmpdir()),
+      `${name} が一時領域の外を指している (${dir})`
+    );
+  }
 });
+

@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import fs from "node:fs";
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
+
+/** 子プロセスは tsx で起こす (`.ts` をそのまま読ませるため) */
+const tsxBin = fileURLToPath(new URL("../node_modules/tsx/dist/cli.mjs", import.meta.url));
 
 /** #265: **テストが実データの管理DBを開かない、という状態を保つための番人。**
  *
@@ -31,14 +36,29 @@ test("npm test は testEnv.ts を先に読み込む (#265)", () => {
   );
 });
 
-/** **番人そのものが効いているか。**`store.ts` の入口は「テスト中なのに行き先が指定されていない」
- * ときだけ落ちる。ここが黙って消えると、上の1枚目が外れたときに**気づかないまま実データを開く**。 */
+/** **番人そのものが効いているか — ソースではなく挙動で見る** (Codexレビュー P2-2)。
+ *
+ * 最初はソースに条件式が在ることだけを見ていたが、**条件を残したまま `throw` を消しても
+ * `warning` に変えても通ってしまう**。それでは安全境界が消えたことに気づけない。
+ *
+ * 実際に「テストの子プロセスの印はあるが行き先の指定は無い」状態を作って `store.js` を読み込ませ、
+ * **落ちること**と**専用のエラー文が出ること**を見る。`data/` を開こうとする前に例外になるので、
+ * この検査自体は実データに触らない。 */
 test("行き先の指定が無いままのテスト実行は、store.ts の入口で止まる (#265)", () => {
-  const source = fs.readFileSync(new URL("./store.ts", import.meta.url), "utf-8");
+  const env: NodeJS.ProcessEnv = { ...process.env, NODE_TEST_CONTEXT: "child-v8" };
+  delete env.CHATBAN_DATA_DIR;
+
+  const r = spawnSync(
+    process.execPath,
+    [tsxBin, "--eval", 'import("./src/store.js")'],
+    { cwd: fileURLToPath(new URL("..", import.meta.url)), env, encoding: "utf-8" }
+  );
+
+  assert.notEqual(r.status, 0, `番人が止めていない (終了コード ${r.status})。実データの管理DBを開きうる`);
   assert.match(
-    source,
-    /process\.env\.NODE_TEST_CONTEXT && !process\.env\.CHATBAN_DATA_DIR/,
-    "store.ts の入口から番人が消えている。testEnv.ts が外れても静かに実データを開くようになる (#265)"
+    (r.stderr ?? "") + (r.stdout ?? ""),
+    /テストが実データの管理DBを開こうとした/,
+    "落ちてはいるが、番人のエラーではない。別の理由で落ちている可能性がある"
   );
 });
 

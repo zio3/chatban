@@ -72,15 +72,23 @@ test("しきい値ちょうどでは言わない (超えたときだけ)", () =>
 // `前提待ち`/`見送り` のように別の語で同じことを書き戻せるし、逆に
 // 「この盤では `rejected` を使わない」は `## このプロジェクトで使わないもの` の正しい用法なのに弾かれる。
 // **落とした規則そのものを名指しする** — 語ではなく「同じ行に◯と◯が並んでいるか」を見る。
+//
+// **見るのは規則の「指示」まで**。落とした3行はどれも「◯◯なら△△しろ」の形なので、
+// 条件だけ・手段だけでは足りず、揃って初めて書き戻したことになる。
+// ここを緩めると `## このプロジェクトで使わないもの` の宣言
+// (「この盤では `rejected` を使わない。却下は使わず消す運用」) を巻き込む — 実際に踏んだ。
 const DROPPED_RULES = [
-  { name: "やらない決定の扱い", any: ["やらない", "却下", "見送"], with: ["rejected"] },
-  { name: "誤登録・重複の扱い", any: ["誤登録", "重複"], with: ["削除", "ゴミ箱"] },
+  { name: "やらない決定の扱い", any: ["やらない", "却下", "見送"], with: ["rejected"], act: ["立て", "review に置"] },
+  { name: "誤登録・重複の扱い", any: ["誤登録", "重複"], with: ["削除", "ゴミ箱"], act: ["する", "行き"] },
 ];
 
 test("落とした規則が雛形に書き戻されていない (#266)", () => {
   for (const line of CONTEXT_TEMPLATE.split("\n")) {
     for (const rule of DROPPED_RULES) {
-      const hit = rule.any.some((w) => line.includes(w)) && rule.with.some((w) => line.includes(w));
+      const hit =
+        rule.any.some((w) => line.includes(w)) &&
+        rule.with.some((w) => line.includes(w)) &&
+        rule.act.some((w) => line.includes(w));
       assert.ok(
         !hit,
         `雛形が「${rule.name}」を書いている (${line.trim()})。盤ごとに変わらないので、書き換える人がいない。` +

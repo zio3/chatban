@@ -32,6 +32,18 @@ import { CONTEXT_TEMPLATE, contextReference } from "./contextTemplate.js";
  * (キャッシュ友好の並び)。ここから先は前提情報・索引・履歴で、全部ユーザー側の中身。 */
 const DYNAMIC_STARTS_AT = "## 今日:";
 
+/** #265: **`buildSystemPrompt()` は呼ぶ時点でDBを読む。**
+ *
+ * 上のコメントに「ここを切ればこのテストが実DBを読まなくて済む」と書いてあったが、
+ * **切っているのは結果の文字列だけ**で、呼び出し自体は `activeProjectId()` を通る
+ * (プロジェクトが1件も無いと例外)。実データの管理DBを開いていたから通っていただけで、
+ * まっさらな `CHATBAN_DATA_DIR` では9件とも落ちる。
+ *
+ * 直し方は**下ごしらえを作る**ほう。既定プロジェクトを1つ用意すれば、
+ * 中身は見ない (静的な部分しか読まない) ので、空のままで足りる。 */
+const { ensureInitialProject } = await import("./store.js");
+ensureInitialProject();
+
 function staticPrompt(): string {
   const full = buildSystemPrompt();
   const i = full.indexOf(DYNAMIC_STARTS_AT);

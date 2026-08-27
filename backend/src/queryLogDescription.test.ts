@@ -111,6 +111,10 @@ test("会話をキーワードで引く経路は残っている (search_cards)",
 // **従えない指示を作っていないこと。**説明を削るときに一番危ないのはこれ
 test("query_log を使えと言っている用途は、説明から引ける", async () => {
   const { buildSystemPrompt } = await import("./chat.js");
+  // #265: `buildSystemPrompt()` は活動中のプロジェクトを読むので、1件も無いと落ちる。
+  // 実データの管理DBを開いていたから通っていただけだった
+  const { ensureInitialProject } = await import("./store.js");
+  ensureInitialProject();
   const prompt = buildSystemPrompt();
 
   // #262: **指示のほうを消した。**説明から chat_messages を落とすなら、

@@ -25,6 +25,24 @@ import type { CustomLane, CustomLaneKey } from "./types.js";
 // #181: 管理DBにあった llm_calls (LLM呼び出しの記録) と model_prices (料金表) も同様に落とす
 // (下の ensureAdminSchema 末尾)。LLM呼び出しの記録は backend/logs/ の1行だけになった
 
+// #265: **テスト中に既定のデータディレクトリを開こうとしたら、その場で止める。**
+//
+// ここは**モジュール評価時**に既定の `data/chatban-admin.db` を開き、`ensureAdminSchema()` を
+// 走らせる。その移行には古い設定の `DELETE` と旧テーブルの `DROP TABLE` が含まれるので、
+// **`npm test` を流すだけで実データへ移行が当たりうる**。
+//
+// 守りの本体は `src/testEnv.ts` (test スクリプトが `--import` で先に読み、一時領域を指す) のほうで、
+// ここは**その入口が外れたことに気づくための番人**。外れると `CHATBAN_DATA_DIR` が無いまま
+// テスト実行子プロセスに入るので、ここで落ちる。`NODE_TEST_CONTEXT` は node のテストランナーが
+// 子プロセスに立てる印なので、**本番の起動には影響しない**。
+if (process.env.NODE_TEST_CONTEXT && !process.env.CHATBAN_DATA_DIR) {
+  throw new Error(
+    "テストが実データの管理DBを開こうとした。package.json の test スクリプトから " +
+      "`--import ./src/testEnv.ts` が外れていないか確認する (#265)。" +
+      "個別に指定したいテストは、store.js を読み込む前に CHATBAN_DATA_DIR を置く"
+  );
+}
+
 const DATA_DIR = process.env.CHATBAN_DATA_DIR ?? "data";
 const ADMIN_PATH = join(DATA_DIR, "chatban-admin.db");
 const PROJECT_DIR = join(DATA_DIR, "projects");

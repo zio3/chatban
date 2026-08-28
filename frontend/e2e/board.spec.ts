@@ -2355,3 +2355,56 @@ test("GitHubの番号もリンクになる (承知の上・#248)", async ({ page
   await page.getByTestId(`card-tile-${id}`).click();
   await expect(page.getByTestId("card-detail-panel").getByTestId("card-ref-109")).toHaveCount(1);
 });
+
+// #246: スプリッタの回帰の番人。
+//
+// **実機のタッチジェスチャはここでは再現できない** (FireTab の「ブラウザがスクロールに
+// ジェスチャを先に取る」は Playwright の合成イベントでは起きない)。ここで見るのは:
+//   - touch-action: none がCSSとして実際に効いていること (これが無いと実機で効かない本丸。
+//     クラスの綴りを変えたり Tailwind の生成から漏れたりすると、テストは通るのに実機で死ぬ)
+//   - ポインタドラッグでいまも動くこと (setPointerCapture 化 (#246) の回帰)
+test("チャットのスプリッタはドラッグで動き、タッチ用のCSSが効いている (#246)", async ({ page }) => {
+  await page.goto("/");
+  const grip = page.getByTitle("ドラッグでチャット欄の高さを調整");
+  await expect(grip).toBeVisible();
+
+  await expect
+    .poll(async () => grip.evaluate((el) => getComputedStyle(el).touchAction))
+    .toBe("none");
+
+  const before = await page.evaluate(() => Number(localStorage.getItem("chatban.logHeight")) || 240);
+  const box = (await grip.boundingBox())!;
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2 - 80, { steps: 5 });
+  await page.mouse.up();
+
+  // 上へ80px ドラッグ → ログ欄が高くなり、確定値が保存される
+  await expect
+    .poll(async () => page.evaluate(() => Number(localStorage.getItem("chatban.logHeight"))))
+    .toBeGreaterThan(before);
+});
+
+test("詳細パネルのスプリッタはドラッグで動き、タッチ用のCSSが効いている (#246)", async ({ page }) => {
+  const id = await createCard(`スプリッタ検証 ${Date.now()}`);
+  await page.goto("/");
+  // 詳細パネルを開く (盤上のカードをクリック)
+  await page.getByTestId(`card-tile-${id}`).click();
+  const grip = page.getByTitle("ドラッグで幅を調整");
+  await expect(grip).toBeVisible();
+
+  await expect
+    .poll(async () => grip.evaluate((el) => getComputedStyle(el).touchAction))
+    .toBe("none");
+
+  const panel = page.getByTestId("card-detail-panel");
+  const before = (await panel.boundingBox())!.width;
+  const box = (await grip.boundingBox())!;
+  await page.mouse.move(box.x + box.width / 2, box.y + 100);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width / 2 - 120, box.y + 100, { steps: 5 });
+  await page.mouse.up();
+
+  // 左へ120px ドラッグ → パネルが広くなる
+  await expect.poll(async () => (await panel.boundingBox())!.width).toBeGreaterThan(before + 60);
+});

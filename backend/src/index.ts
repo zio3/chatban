@@ -1,4 +1,7 @@
 import http from "node:http";
+import fs from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import cors from "cors";
 import express from "express";
@@ -87,6 +90,16 @@ app.use(
 // ブラウザが遮るのは「レスポンスを読むこと」だけなので、書き込みは通ってしまう。
 // 認証が無い以上ここが最後の砦なので、**明示的に 403 で断る**
 app.use((req, res, next) => {
+  // #268: 画面そのもの (静的配信) は他所のリンクから開けてよい — リンクを踏んだ通常の遷移も
+  // `Sec-Fetch-Site: cross-site` で来るので、全 path に掛けると「よそからURLを開けない」画面になる
+  // (Codexレビュー P2)。守る対象は状態を持つ API/MCP/Socket.IO と、書き込みうる method だけ。
+  // 静的な GET/HEAD は読み取りのみで、dist の中身は Public リポジトリのビルド成果物 (秘密なし)
+  const guarded =
+    req.path.startsWith("/api/") ||
+    req.path.startsWith("/mcp") ||
+    req.path.startsWith("/socket.io") ||
+    (req.method !== "GET" && req.method !== "HEAD");
+  if (!guarded) return next();
   // Sec-Fetch-Site はブラウザが自分で付ける (ページ側から偽装できない)。
   // Origin の付かない `<img src>` のような subresource GET を捕まえるのはこちら
   if (isBrowserCrossSite(req.header("Sec-Fetch-Site"))) {
@@ -741,6 +754,26 @@ app.post("/mcp", (_req, res) => {
 app.get(["/mcp", "/mcp/:projectId"], (_req, res) => res.status(405).json({ error: "stateless server: POST only" }));
 app.delete(["/mcp", "/mcp/:projectId"], (_req, res) => res.status(405).json({ error: "stateless server: POST only" }));
 
+// #268: **本番はこのプロセス1本でフロントも配る。**miniPC (systemd + tailscale serve) では
+// Vite の dev server を飼わず、`vite build` の成果物 (frontend/dist) をここから静的配信する。
+// プロセス1本・ポート1本 (8787) になり、unit も serve 設定も1つで済む。
+//
+// **dist が無ければ何もしない** — 開発機は今までどおり Vite (5173 + proxy) で、
+// この経路は素通りする。切り替えスイッチを別に持たないのは、スイッチと実体 (distの有無) が
+// ズレる余地を作らないため。開発機で一度 build すると dist が残って 8787 が古い画面を
+// 返し続けるので、下の起動ログでどちらのモードかを必ず言う。
+const STATIC_DIR = process.env.CHATBAN_STATIC_DIR ?? join(dirname(fileURLToPath(import.meta.url)), "../../frontend/dist");
+const staticMode = fs.existsSync(join(STATIC_DIR, "index.html"));
+if (staticMode) {
+  app.use(express.static(STATIC_DIR));
+  // SPA のフォールバック。URLが持つ状態は /p/<id> だけ (#97) だが、個別に列挙すると
+  // 経路を足したときにここだけ取り残される。API/MCP/Socket.IO は上で定義済みなので届かない
+  app.get("*", (req, res, next) => {
+    if (req.path.startsWith("/api/") || req.path.startsWith("/mcp") || req.path.startsWith("/socket.io")) return next();
+    res.sendFile(join(STATIC_DIR, "index.html"));
+  });
+}
+
 // **待ち受けはループバックに限定する。**#180 で認証を廃止したあとの防壁は2つで、これはその1枚目
 // (もう1枚は上の Origin / Sec-Fetch-Site の拒否 — こちらは「利用者自身が開いたページ」を止める)。
 // ホストを省略するとNodeの既定で全インターフェース (0.0.0.0) に開き、
@@ -749,5 +782,9 @@ app.delete(["/mcp", "/mcp/:projectId"], (_req, res) => res.status(405).json({ er
 // 環境変数で開ける逃げ道は用意しない (「開けられる」が残ると、いつか開ける日が来る)。
 // 外から使いたくなったら、認証を戻すのではなく SSH ポートフォワードやトンネルを使う
 server.listen(PORT, "127.0.0.1", () => {
-  console.log(`ChatBan backend listening on http://localhost:${PORT}`);
+  // #268: どちらのモードで起動したかを必ず言う (distが残っていて古い画面を配る事故に気づくため)
+  console.log(
+    `ChatBan backend listening on http://localhost:${PORT}` +
+      (staticMode ? ` (フロントも配信: ${STATIC_DIR})` : " (APIのみ。フロントは Vite dev server)")
+  );
 });

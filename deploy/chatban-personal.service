@@ -1,0 +1,49 @@
+# 個人運用 (自宅サーバー) の unit (#268)。公開デモの chatban.service から起こした差分:
+#   - DEMO_MODE 無し (自分しか使わないので、添付もJSON上限も通常のまま)
+#   - PORT=8787 (開発時と同じ番号。フロントも backend が配るのでポートはこの1本)
+#   - リセットタイマー無し (実データなので毎朝消えては困る)
+#
+# 共通の前提 (デモと同じ):
+#   - レイアウト: /opt/chatban/app (このリポジトリの clone) + /opt/chatban/data (実データ)
+#     data を app の外に出すのは、デプロイ (git pull + build) が実データに触れない境界を
+#     ディレクトリで引くため
+#   - アプリは 127.0.0.1 でしか listen しない (コードで固定)。外へ出す口は
+#     リバースプロキシ (tailscale serve 等) の仕事で、その設定は運用側の手元に置く
+#     (このリポジトリは Public なので、ホスト名・IPはここに書かない)
+#   - デプロイは backend/scripts/deploy-demo.mjs を共用する (deploy/README.md 参照)
+#
+# 導入: cp deploy/chatban-personal.service /etc/systemd/system/chatban.service
+#       systemctl daemon-reload && systemctl enable --now chatban
+[Unit]
+Description=ChatBan (personal)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=chatban
+Group=chatban
+Environment=HOME=/opt/chatban/home
+# アプリはDBとログしか書かない。侵害時の被害を狭める (デモ unit と同じ堅牢化)
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/chatban/data /opt/chatban/app/backend/logs /opt/chatban/home
+Type=simple
+WorkingDirectory=/opt/chatban/app/backend
+Environment=PORT=8787
+Environment=CHATBAN_DATA_DIR=/opt/chatban/data
+Environment=NODE_ENV=production
+Environment=TZ=Asia/Tokyo
+# ブラウザは公開ホスト名のオリジンで来るので、それを許可リストに入れる。
+# 具体的なホスト名は運用側で入れる (Public リポジトリに書かない):
+# Environment=CHATBAN_ALLOWED_ORIGINS=https://<your-host>:8787
+Environment=PATH=/opt/node/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+# npx ではなく配置済みの tsx を直に叩く (起動時にネットワークへ出ない)
+ExecStart=/opt/node/bin/node /opt/chatban/app/backend/node_modules/tsx/dist/cli.mjs src/index.ts
+Restart=always
+RestartSec=5
+MemoryMax=512M
+
+[Install]
+WantedBy=multi-user.target

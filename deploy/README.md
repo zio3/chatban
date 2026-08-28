@@ -51,15 +51,16 @@ root で走らせると git が dubious ownership で止まることがある �
 
 ```sh
 curl https://chatban.zio3.net/version.txt   # 動いているコミット。-dirty なら手で触った版
-curl https://chatban.zio3.net/api/board     # attachments が false なら DEMO_MODE が効いている
+curl https://chatban.zio3.net/api/board     # attachments: 公開デモの期待値は false (DEMO_MODE の既定)
 ```
 
-**この attachments の読みはデモ専用。**個人運用 (DEMO_MODE なし) の期待値は true で、
-false なら「添付を受けられない理由がある」サイン — 明示の `CHATBAN_ATTACHMENTS=off`、
-`apiStyle: "messages"` (Anthropic形式は添付経路が別)、または **config.json の読み込み・検証の失敗**
-(ファイルが無い・JSON不正・キー未読を含む) のいずれか (`canAcceptAttachments()` の実装どおり)。
-据え付け直後なら大抵は最後のやつ — miniPC で「DEMO_MODE では?」と誤診しかけ、
-実際はキー未投入だった (`#269`)。
+**ただし false は DEMO_MODE の証拠ではない。**`canAcceptAttachments()` が false を返すのは
+明示の `CHATBAN_ATTACHMENTS=off`、`apiStyle: "messages"` (Messages API 形式の添付は未対応)、
+または **config.json の読み込み・検証の失敗** (ファイルが無い・JSON不正・キー未読を含む) の
+いずれかで、DEMO_MODE はその1つ目に乗っているだけ。逆に個人運用は、chat 形式で
+`CHATBAN_ATTACHMENTS` を切っていなければ true が期待値 (messages 形式なら false が正常)。
+miniPC の据え付けでは false を「DEMO_MODE では?」と誤診しかけ、実際は config が
+placeholder のままキー未投入だった (`#269`)。
 
 `version.txt` はビルドが作ります (`frontend/vite-plugin-version.ts`)。手で置かないこと —
 次のビルドで消えます。

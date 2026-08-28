@@ -75,15 +75,33 @@ sudo diff -r <(sudo cat /etc/systemd/system/chatban.service) deploy/chatban.serv
 外へ出す口 (tailscale serve 等) は 127.0.0.1:8787 へ向けます。その設定と
 ホスト名は運用側の手元に置き、このリポジトリには書きません。
 
-初回の据え付け (レイアウトはデモと同じ /opt/chatban/{app,data,home}):
+初回の据え付け (レイアウトはデモと同じ /opt/chatban/{app,data,home})。
+**順序に意味がある**: unit は `User=chatban` で動き、`ReadWritePaths` に挙げた
+data / home / backend/logs が**起動前に実在しないと systemd が unit を落とす**
+(自動では作らない。特に backend/logs は gitignore 対象なので clone には入っていない)。
+だから「ユーザーを作る → ディレクトリを作って渡す → chatban として build する」の順で進める:
 
 ```sh
-sudo mkdir -p /opt/chatban && cd /opt/chatban
-sudo git clone https://github.com/zio3/chatban app
-cd app/backend && npm install && cd ../frontend && npm install && npm run build && cd ..
-# 接続設定。examples からコピーして宛先とキーを書く (git 管理外。600 で chatban が読めるように)
-cp backend/examples/config.openai.json backend/config.json && $EDITOR backend/config.json
-sudo cp deploy/chatban-personal.service /etc/systemd/system/chatban.service
+# 1. 動かすユーザーと器 (data/home は unit の ReadWritePaths が要求する)
+sudo useradd --system --home-dir /opt/chatban/home --shell /usr/sbin/nologin chatban
+sudo mkdir -p /opt/chatban/data /opt/chatban/home
+
+# 2. 取得。以降の npm install / build / config は所有者の chatban で行う
+#    (root で clone したまま進めると、非rootの npm install が書込権限で失敗する)
+sudo git clone https://github.com/zio3/chatban /opt/chatban/app
+sudo mkdir -p /opt/chatban/app/backend/logs   # gitignore 対象で clone に無い。無いと unit が起動しない
+sudo chown -R chatban:chatban /opt/chatban
+sudo -u chatban env PATH=/opt/node/bin:$PATH sh -c \
+  'cd /opt/chatban/app/backend && npm install && cd ../frontend && npm install && npm run build'
+
+# 3. 接続設定。examples からコピーして宛先とキーを書く (git 管理外)
+sudo -u chatban cp /opt/chatban/app/backend/examples/config.openai.json /opt/chatban/app/backend/config.json
+sudo -e /opt/chatban/app/backend/config.json   # 宛先とキーを書く
+sudo chown chatban:chatban /opt/chatban/app/backend/config.json
+sudo chmod 600 /opt/chatban/app/backend/config.json
+
+# 4. unit を入れて起動
+sudo cp /opt/chatban/app/deploy/chatban-personal.service /etc/systemd/system/chatban.service
 # CHATBAN_ALLOWED_ORIGINS に公開ホスト名のオリジンを入れる (unit 内のコメント参照)
 sudo systemctl daemon-reload && sudo systemctl enable --now chatban
 ```

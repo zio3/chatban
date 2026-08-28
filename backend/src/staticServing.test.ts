@@ -14,12 +14,12 @@ import path from "node:path";
  * dist の実物には依存しない (ビルドしていない環境でも走るように、
  * 一時ディレクトリに index.html を置いて CHATBAN_STATIC_DIR で指す)。 */
 
-const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "chatban-static-"));
-const staticDir = fs.mkdtempSync(path.join(os.tmpdir(), "chatban-staticdist-"));
+// data/log は testEnv.ts (--import) が置いた一時パスをそのまま使う (掃除もそちらの仕組みに乗る)。
+// 自前で持つのは staticDir だけなので、これだけ after で消す (Codexレビュー P2:
+// 自前の mkdtemp は testEnv の掃除対象プレフィックスでないため、毎回永久に残っていた)
+const staticDir = fs.mkdtempSync(path.join(os.tmpdir(), "chatban-test-staticdist-"));
 fs.writeFileSync(path.join(staticDir, "index.html"), "<html><body id=\"static-probe\">ok</body></html>");
 fs.writeFileSync(path.join(staticDir, "asset.txt"), "asset-body");
-process.env.CHATBAN_DATA_DIR = dataDir;
-process.env.CHATBAN_LOG_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "chatban-staticlog-"));
 process.env.CHATBAN_STATIC_DIR = staticDir;
 process.env.AUTO_ARCHIVE = "0";
 process.env.PORT = "0"; // 空きポートに開く (開発サーバーの 8787 を奪わない)
@@ -30,6 +30,7 @@ let base = "";
 
 after(() => {
   server.close();
+  fs.rmSync(staticDir, { recursive: true, force: true });
 });
 
 before(async () => {
@@ -70,4 +71,21 @@ test("MCP もフォールバックに食われない (#268)", async () => {
   // GET /mcp は 405 (POST only) が正しい。200 で index.html が返ったら食われている
   const res = await fetch(`${base}/mcp/1`);
   assert.equal(res.status, 405);
+});
+
+test("他所のリンクから開いても画面は出る (#268 Codexレビュー P2)", async () => {
+  // 別サイトのリンクを踏んだ通常の遷移は `Sec-Fetch-Site: cross-site` で来る。
+  // Origin/Sec-Fetch-Site の拒否を全 path に掛けると、公開URLをよそから開けない
+  const res = await fetch(`${base}/`, { headers: { "Sec-Fetch-Site": "cross-site" } });
+  assert.equal(res.status, 200);
+  assert.match(await res.text(), /static-probe/);
+});
+
+test("画面を通しても API/書き込みの砦は残る (#268 Codexレビュー P2)", async () => {
+  // 静的 GET を通す例外が守りの本体 (悪意あるページからの API 叩き #180) を崩していないこと
+  const api = await fetch(`${base}/api/projects`, { headers: { "Sec-Fetch-Site": "cross-site" } });
+  assert.equal(api.status, 403);
+  // 静的な path でも GET/HEAD 以外は断る (例外は「読み取りのみ」に限る)
+  const post = await fetch(`${base}/`, { method: "POST", headers: { "Sec-Fetch-Site": "cross-site" } });
+  assert.equal(post.status, 403);
 });

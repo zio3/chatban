@@ -90,6 +90,16 @@ app.use(
 // ブラウザが遮るのは「レスポンスを読むこと」だけなので、書き込みは通ってしまう。
 // 認証が無い以上ここが最後の砦なので、**明示的に 403 で断る**
 app.use((req, res, next) => {
+  // #268: 画面そのもの (静的配信) は他所のリンクから開けてよい — リンクを踏んだ通常の遷移も
+  // `Sec-Fetch-Site: cross-site` で来るので、全 path に掛けると「よそからURLを開けない」画面になる
+  // (Codexレビュー P2)。守る対象は状態を持つ API/MCP/Socket.IO と、書き込みうる method だけ。
+  // 静的な GET/HEAD は読み取りのみで、dist の中身は Public リポジトリのビルド成果物 (秘密なし)
+  const guarded =
+    req.path.startsWith("/api/") ||
+    req.path.startsWith("/mcp") ||
+    req.path.startsWith("/socket.io") ||
+    (req.method !== "GET" && req.method !== "HEAD");
+  if (!guarded) return next();
   // Sec-Fetch-Site はブラウザが自分で付ける (ページ側から偽装できない)。
   // Origin の付かない `<img src>` のような subresource GET を捕まえるのはこちら
   if (isBrowserCrossSite(req.header("Sec-Fetch-Site"))) {

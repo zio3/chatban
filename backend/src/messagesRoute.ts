@@ -224,13 +224,13 @@ export async function messagesCompletion(
   // 効いているからで、素の fetch には何も掛からない。呼び出し側の大半 (chat / archive-decompose) は
   // opts を渡さないので、既定が無いと「応答が返らないまま詰まるのを防ぐ」という chatCompletion の
   // 約束がこの経路だけ守られない。
-  //
-  // 詰まると chatInflight が解放されず、そのプロジェクトの提案生成まで止まり続ける (#162) —
-  // 1本のリクエストが返らないだけでは済まない (外部レビュー指摘)
+  // (かつては詰まると chatInflight が解放されず提案生成まで止まった #162 — その仕組みは
+  // #271 で提案ごと撤去したが、「返らないまま詰まらせない」約束自体は変わらない)
   const timer = setTimeout(() => ctrl.abort(), opts?.timeoutMs ?? DEFAULT_TIMEOUT_MS);
   // **すでに中断済みなら、その場でやめる。**addEventListener は「これから起きる abort」しか拾わないので、
-  // 呼ばれた時点で aborted な signal を渡されると誰も ctrl を止めず、fetch がそのまま走ってしまう。
-  // #162 が消したかった並走 (先に始まった suggest がチャットと重なる) がここだけ残っていた
+  // 呼ばれた時点で aborted な signal を渡されると誰も ctrl を止めず、fetch がそのまま走ってしまう
+  // (発覚時の実例は #162 の suggest 中断。suggest は #271 で撤去したが、signal を渡す呼び出し側が
+  //  また現れたときに同じ穴を踏まないよう、この処理は残す)
   if (opts?.signal?.aborted) ctrl.abort();
   else opts?.signal?.addEventListener("abort", () => ctrl.abort(), { once: true });
   let res: Response;

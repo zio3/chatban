@@ -34,9 +34,9 @@ export function isAllowedOrigin(origin: string | undefined | null, allowed: stri
 /** **Origin が付かないブラウザ要求**を捕まえるための第2の判定。
  *
  * 悪意あるページは `<img src="http://localhost:8787/api/...">` で GET を撃てる。
- * この要求に Origin は付かないので `isAllowedOrigin` は通してしまう。実際、
- * `GET /api/suggestions` は**有料のLLM呼び出しを起こす**ので、開いているだけで
- * 課金と記録を増やされる経路だった (自動レビュー指摘)。
+ * この要求に Origin は付かないので `isAllowedOrigin` は通してしまう。発覚時の実例は
+ * 旧 `GET /api/suggestions` (#271で撤去) — **有料のLLM呼び出しを起こす**ので、
+ * 開いているだけで課金と記録を増やされる経路だった (自動レビュー指摘)。
  *
  * `Sec-Fetch-Site` は**ブラウザが自分で付ける**ヘッダ (ページ側から偽装できない)。
  * `cross-site` を断れば、他所のページからの要求は方式を問わず落ちる。

@@ -8,7 +8,7 @@ import express from "express";
 import type { Request, Response } from "express";
 import { Server } from "socket.io";
 import { foldDoneColumn, foldedContainer, onCardReopened } from "./archive.js";
-import { generateSuggestions, runChatTurn } from "./chat.js";
+import { runChatTurn } from "./chat.js";
 import { warnIfConfigNotIgnored } from "./config.js";
 import { hooks } from "./hooks.js";
 import { upstreamRefused } from "./llm.js";
@@ -550,20 +550,8 @@ app.post("/api/cards/:id/chat", async (req, res) => {
 //  - GET/POST /api/settings/models — 用途別モデルの実行時切り替え (#88)
 // デバッグは backend/logs/ で足りる。モデルの供給元は backend/config.json (#182、config.ts)
 
-// AI提案チップ (#75): ボードの文脈から「いま価値のある操作」を最大3つ。失敗時は空配列 (固定チップが保険)
-// #180: **POST にしてあるのは副作用があるから。**ここは有料のLLM呼び出しを起こす。
-// GET のままだと、悪意あるページが `<img src>` で撃つだけで課金を増やせる
-// (Origin が付かないので Origin 判定では止まらない。自動レビュー指摘)。
-// 「読み取りに見えるがお金が動く」ものは GET に置かない
-app.post("/api/suggestions", async (_req, res) => {
-  try {
-    res.json({ suggestions: await generateSuggestions() });
-  } catch (e: any) {
-    // #259: ここもLLMの呼び出しなので、上流のエラー本文が入りうる (同じスイッチ)
-    log("chat", `suggestions failed: ${logError(e)}`);
-    res.json({ suggestions: [] });
-  }
-});
+// #75 → #271: ここに POST /api/suggestions (AI提案チップ) があった。機能ごと撤去 (zio判断 8/28)。
+// 「有料の呼び出しを GET に置かない」(#180) の判断はチャット系の他の口に生きている
 
 /** メンバー名の配列として受け取れる形か。書き込みを始める前に確かめる。
  *

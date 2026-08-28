@@ -25,11 +25,6 @@ const TOOL_LABELS: Record<string, string> = {
   update_project_context: "前提情報更新",
 };
 
-export interface Suggestion {
-  label: string;
-  message: string;
-}
-
 /** #NN メンションをMarkdownリンクに変換 (リンク先は #card-NN、レンダラ側でクリックを拾う) */
 // #248: **判定は cardLinks.ts に1つ。**ここには以前 linkifyMentions があり、
 // `#12` を `[#12](#card-12)` という文字列に書き換えてからMarkdownに食わせていた。
@@ -54,7 +49,6 @@ export default function Chat({
   log,
   sending,
   elapsedSec,
-  suggestions,
   askOptions,
   onOpenCard,
   onSend,
@@ -65,7 +59,6 @@ export default function Chat({
   log: ChatEntry[];
   sending: boolean;
   elapsedSec: number;
-  suggestions: Suggestion[];
   /** #213: 添付の入口が開いているか (公開デモでは閉じる)。押せないボタンを出さないため */
   canAttach?: boolean;
   /** AIが直前の返答に添えた簡易返信。押すとその文字列がそのまま発言として送られ、次の発言で消える */
@@ -93,7 +86,9 @@ export default function Chat({
     el.style.height = `${Math.min(el.scrollHeight, 150)}px`;
   }
 
-  // スプリッター: 上端をドラッグしてログ欄の高さを調整 (localStorageに保存)。
+  // スプリッター: 上端をドラッグしてログ欄の**上限**を調整 (localStorageに保存)。
+  // #271: 手で動かすのは常に「上限 (設定値)」で、実際の高さは min(内容, 上限)。
+  // 内容が少なければ広げた直後でも縮む — 「内容が無いのに空白の枠が開いている」を作らない
   // ドラッグ処理は useSplitter (#246)
   const startResize = useSplitter({
     current: logHeight,
@@ -106,7 +101,9 @@ export default function Chat({
     },
   });
 
-  // チャットはこのシステムのアイデンティティなので常設 (畳みUIは廃止 zio判断 8/9)
+  // 8/9 の「チャット常設 (畳みUI廃止)」は #271 で言い直した (zio判断 8/28):
+  // **入力欄は常設、ログ枠は会話があるときだけ**。リコメンドチップの撤去で
+  // 「会話前のログ枠」に置くものが無くなったため
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
   }, [log]);
@@ -154,6 +151,8 @@ export default function Chat({
         </div>
       )}
       <div>
+        {/* #271: ログ枠 (帯ごと) は会話があるときだけ。空のときは入力欄だけが残る */}
+        {log.length > 0 && (
         <div className="min-h-0">
           {/* #131: スプリッター行を「本文の外の帯」として使い、🆕 をここに置く。
               以前はログ領域に absolute で浮かせていたため、右寄せのユーザー吹き出しと
@@ -167,21 +166,20 @@ export default function Chat({
             className="group relative flex h-6 cursor-row-resize touch-none items-center justify-center bg-slate-50 hover:bg-indigo-50"
           >
             <div className="h-1 w-10 rounded-full bg-slate-300 group-hover:bg-indigo-400" />
-            {/* 🆕 F5せずに初期状態(チップ+AI提案)へ戻す。表示とLLM文脈のリセットでDBの記録は残る。
+            {/* 🆕 表示とLLM文脈のリセット (DBの記録は残る)。ログ枠ごと畳まれて入力欄だけに戻る。
                 この行はドラッグ領域なので、ボタンの上ではリサイズを始めない */}
-            {log.length > 0 && (
-              <button
-                onPointerDown={(e) => e.stopPropagation()}
-                onClick={onReset}
-                title="会話をリセットして最初の提案に戻る (会話ログはDBに残ります)"
-                className="absolute right-3 cursor-pointer rounded-full bg-white px-2 py-0.5 text-[11px] text-slate-500 shadow-sm hover:bg-slate-100 hover:text-slate-700"
-              >
-                🆕 新しい会話
-              </button>
-            )}
+            <button
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={onReset}
+              title="会話をリセットする (会話ログはDBに残ります)"
+              className="absolute right-3 cursor-pointer rounded-full bg-white px-2 py-0.5 text-[11px] text-slate-500 shadow-sm hover:bg-slate-100 hover:text-slate-700"
+            >
+              🆕 新しい会話
+            </button>
           </div>
-          <div className="relative" style={{ height: logHeight }}>
-            <div ref={scrollRef} className="h-full space-y-2 overflow-y-auto px-4 py-3">
+          {/* #271: height でなく maxHeight — 実際の高さは内容が決め、上限だけ手で決める */}
+          <div className="relative">
+            <div ref={scrollRef} className="space-y-2 overflow-y-auto px-4 py-3" style={{ maxHeight: logHeight }}>
               {log.map((e, i) => (
                 <div key={i} className={`flex ${e.role === "user" ? "justify-end" : "justify-start"}`}>
                   <div
@@ -267,8 +265,6 @@ export default function Chat({
                   </div>
                 </div>
               ))}
-              {/* リコメンドチップは会話が始まる前だけ表示 (押した瞬間チャットが始まり消える #75)。
-                  固定チップ=即時 / ✨AI提案=非同期でちょい後に合流 */}
               {/* AIが添えた簡易返信ボタン。承認UIではなく入力の近道なので、
                   押さずに自由に打ち返してよいし、無視して別の話をしてもよい */}
               {askOptions.length > 0 && !sending && (
@@ -285,24 +281,12 @@ export default function Chat({
                   ))}
                 </div>
               )}
-              {log.length === 0 && suggestions.length > 0 && (
-                <div className="flex flex-wrap items-center gap-2.5 pt-2">
-                  {suggestions.map((s, i) => (
-                    <button
-                      key={i}
-                      disabled={sending}
-                      onClick={() => onSend(s.message)}
-                      // 会話前の画面に4〜6個並ぶので、青一色にしない (B/C案の判断)。
-                      // 押せることはホバーで示す
-                      className="rounded-2xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-medium text-slate-600 shadow-sm hover:border-indigo-300 hover:bg-indigo-50 hover:text-indigo-700 disabled:opacity-40"
-                    >
-                      {s.label}
-                    </button>
-                  ))}
-                </div>
-              )}
+              {/* #271: 会話前のリコメンドチップ (固定+AI提案) はここに並んでいた。
+                  ログ枠自体が会話前は出なくなったので、置き場ごと撤去 */}
             </div>
           </div>
+        </div>
+        )}
           {/* 入力欄はClaude/ChatGPT作法: 角丸ピル+先頭の「+」=ファイル添付 (#68)。新規会話はログ右上の🆕 */}
           <div className="border-t border-slate-100 px-4 py-3">
             <AttachmentTray attachments={atts.attachments} error={atts.error} onRemove={atts.remove} />
@@ -374,7 +358,6 @@ export default function Chat({
               </button>
             </div>
           </div>
-        </div>
       </div>
     </section>
   );

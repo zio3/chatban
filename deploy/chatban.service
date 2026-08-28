@@ -21,7 +21,7 @@ Environment=NODE_ENV=production
 Environment=TZ=Asia/Tokyo
 Environment=CHATBAN_ALLOWED_ORIGINS=https://chatban.zio3.net
 # 公開デモの既定値をまとめて入れる (#213)。中身は backend/src/demoMode.ts:
-#   添付を閉じる / JSONの上限を256kbへ / 提案チップを実質OFF (人が何もしていなくても呼ばれるのを避ける)
+#   添付を閉じる / JSONの上限を256kbへ (提案チップの実質OFFもここにあったが、#271 で機能ごと撤去)
 # 個別の環境変数を書けばそちらが勝つ。
 Environment=DEMO_MODE=on
 Environment=PATH=/opt/node/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin

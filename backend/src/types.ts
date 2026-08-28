@@ -55,5 +55,7 @@ export type UiAction = {
 /** 書き込み経路 (チャット / MCP) が画面へ伝える出来事。**名前を1か所に置く** —
  * 以前は同じユニオンが4か所に書いてあり、種類を足すときに全部を直す必要があった (#226 と同じ形)。
  *
- * board: 板の中身が変わった / proposals: 提案チップ / context: プロジェクトの前提情報 */
-export type ViewEvent = "board" | "proposals" | "context";
+ * board: 板の中身が変わった / context: プロジェクトの前提情報
+ * (proposals もあったが、生成する側も受ける側も無い死んだ名前だったので #271 で落とした —
+ *  型に残すと、撤去済みイベントを型安全に渡せて黙って何も起きない) */
+export type ViewEvent = "board" | "context";

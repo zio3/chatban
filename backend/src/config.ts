@@ -18,7 +18,7 @@ import { log } from "./log.js";
 
 export type ApiStyle = "chat" | "messages";
 /** #202: かつては main / archive / cheap の3つだった。#200 で要約の蒸留を撤去し、
- * LLMを呼ぶのは対話 (と提案チップ) だけになったので main 1つに戻した。
+ * LLMを呼ぶのは対話だけになったので main 1つに戻した (提案チップも #271 で撤去)。
  * 使わないスロットを必須のまま残すと、**使わない値を書かないと起動しない** */
 export type ModelSlot = "main";
 

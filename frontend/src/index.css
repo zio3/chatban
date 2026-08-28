@@ -11,9 +11,11 @@ html, body, #root {
 }
 
 /* #246: ページ全体は固定レイアウト (スクロールは内側の overflow-auto が担う) なので、
-   端で引っ張ったときにページごとバウンスしたり pull-to-refresh が誤発火したりしないようにする */
+   端で引っ張ったときにページごとバウンスしたり pull-to-refresh が誤発火したりしないようにする。
+   縦 (-y) に限定する — ショートハンドの none は横スワイプの「戻る/進む」まで無効にする
+   (プロジェクト切替は location.href で履歴を積むので、戻るジェスチャは生かしておく。Codexレビュー P2) */
 body {
-  overscroll-behavior: none;
+  overscroll-behavior-y: none;
 }
 
 /* ボードカードのハイライトフラッシュ (詳細パネルの「ボードで表示」) */

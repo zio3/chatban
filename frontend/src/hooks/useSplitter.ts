@@ -1,4 +1,4 @@
-import { useCallback } from "react";
+import { useCallback, useRef } from "react";
 
 /** #246: スプリッタのドラッグ処理。CardDetailPanel (横幅) と Chat (高さ) に
  * 同じ作りの startResize が2つあり、どちらもタッチで効かなかったので1本に寄せた。
@@ -26,9 +26,18 @@ export function useSplitter(opts: {
 }) {
   const { current, delta, clamp, onChange, onCommit } = opts;
 
+  // ドラッグ中のポインタID。**1本に限定する** (Codexレビュー P3) —
+  // 2本目の指が同じ grip に触れると startResize が二重にリスナを登録し、
+  // 両方の closure が両ポインタの move を処理して値が跳ね、片方の up で全部終わる。
+  // 旧 window リスナ方式にも同じ競合があった (新規退行ではなく、hook化のついでに塞ぐ)
+  const active = useRef<number | null>(null);
+
   return useCallback(
     (e: React.PointerEvent<HTMLElement>) => {
       e.preventDefault();
+      if (active.current !== null) return; // 既に別の指がドラッグ中
+      active.current = e.pointerId;
+
       const el = e.currentTarget;
       const startX = e.clientX;
       const startY = e.clientY;
@@ -38,8 +47,13 @@ export function useSplitter(opts: {
       // capture中は move/up が必ずこの要素に届く。要素が消えたりcaptureが
       // 失われたりしたときは pointercancel が来るので、そこでも後始末する
       el.setPointerCapture(e.pointerId);
-      const onMove = (ev: PointerEvent) => onChange(value(ev));
+      const onMove = (ev: PointerEvent) => {
+        if (ev.pointerId !== active.current) return;
+        onChange(value(ev));
+      };
       const finish = (ev: PointerEvent) => {
+        if (ev.pointerId !== active.current) return;
+        active.current = null;
         onCommit(value(ev));
         el.removeEventListener("pointermove", onMove);
         el.removeEventListener("pointerup", finish);

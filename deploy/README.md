@@ -54,9 +54,12 @@ curl https://chatban.zio3.net/version.txt   # 動いているコミット。-dir
 curl https://chatban.zio3.net/api/board     # attachments が false なら DEMO_MODE が効いている
 ```
 
-**この attachments の読みはデモ専用。**個人運用 (DEMO_MODE なし) で false になるのは
-**LLM のキーが読めていない**サイン (`canAcceptAttachments()` が catch で false を返す) で、
-DEMO_MODE とは無関係 (miniPC 据え付けで誤診しかけた `#269`)。
+**この attachments の読みはデモ専用。**個人運用 (DEMO_MODE なし) の期待値は true で、
+false なら「添付を受けられない理由がある」サイン — 明示の `CHATBAN_ATTACHMENTS=off`、
+`apiStyle: "messages"` (Anthropic形式は添付経路が別)、または **config.json の読み込み・検証の失敗**
+(ファイルが無い・JSON不正・キー未読を含む) のいずれか (`canAcceptAttachments()` の実装どおり)。
+据え付け直後なら大抵は最後のやつ — miniPC で「DEMO_MODE では?」と誤診しかけ、
+実際はキー未投入だった (`#269`)。
 
 `version.txt` はビルドが作ります (`frontend/vite-plugin-version.ts`)。手で置かないこと —
 次のビルドで消えます。

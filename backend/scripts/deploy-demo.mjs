@@ -60,7 +60,7 @@ async function main() {
   const sha = capture("git", ["rev-parse", "HEAD"], ROOT, owner);
   if (touchService) await health();
   console.log(`\n反映しました: ${sha}`);
-  console.log(`確認: /version.txt と GET /api/board (attachments が false なら DEMO_MODE が効いている)`);
+  console.log(`確認: /version.txt と GET /api/board の attachments (期待値はデプロイ先の設定次第 — deploy/README.md の「反映したか確かめる」参照)`);
 }
 
 /** ファイルの持ち主。root で走らせても、リポジトリを root 所有にしてしまわないため。

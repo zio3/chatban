@@ -36,12 +36,16 @@ VPS の `/etc/systemd/system/` に置いてあるものと同じ内容を、こ�
 反映は毎朝のタイマーで自動に走ります。**急ぐときだけ手で叩きます**:
 
 ```sh
-sudo -E node backend/scripts/deploy-demo.mjs        # 確認あり
+sudo env PATH=/opt/node/bin:$PATH node backend/scripts/deploy-demo.mjs   # 確認あり
 sudo systemctl start chatban-reset.service          # 毎朝と同じもの (デプロイ + リセット)
 ```
 
-`-E` は PATH を渡すため (sudo は secure_path で PATH を作り直すので、
-`/opt/node/bin` に node を置いていると npm が見つからない)。
+PATH を渡すのは、sudo が secure_path で PATH を作り直すため
+(`/opt/node/bin` に node を置いていると npm が見つからない)。`sudo -E` で渡す手も
+あるが、**サーバーによっては "preserving the entire environment is not supported" で
+無視される** (miniPC で実際に踏んだ `#269`) ので、`sudo env PATH=...` の形が確実。
+root で走らせると git が dubious ownership で止まることがある — そのときは
+`sudo git config --global --add safe.directory /opt/chatban/app` を一度入れる。
 
 ## 反映したか確かめる
 
@@ -49,6 +53,10 @@ sudo systemctl start chatban-reset.service          # 毎朝と同じもの (デ
 curl https://chatban.zio3.net/version.txt   # 動いているコミット。-dirty なら手で触った版
 curl https://chatban.zio3.net/api/board     # attachments が false なら DEMO_MODE が効いている
 ```
+
+**この attachments の読みはデモ専用。**個人運用 (DEMO_MODE なし) で false になるのは
+**LLM のキーが読めていない**サイン (`canAcceptAttachments()` が catch で false を返す) で、
+DEMO_MODE とは無関係 (miniPC 据え付けで誤診しかけた `#269`)。
 
 `version.txt` はビルドが作ります (`frontend/vite-plugin-version.ts`)。手で置かないこと —
 次のビルドで消えます。
@@ -109,10 +117,11 @@ sudo systemctl daemon-reload && sudo systemctl enable --now chatban
 確認: `journalctl -u chatban -n 3` に `(フロントも配信: ...)` が出ること。
 `(APIのみ...)` なら dist が無い = フロントのビルドを忘れている。
 
-更新 (デモの `deploy-demo.mjs` を共用。ヘルスチェックの宛先だけ差し替える):
+更新 (デモの `deploy-demo.mjs` を共用。ヘルスチェックの宛先だけ差し替える。
+`sudo -E` を使わないのは上のデモ節と同じ理由。非対話で流すときだけ `echo y |` を頭に付ける):
 
 ```sh
-sudo -E env CHATBAN_HEALTH_URL=http://127.0.0.1:8787/api/board   node backend/scripts/deploy-demo.mjs
+cd /opt/chatban/app && sudo env PATH=/opt/node/bin:$PATH CHATBAN_HEALTH_URL=http://127.0.0.1:8787/api/board node backend/scripts/deploy-demo.mjs
 ```
 
 **データのバックアップはこのリポジトリの外** (運用側の夜間バックアップ) に登録すること。

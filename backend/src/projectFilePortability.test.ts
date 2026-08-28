@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFileSync } from "node:fs";
 
 /** #270: **Windows で作った板を Linux へ持ち込むと実DBを見失う**の番人。
  *
@@ -26,4 +27,19 @@ test("読み込みはどちらの区切りでも同じ部品に分解する (#27
   // 既存DBに残る Windows join 由来の行 (移行せずそのまま読めることが要件)
   assert.deepEqual(projectFileParts("projects\\1-chatban.db"), ["projects", "1-chatban.db"]);
   assert.deepEqual(projectFileParts("projects/1-chatban.db"), ["projects", "1-chatban.db"]);
+});
+
+test("本番の読込口 (projectFilePath) が正規化を経由している (#270 Codexレビュー P2)", () => {
+  // 上の2本だけだと、projectFilePath を `join(DATA_DIR, p.file)` に戻して helper を
+  // 置き去りにしても通ってしまう (配線を見張れていない)。挙動では見張れない —
+  // Windows ではバックスラッシュも区切りとして機能するので、正規化の有無が
+  // ファイルシステム上で区別できない。だからソースを直接見る
+  const src = readFileSync(new URL("./store.ts", import.meta.url), "utf8");
+  const body = src.match(/function projectFilePath[\s\S]*?\n\}/)?.[0];
+  assert.ok(body, "store.ts に projectFilePath が見つからない (改名したらこのテストも直す)");
+  assert.match(
+    body,
+    /projectFileParts\(/,
+    "projectFilePath が projectFileParts を通っていない。`join(DATA_DIR, p.file)` に戻すと Linux で実DBを見失う (#270)"
+  );
 });

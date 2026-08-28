@@ -5,6 +5,7 @@ import { cardRefId, remarkCardLinks } from "../cardLinks";
 import { api } from "../api";
 import { useAttachments } from "../hooks/useAttachments";
 import { useChatTurn } from "../hooks/useChatTurn";
+import { useSplitter } from "../hooks/useSplitter";
 import AttachmentTray from "./AttachmentTray";
 import ThinkingIndicator from "./ThinkingIndicator";
 import { DepChip, DueBadge } from "./Board";
@@ -85,23 +86,17 @@ export default function CardDetailPanel({
     atts.clear();
   }
 
-  // 左端ドラッグで幅調整 (localStorageに保存)
-  function startResize(e: React.PointerEvent) {
-    e.preventDefault();
-    const startX = e.clientX;
-    const startWidth = width;
-    const clamp = (w: number) => Math.min(Math.max(w, 320), Math.round(window.innerWidth * 0.7));
-    function onMove(ev: PointerEvent) {
-      setWidth(clamp(startWidth + (startX - ev.clientX)));
-    }
-    function onUp(ev: PointerEvent) {
-      localStorage.setItem("chatban.panelWidth", String(clamp(startWidth + (startX - ev.clientX))));
-      window.removeEventListener("pointermove", onMove);
-      window.removeEventListener("pointerup", onUp);
-    }
-    window.addEventListener("pointermove", onMove);
-    window.addEventListener("pointerup", onUp);
-  }
+  // 左端ドラッグで幅調整 (localStorageに保存)。ドラッグ処理は useSplitter (#246)
+  const startResize = useSplitter({
+    current: width,
+    delta: (dx) => -dx, // 左へ動かすと幅が増える
+    clamp: (w) => Math.min(Math.max(w, 320), Math.round(window.innerWidth * 0.7)),
+    onChange: setWidth,
+    onCommit: (w) => {
+      setWidth(w);
+      localStorage.setItem("chatban.panelWidth", String(w));
+    },
+  });
 
   return (
     <aside
@@ -113,14 +108,18 @@ export default function CardDetailPanel({
           : "fixed inset-0 z-40 flex flex-col bg-white"
       }
     >
-      {/* 幅スプリッター (スマホの全画面時は不要) */}
+      {/* 幅スプリッター (スマホの全画面時は不要)。
+          #246: touch-none が無いとタッチではブラウザがジェスチャをスクロールへ取り、
+          ドラッグが効かない (FireTab 実機で報告)。掴み領域は w-2 (8px) では指に小さいので、
+          -left-2 で外へ広げて 16px にする (見た目の線は今までどおり細いまま)。
+          目印はタッチに hover が無いので、常時見える色を一段濃くした */}
       {isWide && (
         <div
           onPointerDown={startResize}
           title="ドラッグで幅を調整"
-          className="group absolute inset-y-0 left-0 z-10 flex w-2 cursor-col-resize items-center justify-center hover:bg-indigo-50"
+          className="group absolute inset-y-0 -left-2 z-10 flex w-4 cursor-col-resize touch-none items-center justify-center hover:bg-indigo-50/70"
         >
-          <div className="h-10 w-1 rounded-full bg-slate-200 group-hover:bg-indigo-400" />
+          <div className="h-10 w-1 rounded-full bg-slate-300 group-hover:bg-indigo-400" />
         </div>
       )}
 

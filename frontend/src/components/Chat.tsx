@@ -3,6 +3,7 @@ import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { cardRefId, remarkCardLinks, splitCardRefs } from "../cardLinks";
 import { useAttachments, type Attachment } from "../hooks/useAttachments";
+import { useSplitter } from "../hooks/useSplitter";
 import AttachmentTray from "./AttachmentTray";
 import ThinkingIndicator from "./ThinkingIndicator";
 import type { ChatEntry } from "../types";
@@ -92,24 +93,18 @@ export default function Chat({
     el.style.height = `${Math.min(el.scrollHeight, 150)}px`;
   }
 
-  // スプリッター: 上端をドラッグしてログ欄の高さを調整 (localStorageに保存)
-  function startResize(e: React.PointerEvent) {
-    e.preventDefault();
-    const startY = e.clientY;
-    const startHeight = logHeight;
-    function onMove(ev: PointerEvent) {
-      const next = Math.min(Math.max(startHeight + (startY - ev.clientY), 120), Math.round(window.innerHeight * 0.75));
-      setLogHeight(next);
-    }
-    function onUp(ev: PointerEvent) {
-      const finalHeight = Math.min(Math.max(startHeight + (startY - ev.clientY), 120), Math.round(window.innerHeight * 0.75));
-      localStorage.setItem("chatban.logHeight", String(finalHeight));
-      window.removeEventListener("pointermove", onMove);
-      window.removeEventListener("pointerup", onUp);
-    }
-    window.addEventListener("pointermove", onMove);
-    window.addEventListener("pointerup", onUp);
-  }
+  // スプリッター: 上端をドラッグしてログ欄の高さを調整 (localStorageに保存)。
+  // ドラッグ処理は useSplitter (#246)
+  const startResize = useSplitter({
+    current: logHeight,
+    delta: (_dx, dy) => -dy, // 上へ動かすと高さが増える
+    clamp: (h) => Math.min(Math.max(h, 120), Math.round(window.innerHeight * 0.75)),
+    onChange: setLogHeight,
+    onCommit: (h) => {
+      setLogHeight(h);
+      localStorage.setItem("chatban.logHeight", String(h));
+    },
+  });
 
   // チャットはこのシステムのアイデンティティなので常設 (畳みUIは廃止 zio判断 8/9)
   useEffect(() => {
@@ -167,7 +162,9 @@ export default function Chat({
           <div
             onPointerDown={startResize}
             title="ドラッグでチャット欄の高さを調整"
-            className="group relative flex h-6 cursor-row-resize items-center justify-center bg-slate-50 hover:bg-indigo-50"
+            // #246: touch-none が無いとタッチではブラウザがジェスチャをスクロールへ取り、
+            // ドラッグが効かない (FireTab 実機で報告)。この帯は h-6 (24px) あるので幅はそのまま
+            className="group relative flex h-6 cursor-row-resize touch-none items-center justify-center bg-slate-50 hover:bg-indigo-50"
           >
             <div className="h-1 w-10 rounded-full bg-slate-300 group-hover:bg-indigo-400" />
             {/* 🆕 F5せずに初期状態(チップ+AI提案)へ戻す。表示とLLM文脈のリセットでDBの記録は残る。

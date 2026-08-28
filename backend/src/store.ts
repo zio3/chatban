@@ -491,7 +491,10 @@ export function getProject(id: number): ProjectRow | undefined {
 function insertProject(name: string): ProjectRow {
   const info = admin.prepare("INSERT INTO projects (name, file) VALUES (?, '')").run(name);
   const id = Number(info.lastInsertRowid);
-  const file = join("projects", `${id}-${slug(name)}.db`);
+  // #270: 区切り文字を join (=OSの区切り) に任せない。Windows で作った板を Linux へ持ち込むと、
+  // `projects\1-chatban.db` が「バックスラッシュ含みの1ファイル名」と解釈され、実DBを見失って
+  // 同名の空DBを作り直す (miniPC移行で実際に踏んだ。起動は成功しプロジェクト名も並ぶので気づきにくい)
+  const file = `projects/${id}-${slug(name)}.db`;
   admin.prepare("UPDATE projects SET file = ? WHERE id = ?").run(file, id);
   return getProject(id)!;
 }
@@ -521,8 +524,17 @@ function deleteProjectRow(id: number): void {
   admin.prepare("DELETE FROM projects WHERE id = ?").run(id);
 }
 
+/** #270: `projects.file` をパス部品に分解する。既存の行には Windows の join が書いた
+ * `projects\...` が残っている (このバグを踏む前に作られたDB全部)。書き込み側を直しても
+ * 読めなければ同じ事故になるので、どちらの区切りでも分解してから今のOSの join で組み直す。
+ * データ移行は要らない。純粋関数なのは、Linux の挙動 (バックスラッシュはただの文字) を
+ * Windows の実ファイルシステムでは再現できず、テストがここを直接見るしかないため */
+export function projectFileParts(file: string): string[] {
+  return file.split(/[\\/]/);
+}
+
 function projectFilePath(p: ProjectRow): string {
-  return join(DATA_DIR, p.file);
+  return join(DATA_DIR, ...projectFileParts(p.file));
 }
 
 // 開いたハンドルは使い回す (better-sqlite3は同期APIなのでプロセス内で持てば足りる)

@@ -12,7 +12,6 @@ import {
   trashCard,
   getCard,
   getCards,
-  listCards,
   PUBLIC_TABLES,
   queryLogHelp,
   queryProjectData,
@@ -20,12 +19,10 @@ import {
   searchCards,
   setProjectContext,
 } from "./db.js";
-import { currentProjectId, customLanes } from "./store.js";
+import { customLanes } from "./store.js";
 import { agentStatusValues, parseToolArgs, reorderableStatuses } from "./toolArgs.js";
 import { chatCompletion } from "./llm.js";
 import { getModel } from "./config.js";
-import { foldedContainer } from "./archive.js";
-import { suggestBootGraceMs } from "./demoMode.js";
 import { argDetail, argShape, choicesDetail, isFailure, outcomeOf, safeToolName, throwOutcome } from "./mcpLog.js";
 import { log } from "./log.js";
 import type { CustomLane, UiAction, ViewEvent } from "./types.js";
@@ -783,189 +780,11 @@ function buildAttachmentParts(attachments: ChatAttachment[]): OpenAI.Chat.Comple
   );
 }
 
-/** AI提案チップ (#75): ボードの文脈から「いま価値のある操作」を提案する。
- * チャットと同一のシステムプロンプト+ツール定義で呼ぶことで、キャッシュ済みプレフィックスに相乗りする */
-// 提案はボード状態だけの関数なので、同じ状態なら作り直さない。
-// StrictModeの二重実行・複数タブ・F5連打・🆕新しい会話のいずれでもLLMを再度叩かずに済む
-// (クライアント側を直しても他の経路が残るため、費用の歯止めはサーバー側に置く)
-// #209: **プロジェクトごとに持つ。**以前は単一スロットで、タブが別プロジェクトを開いていると
-// 読み込むたびに互いを蹴り出して毎回ミスしていた (実測 2026-08-17: #1/#4/#6/#2/#11 の5つが同時に動き、
-// 5分TTLがあるのに suggest が781回)。#119 で suggestInflight を同じ理由でプロジェクト単位にしたのに、
-// **キャッシュだけ1個のまま残っていた** — 同じ穴を片方だけ塞いだ形
-const suggestCache = new Map<number, { value: { label: string; message: string }[]; at: number }>();
-// E2Eだけ 0 にする (playwright.config.ts)。#209でキャッシュがボードの中身を見なくなったため、
-// テスト側が「ボードを変えてキャッシュを外す」手で呼び出しを起こせなくなった (#162の中断テスト)
-const SUGGEST_TTL_MS = Number(process.env.SUGGEST_TTL_MS ?? 5 * 60 * 1000);
-
-/** #209: 起動直後は提案を出さない。**開発中の再起動のたびに全タブが呼び直すのを避ける**ため
- * (tsx watch は1日35回走っていた)。キャッシュはプロセス内なので再起動で空になり、
- * 直後の読み込みは必ずミスする — そこだけ塞ぐ。
- *
- * **タイマーは持たない。**「時間が来たら呼ぶ」ではなく「リクエストが来た時点で判定する」
- * (読み取りは状態を変えない #200 と同じ形)。
- *
- * 環境で分岐させない。NODE_ENV で切ると「開発では出ないが本番では出る」差ができ、
- * 動かして確かめられなくなる。本番は再起動が滅多に無いので存在しないのと同じ */
-// E2Eだけ 0 にする (playwright.config.ts)。AUTO_ARCHIVE=0 と同じ形の試験用の口で、
-// **NODE_ENV による自動分岐ではない** — 既定は開発でも本番でも同じ60秒
-const BOOT_GRACE_MS = suggestBootGraceMs();
-const BOOTED_AT = Date.now();
-// #119: 同時実行の合流。1本しか持たないと、プロジェクトAの生成中にBが要求したとき
-// Aの結果がBへ返る (タブごとに別プロジェクト #97)。
-// #209: キーを systemPrompt から**プロジェクトIDへ変えた。**キャッシュがボードの中身を見なく
-// なったので、こちらだけ内容単位のままだと「同じプロジェクトで内容が僅かに違うタブ」が並走する
-const suggestInflight = new Map<number, Promise<{ label: string; message: string }[]>>();
-
-/** #162: いまチャットを処理中のプロジェクト。提案チップはこの間だけ譲る。
- *
- * 上流が遅いときに並走するとTTFTが目に見えて悪化する (実測: 単独12秒 → chat+chat+suggest の
- * 3本並走で30〜55秒)。しかもチップは「会話が始まる前」にしか表示されない (log.length===0) ので、
- * 送信した瞬間から画面に出る余地が無い — **表示されないものを作るために待たされていた**。
- *
- * プロジェクト単位で持つのは #119 と同じ理由。1本しか持たないと、
- * Aのチャット中にBの提案まで止まる (タブごとに別プロジェクト #97) */
-const chatInflight = new Map<number, number>();
-
-export function isChatBusy(projectId: number): boolean {
-  return (chatInflight.get(projectId) ?? 0) > 0;
-}
-
-/** 進行中の提案生成。チャットが始まったら中断する。
- *
- * 開始時のフラグを見るだけでは**片方向にしか効かない** (外部レビュー指摘)。
- * 実際の画面ではページ表示直後に /api/suggestions が走るので、
- * 「suggest開始 → chat開始」が普通の順番で、そのままでは並走が残っていた。
- *
- * 結果を捨てるだけでは足りない — 上流の応答は待ち続けるので、
- * 止めたかったTTFTの奪い合いがそのまま残る。**接続ごとやめる**必要がある。
- *
- * #209で suggestInflight をプロジェクト単位にしたので並走は起きにくくなったが、
- * 中断は「いま走っているものを全部止める」でよいので Set のまま持つ (取りこぼしを作らない) */
-const suggestAborts = new Map<number, Set<AbortController>>();
-
-function abortSuggestsFor(projectId: number): void {
-  const set = suggestAborts.get(projectId);
-  if (!set?.size) return;
-  for (const ac of set) ac.abort();
-  set.clear();
-  log("chat", `提案の生成を中断しました (project #${projectId} でチャットが始まったため)`);
-}
-
-/** 提案チップの生成を**呼ばずに諦める**条件。null なら呼ぶ。
- *
- * #181: ここを純粋関数に切り出したのは、**この判定**をユニットで固定するため
- * (「諦めると決めたとき実際に呼び出しが0回」までは固定していない — 判定と呼び出しの結線は未検証)。
- * それまでは E2E が `llm_calls` の件数差で確かめていたが、計測系の撤去でテーブルが無くなり、
- * 代わりに共有ログの行数を数える形にしたら**開発サーバーの書き込みで誤判定しうる**状態になった
- * (自動レビュー指摘)。判断を関数にすればDBもログも要らない (#91 #57 と同じ形)。
- *
- * 順番に意味がある: 起動猶予が最優先 (再起動直後は全タブが読み直すので、そこだけ止めたい #209)、
- * 次に会話中は譲る (#162)、最後に空ボード (読むべき文脈が無い #86)。
- * **以前はここの先頭がON/OFF設定だった** (#167 で入れ、#199 で全体1つにした) が、#209 で設定ごと撤去した */
-export function suggestSkipReason(state: {
-  /** 起動からの経過ミリ秒 */
-  sinceBootMs: number;
-  chatBusy: boolean;
-  emptyBoard: boolean;
-  /** 起動猶予。**呼び出し側が必ず渡す。**既定値を持たせるとモジュール変数 (= 環境変数) を
-   * 読むことになり、「純粋関数だからDBもexpressも要らない」が成り立たなくなる —
-   * 実際 #232 の作業中、開発機の SUGGEST_BOOT_GRACE_MS が効いてユニットが2本落ちていた */
-  graceMs: number;
-}): "booting" | "chat-busy" | "empty-board" | null {
-  if (state.sinceBootMs < state.graceMs) return "booting";
-  if (state.chatBusy) return "chat-busy";
-  if (state.emptyBoard) return "empty-board";
-  return null;
-}
-
-export async function generateSuggestions(): Promise<{ label: string; message: string }[]> {
-  const skip = suggestSkipReason({
-    graceMs: BOOT_GRACE_MS,
-    sinceBootMs: Date.now() - BOOTED_AT,
-    chatBusy: isChatBusy(currentProjectId()),
-    // #200: 畳んだ箱も見る。**入口ごとにズレると事故る** — 画面側 (App.tsx の isEmptyBoard) は
-    // 箱を見ているので、ここだけカードしか見ないと「板には箱が出ているのに提案だけ空」になる
-    emptyBoard: listCards().length === 0 && (foldedContainer(currentProjectId()) ?? []).length === 0,
-  });
-  if (skip) return [];
-  const projectId = currentProjectId();
-  const cached = suggestCache.get(projectId);
-  // #209: **ボードの中身では判定しない。**以前はキーが systemPrompt の全文で、索引が1バイト違えば
-  // 作り直していた (タイトルを直す・列を動かす・カードが1件増える、のたびにミス)。
-  // 提案はあれば助かる程度のもので、数分古くても困らない。**「提案は5分間そのまま」**で言い切る
-  if (cached && Date.now() - cached.at < SUGGEST_TTL_MS) return cached.value;
-  // 同時到着 (StrictModeの二重実行はほぼ同時に来る) は1本にまとめる。
-  // **プロンプトを組む前に見る** — 合流するなら組む必要がない
-  const running = suggestInflight.get(projectId);
-  if (running) return running;
-  const systemPrompt = buildSystemPrompt();
-  // チャットが始まったら中断できるようにしておく
-  const project = projectId;
-  const ac = new AbortController();
-  const acs = suggestAborts.get(project) ?? new Set<AbortController>();
-  acs.add(ac);
-  suggestAborts.set(project, acs);
-  const job = generateSuggestionsUncached(systemPrompt, ac.signal)
-    .then((value) => {
-      suggestCache.set(projectId, { value, at: Date.now() });
-      return value;
-    })
-    // 中断は失敗ではない (チャットに譲っただけ)。呼び出し側の catch まで投げず空で返す —
-    // /api/suggestions は失敗を空配列に倒すので結果は同じだが、ログにエラーを残さない
-    .catch((e) => {
-      if (ac.signal.aborted) return [];
-      throw e;
-    })
-    .finally(() => {
-      suggestInflight.delete(projectId);
-      acs.delete(ac);
-      if (acs.size === 0) suggestAborts.delete(project);
-    });
-  suggestInflight.set(projectId, job);
-  return job;
-}
-
-async function generateSuggestionsUncached(
-  systemPrompt: string,
-  signal: AbortSignal
-): Promise<{ label: string; message: string }[]> {
-  const res = await chatCompletion(
-    "suggest",
-    getModel("main"),
-    {
-      messages: [
-      { role: "system", content: systemPrompt },
-      {
-        role: "user",
-        content:
-          'ボードの現状を読んで、いまユーザーにとって価値のある操作を最大3つ提案して。ツールは呼ばない。出力はJSON配列のみ: [{"label":"絵文字+15字以内の短文","message":"チャットにそのまま投げる依頼文"}]。期限接近・依存解除・検収たまりなど文脈が根拠のものを優先。',
-      },
-      ],
-      // #208: **ツール定義を渡さない。**上のプロンプトが「ツールは呼ばない」と言っている相手に
-      // 9本ぶんの定義を積んでいた。実測で 1リクエストの入力 15,408字(~9,064tk) のうち
-      // **ツール定義が 9,793字(~5,761tk) = 64%** (scripts/prompt-breakdown.ts)。
-      // 提案チップは入力トークンの8割を占めるので (8/17-18: 11,775,075 / 14,623,079)、
-      // ここが全体の43%を「使わない説明文」に使っていたことになる。
-      //
-      // 前置きが chat と別になるぶんキャッシュは分かれるが、システムプロンプトだけでも
-      // 3,303tk あり OpenAI の最小長(1024tk)を超えるので、suggest 単独でキャッシュに乗る。
-      // chat 側の前置きは無改造なのでそちらは影響を受けない
-    },
-    { signal }
-  );
-  const text = res.choices[0].message.content ?? "";
-  const m = text.match(/\[[\s\S]*\]/);
-  if (!m) return [];
-  try {
-    const arr = JSON.parse(m[0]);
-    if (!Array.isArray(arr)) return [];
-    return arr
-      .filter((s: any) => typeof s?.label === "string" && typeof s?.message === "string")
-      .slice(0, 3);
-  } catch {
-    return [];
-  }
-}
+// #75 → #271: ここに AI提案チップ一式があった (generateSuggestions / キャッシュ /
+// 同時実行の合流 / チャットへの譲り合いと中断 #162 / suggestSkipReason)。
+// 自分で使っていて押したことが無く、入力トークンの8割を提案が食っていた (#208 の実測) ので、
+// 機能ごと撤去した (zio判断 2026-08-28)。チャットと提案の並走・譲り合いの仕組み
+// (chatInflight / abortSuggestsFor) も、譲る相手がいなくなったので一緒に消した
 
 export async function runChatTurn(
   userMessage: string,
@@ -976,26 +795,7 @@ export async function runChatTurn(
   attachments?: ChatAttachment[],
   view?: string
 ): Promise<ChatResult> {
-  const project = currentProjectId();
-  chatInflight.set(project, (chatInflight.get(project) ?? 0) + 1);
-  // 先に始まっていた提案生成は捨てる。フラグだけでは「chat→suggest」の順しか止められず、
-  // 実際の画面で普通に起きる「suggest→chat」の順で並走が残っていた (外部レビュー指摘)
-  abortSuggestsFor(project);
-  try {
-    return await runChatTurnInner(
-      userMessage,
-      history,
-      onEvent,
-      onProgress,
-      cardFocusId,
-      attachments,
-      view
-    );
-  } finally {
-    const n = (chatInflight.get(project) ?? 1) - 1;
-    if (n > 0) chatInflight.set(project, n);
-    else chatInflight.delete(project);
-  }
+  return runChatTurnInner(userMessage, history, onEvent, onProgress, cardFocusId, attachments, view);
 }
 
 async function runChatTurnInner(

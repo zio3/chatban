@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { api, apiFetch, type Project } from "./api";
+import { api, type Project } from "./api";
 import { ensureProjectInUrl, gotoProject, projectIdFromUrl } from "./project";
 import Board, { type MovePayload } from "./components/Board";
-import Chat, { type Suggestion } from "./components/Chat";
+import Chat from "./components/Chat";
 import ContextView from "./components/ContextView";
 import SettingsView from "./components/SettingsView";
 import TrashView from "./components/TrashView";
@@ -314,64 +314,15 @@ export default function App() {
   }, [approvedIds]);
 
 
-  // ✨AI提案チップ (#75): ボードの文脈を読んだ提案を非同期で追加 (固定チップは即時表示の保険)
-  const [aiSuggestions, setAiSuggestions] = useState<Suggestion[]>([]);
-  const fetchAiSuggestions = useCallback(() => {
-    // POST なのは副作用があるから (有料のLLM呼び出しが走る。#180)
-    apiFetch("/api/suggestions", { method: "POST" })
-      .then((r) => r.json())
-      .then((d) =>
-        setAiSuggestions(
-          ((d.suggestions ?? []) as { label: string; message: string }[]).map((s) => ({
-            label: `✨ ${s.label}`,
-            message: s.message,
-          }))
-        )
-      )
-      .catch(() => {});
-  }, []);
-  useEffect(() => {
-    fetchAiSuggestions();
-  }, [fetchAiSuggestions]);
+  // #75 → #271: ここに提案チップ (固定チップ + ✨AI提案の非同期取得) があった。
+  // 自分で使っていて押したことが無く、AI提案は入力トークンの8割を食っていた (#208 の実測)。
+  // ログ枠を非常設にしたことで「会話前のチップ置き場」自体が消えたので、機能ごと撤去 (zio判断 8/28)
 
-  // 🆕 新しい会話: F5せずにチャットを初期状態(チップ+AI提案)へ戻す (#72追補)
+  // 🆕 新しい会話: F5せずにチャットを空へ戻す (#72追補)。ログ枠ごと畳まれる
   const resetChat = useCallback(() => {
     mainChat.stop();
     mainChat.setLog([]);
-    setAiSuggestions([]);
-    fetchAiSuggestions();
-  }, [mainChat.stop, mainChat.setLog, fetchAiSuggestions]);
-
-  // 「何を話しかければいいか分からない人」向けのユースケース導線。ボード状態で出し分ける。
-  // #93: チャットは常設(#74)なので、ボード以外を見ているときはその画面の話ができるチップを出す
-  const suggestions: Suggestion[] = [];
-  const VIEW_SUGGESTIONS: Partial<Record<typeof view, Suggestion[]>> = {
-    context: [{ label: "📋 前提情報に追記したい", message: "前提情報に追記したいことがある。いまの内容を踏まえて相談したい" }],
-    // #181: 📊コスト と 📜監査 のチップはタブごと撤去。「直近なにをしてた?」はボード側にある
-    trash: [{ label: "↩ 消したものを戻したい", message: "ゴミ箱に入れたカードを戻したい" }],
-    settings: [{ label: "📁 プロジェクトを整理したい", message: "プロジェクトの整理について相談したい (無効化・リネーム・削除)" }],
-  };
-  // 新規プロジェクト(まだ何も無い)では、レポートも割り振りも中身が無い。
-  // 最初にやるべきは方針を伝えること — 前提情報はAIの振る舞いを決める介入チャネル (#81) なので、
-  // ここを埋めるところから始まるのが自然。チップは1つに絞る
-  const isEmptyBoard = cards.length === 0 && folded.length === 0;
-  if (view !== "board") {
-    suggestions.push(...(VIEW_SUGGESTIONS[view] ?? []));
-  } else if (isEmptyBoard) {
-    suggestions.push({
-      label: "🧭 このプロジェクトの方針を伝える",
-      message: "このプロジェクトの前提や方針を登録したい。何を教えればいい?",
-    });
-  } else {
-    suggestions.push({ label: "📋 現状をレポートして", message: "ボードの現状を簡潔にレポートして" });
-    if (cards.filter((t) => t.status === "review").length > 0) {
-      suggestions.push({ label: "👀 レビュー待ちをまとめて", message: "レビュー中のカードの状況をまとめて" });
-    }
-    if (cards.filter((t) => t.status === "todo").length === 0) {
-      suggestions.push({ label: "💡 次のタスク候補を挙げて", message: "次にやるべきタスクの候補を挙げて" });
-    }
-    suggestions.push(...aiSuggestions);
-  }
+  }, [mainChat.stop, mainChat.setLog]);
 
   // #179: 担当フィルタは撤去した。いま絞り込みは無く、ボードは常に全件を出す。
   // 作り直すなら「LLMにIDの集合を返させて、押した瞬間に確定する」形になる (CLAUDE.md の将来案) —
@@ -495,7 +446,6 @@ export default function App() {
         log={mainChat.log}
         sending={mainChat.sending}
         elapsedSec={mainChat.elapsedSec}
-        suggestions={suggestions}
         askOptions={askOptions}
         onOpenCard={openCard}
         onSend={sendFromChat}

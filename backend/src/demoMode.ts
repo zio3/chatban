@@ -4,11 +4,10 @@
  * `if (DEMO_MODE)` を各所に撒くとコードの経路が2本になり、片方 (デモ側) は
  * テストされないまま本番で動く。ここで値を決めて、使う側は値だけを見る。
  *
- * **個別の環境変数を明示したらそちらが勝つ。**手元の開発機は DEMO_MODE ではないのに
- * 提案チップだけ止めたい、という状況が現にあるので (2026-08-19)、個別の口は残す。
+ * **個別の環境変数を明示したらそちらが勝つ**ので、個別の口は残す。
  *
  * まとめる理由は #183 で踏んだこと — **撤去したはずの認証が本番で生きていた**。
- * `SUGGEST_BOOT_GRACE_MS=315360000000` のような値の羅列は、見ても意図が読めない。
+ * `CHATBAN_JSON_LIMIT=256kb` のような値の羅列は、見ても意図が読めない。
  */
 const TRUE = /^(1|on|true|yes)$/i;
 const FALSE = /^(0|off|false|no)$/i;
@@ -40,14 +39,7 @@ export function jsonLimit(env: NodeJS.ProcessEnv = process.env): string {
   return isDemoMode(env) ? "256kb" : "25mb";
 }
 
-/** 提案チップの起動猶予 (ms)。デモでは実質OFF。
- * 単価ではなく「人が何もしていなくても呼ばれる」のを避けるため (#183 で旧デモが実際にそうなった) */
-export const DEMO_SUGGEST_GRACE_MS = 10 * 365 * 24 * 3600_000;
-export function suggestBootGraceMs(env: NodeJS.ProcessEnv = process.env): number {
-  const v = env.SUGGEST_BOOT_GRACE_MS?.trim();
-  if (v && Number.isFinite(Number(v))) return Number(v);
-  return isDemoMode(env) ? DEMO_SUGGEST_GRACE_MS : 60_000;
-}
+// #271: 提案チップの起動猶予 (suggestBootGraceMs) はここにあった。機能ごと撤去
 
 /** **`backend/logs/` に**本文を残すか。**デモでは止める** —
  *

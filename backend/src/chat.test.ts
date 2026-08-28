@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { extractChoices, suggestSkipReason } from "./chat.js";
+import { extractChoices } from "./chat.js";
 import { readFileSync } from "node:fs";
 import { buildTools } from "./chat.js";
 import { DONE_GATE_RULE, isDueDate, isCardStatus, mayEnterDone } from "./db.js";
@@ -28,8 +28,8 @@ test("知らないページからは断る", () => {
 });
 
 // Origin だけ見ていると、**Origin が付かないブラウザ要求**が素通りする。
-// `<img src="http://localhost:8787/api/suggestions">` のような subresource GET がそれで、
-// 実際そこは有料のLLM呼び出しを起こしていた (自動レビュー指摘)。
+// `<img src="http://localhost:8787/api/...">` のような subresource GET がそれ
+// (発覚時の実例は、有料のLLM呼び出しを起こしていた旧 /api/suggestions。自動レビュー指摘)。
 // Sec-Fetch-Site はブラウザが自分で付けるのでページ側から偽装できない
 
 test("他所のページからの要求は Sec-Fetch-Site で断る (Originが無くても)", () => {
@@ -188,61 +188,7 @@ test("知らない値は列として認めない", () => {
   assert.equal(isCardStatus(3), false);
 });
 
-// 提案チップを「呼ばずに諦める」条件。#167 でOFFにできるようにしたとき、
-// **表示だけ消すのではなく呼び出し自体を止める**のが要件だった (切っている間はコストも止まる)。
-// #181 まではE2Eが llm_calls の件数差で確かめていたが、計測系の撤去でテーブルが無くなった。
-// 共有ログの行数で数える形は開発サーバーの書き込みで誤判定しうるので、判断を純粋関数に切り出した。
-//
-// **このテストが保証するのは判定結果だけ。**「generateSuggestions がこの結果を見て
-// 実際に chatCompletion を呼ばずに return する」ところは検証していない (自動レビュー指摘)。
-// そこまで固定するには LLM 呼び出しを差し替えられる形にする必要があり、それは別の改修になる。
-// いま呼び出し0回を保証しているものは無い — 判定の正しさと、E2Eの「OFFなら空で返る」までが範囲
-
-// #209: ON/OFF設定は撤去した (#199で作った設定タブごと)。代わりに起動猶予が先頭に立つ。
-//
-// **猶予はテストが決める。**以前は既定値 60_000 を書き写していたが、判定側が
-// モジュール変数 (環境変数 SUGGEST_BOOT_GRACE_MS 由来) を読んでいたため、
-// **開発機だけ2本落ちる**状態だった (提案チップを止める設定が入っている)。
-// 引数で渡す形にしたので、どの環境でも同じ結果になる
-const GRACE = 60_000;
-const AFTER_BOOT = GRACE; // 猶予を過ぎた状態
-
-test("提案の生成を諦める判定: 起動直後が最優先で booting を返す", () => {
-  assert.equal(suggestSkipReason({ graceMs: GRACE, sinceBootMs: 0, chatBusy: false, emptyBoard: false }), "booting");
-  // 他の条件が「生成してよい」と言っていても起動直後が勝つ
-  assert.equal(
-    suggestSkipReason({ graceMs: GRACE, sinceBootMs: GRACE - 1, chatBusy: true, emptyBoard: true }),
-    "booting"
-  );
-});
-
-test("提案の生成を諦める判定: 会話中は chat-busy、空ボードは empty-board", () => {
-  assert.equal(
-    suggestSkipReason({ graceMs: GRACE, sinceBootMs: AFTER_BOOT, chatBusy: true, emptyBoard: false }),
-    "chat-busy"
-  );
-  assert.equal(
-    suggestSkipReason({ graceMs: GRACE, sinceBootMs: AFTER_BOOT, chatBusy: false, emptyBoard: true }),
-    "empty-board"
-  );
-});
-
-test("提案の生成を諦める判定: 猶予を過ぎ・会話中でない・中身があるときだけ null (生成へ進む)", () => {
-  assert.equal(
-    suggestSkipReason({ graceMs: GRACE, sinceBootMs: AFTER_BOOT, chatBusy: false, emptyBoard: false }),
-    null
-  );
-  // 境界: ちょうど猶予に達したら通す
-  assert.equal(suggestSkipReason({ graceMs: GRACE, sinceBootMs: GRACE, chatBusy: false, emptyBoard: false }), null);
-});
-
-// **猶予の値そのものに依存しないことを見る。**上の3本は 60_000 を使っているが、
-// それは「既定値だから」ではなく「テストが決めた値だから」。別の値でも同じ形で動く
-test("提案の生成を諦める判定: 猶予の値は呼び出し側が決める (デモ用の短い猶予でも同じ形)", () => {
-  assert.equal(suggestSkipReason({ graceMs: 0, sinceBootMs: 0, chatBusy: false, emptyBoard: false }), null);
-  assert.equal(suggestSkipReason({ graceMs: 5_000, sinceBootMs: 4_999, chatBusy: false, emptyBoard: false }), "booting");
-  assert.equal(suggestSkipReason({ graceMs: 5_000, sinceBootMs: 5_000, chatBusy: false, emptyBoard: false }), null);
-});
+// #271: suggestSkipReason (提案を諦める判定) のテスト群はここにあった。機能ごと撤去
 
 // #180 で「Exportに認証の設定と64桁hexが載っていないこと」を見る番人を2本置いていたが、
 // **#181 で Export (全ログExport / 監査タブ) ごと撤去したので消した。**

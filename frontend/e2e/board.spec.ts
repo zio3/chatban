@@ -1138,7 +1138,7 @@ test("LLMを直接呼ぶ口はGETに置かない (#180)", async () => {
   // **「LLMを直接呼ぶ口」に限った検証。**#200 でDone列の蒸留をやめたので、検収と差し戻しは
   // LLMを起こさなくなった (畳み直しは同期のSQLだけ)。間接的に起こす口が減った形。
   // 下で /api/cards/approve と /mcp が GET で通らないことだけ確かめておく
-  for (const path of ["/api/suggestions", "/api/chat", "/api/cards/1/chat"]) {
+  for (const path of ["/api/chat", "/api/cards/1/chat"]) {
     const res = await fetch(`${API}${path}`);
     expect(res.status, `${path} がGETで叩ける`).toBe(404);
   }
@@ -1514,88 +1514,7 @@ test("ツール説明に書いてあるテーブルは、実際に引けるも�
   expect(fromDesc).not.toContain("settings");
 });
 
-test("チャットの処理中は提案チップを生成しない (#162)", async () => {
-  // 上流が遅いときに並走するとTTFTが悪化する (実測: 単独12秒 → 3本並走で30〜55秒)。
-  // しかもチップは会話が始まる前にしか出ないので、送信した瞬間から表示される余地が無い。
-  // ここではLLMを呼ばずに、抑止のフラグが立っている間だけ空になることを確かめる
-  const id = await createCard("チャット中の抑止を確かめる");
-
-  // 応答が返る前に叩きたいので、待たずに走らせる。E2E環境のLLMは失敗してよい
-  // (成否によらず runChatTurn には入るので、その間フラグは立つ)
-  const chatting = fetch(`${API}/api/cards/${id}/chat`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ message: "状況は?", history: [] }),
-  }).catch(() => null);
-
-  // 立ち上がりを待ってから確認する
-  await new Promise((r) => setTimeout(r, 300));
-  const during = (await (await fetch(`${API}/api/suggestions`, { method: "POST" })).json()) as any;
-  expect(during.suggestions).toEqual([]);
-
-  await chatting;
-});
-
-test("先に始まっていた提案生成は、チャットが始まったら中断される (#162)", async () => {
-  // 開始時のフラグを見るだけでは片方向にしか効かない (外部レビュー指摘)。
-  // 実際の画面ではページ表示直後に /api/suggestions が走るので、
-  // 「suggest開始 → chat開始」のほうが普通の順番。こちらを止められないと意味がない。
-  //
-  // 結果を捨てるだけでは足りず、接続ごとやめる必要がある
-  // (捨てるだけだと上流の応答は待ち続けるので、止めたかったTTFTの奪い合いが残る)
-  // **空配列を中断の証拠にしない。**空配列は「LLMが空を返した」「上流が失敗した」
-  // 「JSONの解析に失敗した」「chatより先に完了した」でも返るので区別がつかない (外部レビュー指摘)。
-  // 中断そのものはサーバーのログに残るので、その行が増えたかで判定する
-  const abortLines = (): number => {
-    const today = new Date().toLocaleDateString("sv-SE"); // YYYY-MM-DD
-    // #253: **E2E専用のログを読む。**以前は `backend/logs/` を読んでいたが、そこは
-    // 日常使いの開発サーバー(8787)も書くので、**裏で動いているセッションの ABORTED を
-    // 数えて誤合格しうる**。playwright.config.ts の CHATBAN_LOG_DIR と対で覚えること
-    const file = path.join("..", "backend", "e2e-data", "logs", `chatban-${today}.log`);
-    if (!fs.existsSync(file)) return 0;
-    return fs.readFileSync(file, "utf-8").split("\n").filter((l) => l.includes("ABORTED")).length;
-  };
-
-  const id = await createCard("suggest先行の中断を確かめる");
-
-  // 狙いたいのは「suggestが走っている最中にchatが来る」状態。
-  // suggestが先に終わってしまうと中断する相手がいないので、その回は検証にならない
-  let observed = false;
-  for (let attempt = 0; attempt < 3 && !observed; attempt++) {
-    // ボードを変えて提案キャッシュを外す。同じ状態だとLLMを呼ばずに即返る
-    await createCard(`suggest先行の中断を確かめる (${attempt})`);
-    const before = abortLines();
-
-    // suggestを先に始める。待たない
-    const suggesting = fetch(`${API}/api/suggestions`, { method: "POST" })
-      .then((r) => r.json())
-      .catch(() => null);
-
-    // 走り出してからチャットを送る
-    await new Promise((r) => setTimeout(r, 300));
-    const chatting = fetch(`${API}/api/cards/${id}/chat`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message: "状況は?", history: [] }),
-    }).catch(() => null);
-
-    const s = (await suggesting) as any;
-    const chatRes = await chatting;
-    // 上流が落ちている日はsuggestが即失敗するので、狙いの並びが作れない。
-    // それは実装の回帰ではないので、赤くして本当の回帰を埋もれさせない
-    if (!chatRes || !(chatRes as Response).ok) {
-      test.skip(true, "上流が応答しないため中断の並びを作れなかった (実装の検証はできていない)");
-      return;
-    }
-    // 中断が実際に起きた回だけを合格とする。空配列だったかは見ない —
-    // 空配列は「LLMが空を返した」「上流が失敗した」「解析に失敗した」でも返る
-    if (abortLines() > before) {
-      observed = true;
-      expect(s?.suggestions, "中断したのに提案が返っている").toEqual([]);
-    }
-  }
-  expect(observed, "3回試しても中断のログが増えなかった (suggestが毎回chatより先に完了した?)").toBe(true);
-});
+// #271: 提案チップ (#162 の抑止・中断) のE2E 2本はここにあった。機能ごと撤去
 
 test("ゴミ箱に入れると検収の印が落ちる (古い確認のままDoneへ通せない) (#161)", async () => {
   // 検収まで済ませる (人間のUI操作と同じ道)
@@ -2363,9 +2282,15 @@ test("GitHubの番号もリンクになる (承知の上・#248)", async ({ page
 //   - touch-action: none がCSSとして実際に効いていること (これが無いと実機で効かない本丸。
 //     クラスの綴りを変えたり Tailwind の生成から漏れたりすると、テストは通るのに実機で死ぬ)
 //   - ポインタドラッグでいまも動くこと (setPointerCapture 化 (#246) の回帰)
-test("チャットのスプリッタはドラッグで動き、タッチ用のCSSが効いている (#246)", async ({ page }) => {
+test("チャットのスプリッタはドラッグで動き、タッチ用のCSSが効いている (#246/#271)", async ({ page }) => {
   await page.goto("/");
   const grip = page.getByTitle("ドラッグでチャット欄の高さを調整");
+  // #271: 会話が空のうちはログ枠 (スプリッタの帯ごと) が出ない — 入力欄だけ
+  await expect(grip).toHaveCount(0);
+
+  // 送信するとログ枠が現れる (E2EのLLMは失敗してよい — ユーザー発言とエラーの吹き出しでログは埋まる)
+  await page.getByPlaceholder(/ボードに話しかける/).fill("スプリッタ検証のための発言");
+  await page.getByPlaceholder(/ボードに話しかける/).press("Enter");
   await expect(grip).toBeVisible();
 
   await expect

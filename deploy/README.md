@@ -36,19 +36,31 @@ VPS の `/etc/systemd/system/` に置いてあるものと同じ内容を、こ�
 反映は毎朝のタイマーで自動に走ります。**急ぐときだけ手で叩きます**:
 
 ```sh
-sudo -E node backend/scripts/deploy-demo.mjs        # 確認あり
+sudo env PATH=/opt/node/bin:$PATH node backend/scripts/deploy-demo.mjs   # 確認あり
 sudo systemctl start chatban-reset.service          # 毎朝と同じもの (デプロイ + リセット)
 ```
 
-`-E` は PATH を渡すため (sudo は secure_path で PATH を作り直すので、
-`/opt/node/bin` に node を置いていると npm が見つからない)。
+PATH を渡すのは、sudo が secure_path で PATH を作り直すため
+(`/opt/node/bin` に node を置いていると npm が見つからない)。`sudo -E` で渡す手も
+あるが、**サーバーによっては "preserving the entire environment is not supported" で
+無視される** (miniPC で実際に踏んだ `#269`) ので、`sudo env PATH=...` の形が確実。
+root で走らせると git が dubious ownership で止まることがある — そのときは
+`sudo git config --global --add safe.directory /opt/chatban/app` を一度入れる。
 
 ## 反映したか確かめる
 
 ```sh
 curl https://chatban.zio3.net/version.txt   # 動いているコミット。-dirty なら手で触った版
-curl https://chatban.zio3.net/api/board     # attachments が false なら DEMO_MODE が効いている
+curl https://chatban.zio3.net/api/board     # attachments: 公開デモの期待値は false (DEMO_MODE の既定)
 ```
+
+**ただし false は DEMO_MODE の証拠ではない。**`canAcceptAttachments()` が false を返すのは
+明示の `CHATBAN_ATTACHMENTS=off`、`apiStyle: "messages"` (Messages API 形式の添付は未対応)、
+または **config.json の読み込み・検証の失敗** (ファイルが無い・JSON不正・キー未読を含む) の
+いずれかで、DEMO_MODE はその1つ目に乗っているだけ。逆に個人運用は、chat 形式で
+`CHATBAN_ATTACHMENTS` を切っていなければ true が期待値 (messages 形式なら false が正常)。
+miniPC の据え付けでは false を「DEMO_MODE では?」と誤診しかけ、実際は config が
+placeholder のままキー未投入だった (`#269`)。
 
 `version.txt` はビルドが作ります (`frontend/vite-plugin-version.ts`)。手で置かないこと —
 次のビルドで消えます。
@@ -109,10 +121,11 @@ sudo systemctl daemon-reload && sudo systemctl enable --now chatban
 確認: `journalctl -u chatban -n 3` に `(フロントも配信: ...)` が出ること。
 `(APIのみ...)` なら dist が無い = フロントのビルドを忘れている。
 
-更新 (デモの `deploy-demo.mjs` を共用。ヘルスチェックの宛先だけ差し替える):
+更新 (デモの `deploy-demo.mjs` を共用。ヘルスチェックの宛先だけ差し替える。
+`sudo -E` を使わないのは上のデモ節と同じ理由。非対話で流すときだけ `echo y |` を頭に付ける):
 
 ```sh
-sudo -E env CHATBAN_HEALTH_URL=http://127.0.0.1:8787/api/board   node backend/scripts/deploy-demo.mjs
+cd /opt/chatban/app && sudo env PATH=/opt/node/bin:$PATH CHATBAN_HEALTH_URL=http://127.0.0.1:8787/api/board node backend/scripts/deploy-demo.mjs
 ```
 
 **データのバックアップはこのリポジトリの外** (運用側の夜間バックアップ) に登録すること。

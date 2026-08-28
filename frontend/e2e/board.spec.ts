@@ -731,8 +731,10 @@ test("新しいプロジェクトの前提情報は空欄でなく既定値が�
   // 列の意味が空欄のままだと、LLMは一般的な意味で埋めてしまう (外部エージェントの実例)
   expect(ctx.text).toContain("review = 検収待ち");
   expect(ctx.text).toContain("done = 人間が実物で確かめたもの");
-  // やらない決定の残し方も既定値で書いてある (rejected が一度も使われなかった実例への手当て)
-  expect(ctx.text).toContain("rejected");
+  // #266: 却下・誤登録の扱いは雛形から落ちた (盤ごとに変わらない製品仕様なので契約側の仕事)。
+  // 残したのは「保留の置き場」の1行だけ — 製品が前提情報の定義に委ねている唯一の点
+  expect(ctx.text).not.toContain("rejected");
+  expect(ctx.text).toContain("status を変えず");
   // ただし調整できることは明示されている (プロジェクトごとに違うのは review の意味)
   expect(ctx.text).toContain("違うなら書き換える");
   // 書き換えたら例文を消すところまで指示する。例が残っていると「どちらなのか」を考えさせる

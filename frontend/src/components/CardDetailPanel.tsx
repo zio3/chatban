@@ -65,6 +65,11 @@ export default function CardDetailPanel({
   const { setLog } = chat;
   const [input, setInput] = useState("");
   const logRef = useRef<HTMLDivElement>(null);
+  // #273: チャット枠の**上限** (メインチャットの #271 と同じ規則)。実高さは min(内容, 上限)
+  const [chatHeight, setChatHeight] = useState(() => {
+    const saved = Number(localStorage.getItem("chatban.cardChatHeight"));
+    return saved >= 120 ? saved : 240;
+  });
   // #68: 添付 (貼り付け / +ボタン)。原本非保存の蒸留型
   const atts = useAttachments();
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -95,6 +100,18 @@ export default function CardDetailPanel({
     onCommit: (w) => {
       setWidth(w);
       localStorage.setItem("chatban.panelWidth", String(w));
+    },
+  });
+
+  // #273: チャット枠の上端ドラッグで上限を調整。手で動かすのは常に上限で、内容が少なければ縮む
+  const startChatResize = useSplitter({
+    current: chatHeight,
+    delta: (_dx, dy) => -dy, // 上へ動かすと高さが増える
+    clamp: (h) => Math.min(Math.max(h, 120), Math.round(window.innerHeight * 0.75)),
+    onChange: setChatHeight,
+    onCommit: (h) => {
+      setChatHeight(h);
+      localStorage.setItem("chatban.cardChatHeight", String(h));
     },
   });
 
@@ -225,44 +242,53 @@ export default function CardDetailPanel({
         <p className="text-xs text-slate-500">作成 {card.createdAt} / 更新 {card.updatedAt}</p>
       </div>
 
-      {/* カード専用チャット (#24) */}
-      <section className="flex h-1/2 shrink-0 flex-col border-t border-slate-200 bg-slate-50/50">
-        <p className="px-4 pt-2 text-xs font-bold text-slate-500">💬 このカードのチャット</p>
-        <div ref={logRef} className="min-h-0 flex-1 space-y-2 overflow-y-auto px-3 py-2">
-          {chat.log.length === 0 && (
-            <p className="text-xs text-slate-500">
-              例:「これどう進めるのがいい？」「◯◯方式でいくことにした」→ 決定は経緯メモに残ります
-            </p>
-          )}
-          {chat.log.map((e, i) => (
-            <div key={i} className={`flex ${e.role === "user" ? "justify-end" : "justify-start"}`}>
-              <div
-                className={`max-w-[85%] rounded-xl px-3 py-1.5 text-sm whitespace-pre-wrap ${
-                  e.role === "user"
-                    ? "bg-indigo-600 text-white"
-                    : e.error
-                      ? "border border-red-200 bg-red-50 text-red-700"
-                      : "bg-white text-slate-900 shadow-sm"
-                }`}
-              >
-                {e.pending ? (
-                  <ThinkingIndicator label={e.content} elapsedSec={chat.elapsedSec} onStop={chat.stop} />
-                ) : e.error ? (
-                  // 再送ボタンは置かない (レビュー指摘 2026-08-21)。メインチャットと同じ理由 —
-                  // 失敗しても途中まで実行されていることがあり、押すと同じ操作が重複する
-                  <span>{e.content}</span>
-                ) : e.role === "assistant" ? (
-                  <div className="chat-md">
-                    <Markdown remarkPlugins={[remarkGfm]}>{e.content}</Markdown>
-                  </div>
-                ) : (
-                  e.content
-                )}
-              </div>
+      {/* カード専用チャット (#24)。
+          #273: 高さは h-1/2 固定をやめ、メインチャット (#271) と同じ「min(内容, 手で決めた上限)」。
+          会話が空のときは帯もログ枠も出さず入力欄だけ (見出し「このカードのチャット」と例文は
+          zio 判断で撤去 — 入力欄の placeholder が同じことを言っている) */}
+      <section className="flex shrink-0 flex-col border-t border-slate-200 bg-slate-50/50">
+        {chat.log.length > 0 && (
+          <>
+            <div
+              onPointerDown={startChatResize}
+              title="ドラッグでカードチャットの高さを調整"
+              // #246: touch-none が無いとタッチでドラッグが効かない
+              className="group flex h-6 cursor-row-resize touch-none items-center justify-center hover:bg-indigo-50"
+            >
+              <div className="h-1 w-10 rounded-full bg-slate-300 group-hover:bg-indigo-400" />
             </div>
-          ))}
-        </div>
-        <div className="px-3 pb-3">
+            <div ref={logRef} className="space-y-2 overflow-y-auto px-3 py-2" style={{ maxHeight: chatHeight }}>
+              {chat.log.map((e, i) => (
+                <div key={i} className={`flex ${e.role === "user" ? "justify-end" : "justify-start"}`}>
+                  <div
+                    className={`max-w-[85%] rounded-xl px-3 py-1.5 text-sm whitespace-pre-wrap ${
+                      e.role === "user"
+                        ? "bg-indigo-600 text-white"
+                        : e.error
+                          ? "border border-red-200 bg-red-50 text-red-700"
+                          : "bg-white text-slate-900 shadow-sm"
+                    }`}
+                  >
+                    {e.pending ? (
+                      <ThinkingIndicator label={e.content} elapsedSec={chat.elapsedSec} onStop={chat.stop} />
+                    ) : e.error ? (
+                      // 再送ボタンは置かない (レビュー指摘 2026-08-21)。メインチャットと同じ理由 —
+                      // 失敗しても途中まで実行されていることがあり、押すと同じ操作が重複する
+                      <span>{e.content}</span>
+                    ) : e.role === "assistant" ? (
+                      <div className="chat-md">
+                        <Markdown remarkPlugins={[remarkGfm]}>{e.content}</Markdown>
+                      </div>
+                    ) : (
+                      e.content
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+        <div className="px-3 py-3">
           <AttachmentTray attachments={atts.attachments} error={atts.error} onRemove={atts.remove} />
           <div className="flex gap-2">
           <input

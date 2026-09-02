@@ -2208,6 +2208,26 @@ test("コードの中の #番号 はリンクにしない (#248)", async ({ page
   await expect(panel.locator("code", { hasText: "#4321" })).toHaveCount(1);
 });
 
+test("経緯メモの URL は本文と見分けがつく色と下線で描く (#272)", async ({ page }) => {
+  // #NN は #248 で色が付いていたが、URL の <a> は無指定で Tailwind のリセットにより本文と同じ見た目だった。
+  // 見た目の契約は「本文と色が違う」「下線がある」の2点だけにして、具体の色値は縛らない
+  const id = await cardWithContext("URLの見た目", "参考: https://example.com/pr/1 を見ること。");
+
+  await page.goto("/");
+  await page.getByTestId(`card-tile-${id}`).click();
+  const panel = page.getByTestId("card-detail-panel");
+  const link = panel.locator("a[href='https://example.com/pr/1']");
+  await expect(link).toHaveCount(1);
+
+  const styles = await link.evaluate((a) => {
+    const cs = getComputedStyle(a);
+    const body = getComputedStyle(a.parentElement!);
+    return { color: cs.color, bodyColor: body.color, underline: cs.textDecorationLine };
+  });
+  expect(styles.color).not.toBe(styles.bodyColor);
+  expect(styles.underline).toContain("underline");
+});
+
 // **これは除外規則が効いていないと落ちる。**`#55` を割ると、リンクの中にリンクができて行き先が2つになる
 test("もともとリンクの文言に入っている #番号 は割らない (#248)", async ({ page }) => {
   const id = await cardWithContext("リンク文言に番号があるカード", "[詳細 #55 はこちら](https://example.com/x)");

@@ -2330,6 +2330,36 @@ test("チャットのスプリッタはドラッグで動き、タッチ用のCS
     .toBeGreaterThan(before);
 });
 
+test("詳細パネルのカードチャットは会話があるときだけ枠が出て、上端ドラッグで上限が変わる (#273)", async ({ page }) => {
+  const id = await createCard(`カードチャット枠 ${Date.now()}`);
+  await page.goto("/");
+  await page.getByTestId(`card-tile-${id}`).click();
+  const panel = page.getByTestId("card-detail-panel");
+  const grip = panel.getByTitle("ドラッグでカードチャットの高さを調整");
+  // 会話が空のうちは帯もログ枠も無く、入力欄だけ
+  await expect(grip).toHaveCount(0);
+  await expect(panel.getByPlaceholder(new RegExp(`#${id} について話す`))).toBeVisible();
+
+  // 発言すると (LLM が失敗してもエラー行がログに積まれるので) 枠が現れる
+  await panel.getByPlaceholder(new RegExp(`#${id} について話す`)).fill("枠の検証");
+  await panel.getByPlaceholder(new RegExp(`#${id} について話す`)).press("Enter");
+  await expect(grip).toBeVisible();
+  await expect
+    .poll(async () => grip.evaluate((el) => getComputedStyle(el).touchAction))
+    .toBe("none");
+
+  const before = await page.evaluate(() => Number(localStorage.getItem("chatban.cardChatHeight")) || 240);
+  const box = (await grip.boundingBox())!;
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2 - 100, { steps: 5 });
+  await page.mouse.up();
+  // 上へ100px → 上限が増えて保存される (実高さは内容が少なければそのまま = 上限だけが動く)
+  await expect
+    .poll(async () => page.evaluate(() => Number(localStorage.getItem("chatban.cardChatHeight"))))
+    .toBeGreaterThan(before + 60);
+});
+
 test("詳細パネルのスプリッタはドラッグで動き、タッチ用のCSSが効いている (#246)", async ({ page }) => {
   const id = await createCard(`スプリッタ検証 ${Date.now()}`);
   await page.goto("/");

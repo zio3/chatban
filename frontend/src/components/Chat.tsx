@@ -221,7 +221,7 @@ export default function Chat({
                                 );
                               }
                               return (
-                                <a href={href} target="_blank" rel="noreferrer" className="underline">
+                                <a href={href} target="_blank" rel="noreferrer">
                                   {children}
                                 </a>
                               );

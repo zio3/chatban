@@ -1,6 +1,11 @@
 // #232: `tasks` 時代の名残を全DBから消し切る。**移行の仕組みそのものを畳むための前段**であり、
-// 畳んだあとは「バックアップから古いDBを戻したときの唯一の出口」になる
-// (`refuseLegacySchema` が名指しで案内する先)。
+// 畳んだあとは「バックアップから古いDBを戻したときの唯一の出口」になる。
+//
+// #239 で入口の番人 (旧スキーマのDBを開かずに止める refuseLegacySchema) も撤去した。
+// なので古いDBを本体で開くと、`CREATE TABLE IF NOT EXISTS cards` が**空の `cards` を作り、
+// 中身の入った `tasks` が取り残されて板が空に見える**。エラーは出ない。
+// その状態をこのスクリプトが自動で救う: 「空の `cards` + 中身のある `tasks`」なら空側を捨てて改名する
+// (`chat_messages` の `card_id` / `task_id` も同じ規則)。**両方に中身があるときだけ**人に委ねる。
 //
 // 実測 (2026-08-23) で分かった状態:
 //   - 稼働中の10件は移行済みだが、**空の `tasks` テーブルと空の `task_id` 列が残骸として残っていた**
@@ -50,8 +55,19 @@ function inspect(db) {
     plan.push(`tasks(${n}行) を cards へ改名`);
   } else if (tasks && cards) {
     const n = count(db, "SELECT COUNT(*) c FROM tasks");
-    if (n > 0) refusals.push(`tasks に ${n}行 残っている (cards と混在) — 人が中身を見て決めること`);
-    else {
+    const m = count(db, "SELECT COUNT(*) c FROM cards");
+    if (n > 0 && m > 0) {
+      refusals.push(`tasks に ${n}行、cards に ${m}行 (両方に中身がある) — 人が中身を見て決めること`);
+    } else if (n > 0) {
+      // #239: 番人を外したあとに本体が先に開いた形。空の cards は本体が作った殻なので捨ててよい。
+      // 本体が張った live_cards / done_cards は cards を参照していて、参照先が無い間は RENAME が
+      // 「no such table」で落ちる (実測)。先に落とす。本体が次に開くとき張り直す
+      sql.push("DROP VIEW IF EXISTS live_cards", "DROP VIEW IF EXISTS done_cards");
+      sql.push("DROP TABLE cards");
+      sql.push("DROP VIEW IF EXISTS live_tasks", "DROP VIEW IF EXISTS done_tasks");
+      sql.push("ALTER TABLE tasks RENAME TO cards");
+      plan.push(`空の cards を捨て、tasks(${n}行) を cards へ改名`);
+    } else {
       sql.push("DROP TABLE tasks");
       plan.push("空の tasks テーブルを撤去");
     }
@@ -64,8 +80,15 @@ function inspect(db) {
       plan.push("chat_messages.task_id を card_id へ改名");
     } else if (c.includes("task_id") && c.includes("card_id")) {
       const n = count(db, "SELECT COUNT(*) c FROM chat_messages WHERE task_id IS NOT NULL");
-      if (n > 0) refusals.push(`chat_messages.task_id に ${n}件 値が残っている — 人が中身を見て決めること`);
-      else {
+      const m = count(db, "SELECT COUNT(*) c FROM chat_messages WHERE card_id IS NOT NULL");
+      if (n > 0 && m > 0) {
+        refusals.push(`chat_messages.task_id に ${n}件、card_id に ${m}件 (両方に値がある) — 人が中身を見て決めること`);
+      } else if (n > 0) {
+        // #239: 本体が空の card_id 列を足したあとの形。空側を捨てて古い列を改名する
+        sql.push("ALTER TABLE chat_messages DROP COLUMN card_id");
+        sql.push("ALTER TABLE chat_messages RENAME COLUMN task_id TO card_id");
+        plan.push(`空の chat_messages.card_id を捨て、task_id(${n}件) を card_id へ改名`);
+      } else {
         sql.push("ALTER TABLE chat_messages DROP COLUMN task_id");
         plan.push("空の chat_messages.task_id 列を撤去");
       }

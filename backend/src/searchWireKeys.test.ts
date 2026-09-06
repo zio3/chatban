@@ -35,6 +35,8 @@ test("chatHits はカードを cardId で指す (taskId ではない)", () => {
   assert.ok(r.chatHits, "chatHits が返っていない");
   const hit = r.chatHits.find((h: any) => h.cardId === card.id);
   assert.ok(hit, `chatHits がカードを cardId で指していない: ${JSON.stringify(r.chatHits)}`);
+  // 旧DB移行の番人ではなく、現行 wire 契約の負の検査 (#239 で一度消してレビューで戻した)。
+  // cardId を残したまま taskId を互換キーとして足し戻されても、ここが落ちる
   assert.equal((hit as any).taskId, undefined, "古い taskId が残っている");
 });
 

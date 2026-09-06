@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -16,9 +15,10 @@ const one = (db: Database.Database, sql: string) => db.prepare(sql).get() as any
  * その状態が **`migrate-cards.mjs` 1コマンドで直る**ことが要る。ここはそれを見る番人。
  * 番人を外す代わりに出口を強くした、という対を壊さないため。 */
 
-// **実データに触らせない。**store.ts は読み込み時に管理DBを開く (foldDone.test.ts と同じ作法)
-const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "chatban-rescue-"));
-process.env.CHATBAN_DATA_DIR = dataDir;
+// **実データに触らせない。**testEnv.ts (`npm test` が --import で先に読む) が置いた隔離ディレクトリを
+// そのまま使う。自前で mkdtemp すると終了時の掃除対象から外れて OS temp に残る (Codexレビュー P3)
+const dataDir = process.env.CHATBAN_DATA_DIR!;
+assert.ok(dataDir && dataDir.includes("chatban-test-data-"), "testEnv.ts の隔離ディレクトリが無い (npm test 経由で走らせる)");
 
 const { ensureProjectSchema } = await import("./store.js");
 

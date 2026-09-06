@@ -9,7 +9,7 @@ import path from "node:path";
  * `chatHits[]` がどのカードの会話かを指すキーは、**読み手がLLMだけ**で backend 内に利用側が無い。
  * だから名前を変えても型は通り、既存のテストも全部通る — **壊れても誰も気付けない。**
  *
- * 実際に3回往復した: #215 で古い名前のまま取りこぼし → #232 第2弾で `cardId` に変えて
+ * 実際に3回往復した: #215 で `taskId` のまま取りこぼし → #232 第2弾で `cardId` に変えて
  * レビューで戻され (当時は内部識別子だけが範囲) → #237 で契約変更として改めて直した。
  * **見ているものが1つも無かったから**、毎回「これは動かしていいのか」から始まっていた。
  *
@@ -26,7 +26,7 @@ ensureInitialProject();
 
 const { createCard, saveChatMessage, searchCards } = await import("./db.js");
 
-test("chatHits はカードを cardId で指す", () => {
+test("chatHits はカードを cardId で指す (taskId ではない)", () => {
   const card = createCard("検索の当たり先");
   saveChatMessage("user", "バリデーションの取りこぼしについて", undefined, undefined, card.id);
 
@@ -35,6 +35,9 @@ test("chatHits はカードを cardId で指す", () => {
   assert.ok(r.chatHits, "chatHits が返っていない");
   const hit = r.chatHits.find((h: any) => h.cardId === card.id);
   assert.ok(hit, `chatHits がカードを cardId で指していない: ${JSON.stringify(r.chatHits)}`);
+  // 旧DB移行の番人ではなく、現行 wire 契約の負の検査 (#239 で一度消してレビューで戻した)。
+  // cardId を残したまま taskId を互換キーとして足し戻されても、ここが落ちる
+  assert.equal((hit as any).taskId, undefined, "古い taskId が残っている");
 });
 
 // **メインチャットの発言には紐付け先が無い。**キーごと出さない (null を載せない) ので、

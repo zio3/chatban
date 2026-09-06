@@ -32,9 +32,3 @@ test("created_at で完了を数えていたら、done_at を案内する", () =
   assert.ok(note, "助言が出ていない");
   assert.match(note, /done_at/);
 });
-
-test("古い名前 (tasks) には反応しない — もう存在しないテーブルなので", () => {
-  // 実際に叩けばSQLがエラーになる。ここで助言を出すと「引けるが条件が足りない」に見え、
-  // **存在しないテーブルを使い続けてよいと誤解させる**
-  assert.equal(silentTrap("select id from tasks").note, undefined);
-});

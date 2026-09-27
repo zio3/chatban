@@ -198,7 +198,7 @@ export const CONTEXT_VERSION_DESCRIPTION =
  * 呼び出し側も安くなる: SQLは平均83字 (最長136)、`{"ids":[112]}` なら13字。
  * **呼び出しは出力トークンなのでキャッシュが効かない**ぶん、効き方が大きい。 */
 export const GET_CARDS_DESCRIPTION =
-  "カードを番号で読む。経緯メモの固定文(context = 現況)と context_version、経過の行(entries: id/at/text。省略時は末尾5件)を返すので、書き換える前はここで読む。会話の「#112」が id=112。ゴミ箱・アーカイブ済みも読める(名指しなら在ると答える)";
+  "カードを番号で読む。経緯メモは固定文(context = 現況)と経過の行(entries)の総称で、その両方と context_version を返す(entries は id/at/text。省略時は末尾5件)。書き換える前はここで読む。会話の「#112」が id=112。ゴミ箱・アーカイブ済みも読める(名指しなら在ると答える)";
 
 /** #274: 経過をどれだけ読むか。同じカードを何度も開くときは since で増えた分だけ受け取る */
 export const HISTORY_DESCRIPTION =
@@ -267,7 +267,7 @@ export const REORDER_DESCRIPTION = [
  * summary / context / context_append / due / blocked_by も更新できる。
  * 特に context_append は一覧しか見ないクライアントからは存在が読み取れなかった (指摘) */
 export const UPDATE_TASKS_DESCRIPTION =
-  "カードの状態と内容を更新する(複数可)。状態・タイトルのほか、summary(現況の1行)・経緯メモ・期限・依存も変えられる。経緯メモに1行足すだけなら context_append を使う(既存を読む必要も版も要らない)";
+  "カードの状態と内容を更新する(複数可)。状態・タイトルのほか、summary(いまの1行)・経緯メモ・期限・依存も変えられる。経緯メモに1行足すだけなら context_append を使う(既存を読む必要も版も要らない)";
 
 /** rejected の説明。以前は「reasonに根拠を書く」としていたが、reason というパラメータは無い。
  * additionalProperties:false なので、存在しない reason を渡すと確実にエラーになる (指摘) */
@@ -326,7 +326,7 @@ export const DUE_DESCRIPTION =
  * SQL窓口 (query_log) へ渡すよう契約側で案内する。#91 でソートキーを渡す方式を捨てたのと同じ判断。
  * チャットとMCPで同じ文言を使う (入口ごとに書き分けると必ずズレる) */
 export const SEARCH_DESCRIPTION = [
-  "カードの本文(タイトル・現況・経緯メモ)を横断検索する。アーカイブ済みも対象。表記ゆれや言い換えは自分で展開して複数語を渡す(OR検索・当たった語が matched で返る)。",
+  "カードの本文(タイトル・summary・経緯メモ)を横断検索する。アーカイブ済みも対象。表記ゆれや言い換えは自分で展開して複数語を渡す(OR検索・当たった語が matched で返る)。",
   "**候補が広すぎたら、この道具で絞ろうとせず query_log でSQLを書く。**本文にその語が1度出てくるだけで当たるので、絞り込みはSQLのほうが素直に書ける:",
   "例(タイトルだけを見る): SELECT id, title FROM live_cards WHERE title LIKE '%記事%'",
   "例(条件を重ねる): SELECT id, title, due FROM live_cards WHERE status='review' AND due IS NOT NULL ORDER BY due",
@@ -713,7 +713,7 @@ export function buildSystemPrompt(cardFocus?: ReturnType<typeof getCard>, view?:
     "## 設計思想 (構造カスタマイズの要望が来たときの応対)",
     "ChatBanは「会話が構造の代わりをする」ツール。優先度フィールド・タグ・サブタスク階層の追加要望には応じない。列は Todo/Inprogress/Review/Done の4本が固定だが、**任意レーンを最大2本まで足せる** (#19。⚙設定でその列に名前を付けると現れ、Review と Done の間に並ぶ)。列がほしいと言われたらこれを案内する。それ以上は増やさない。",
     "代わりに以下へ誘導する (どれが適切かはニーズを聞いて判断):",
-    "- 状態を細かく刻みたい (「検証待ち」等) → その情報はカードのタイトルか summary(現況の1行) に書く。または「検証」を独立カードに分割する",
+    "- 状態を細かく刻みたい (「検証待ち」等) → その情報はカードのタイトルか summary(いまの1行) に書く。または「検証」を独立カードに分割する",
     "- 分類したい → タイトルの付け方か、reorder_cards の並び順で表現する",
     "- 優先したい → 並び順 (「これ上にして」) で表現する",
     "断るときは設計理由 (語彙が固定だから一言が正確に通じる) を一言添える。",

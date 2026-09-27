@@ -89,6 +89,9 @@ const REMOVED: { word: string; why: string; allow?: RegExp }[] = [
   // 返り値の形も他と違った (失敗が英語の {error} だけ)。誘導先はプロンプトに2箇所あったので、
   // 定義を消しただけでは「無い道具を呼べ」と書いてある状態になる — そこをここで見る
   { word: "update_task_context", why: "#223 で撤去 (update_cards の context_append に寄せた)" },
+  // #278: #275 で「現況」は context の固定文を指す語になった。summary を「現況の1行」と呼ぶ古い言い方が
+  // 2か所残っていて、同じ語が別の欄を指していた (画面の見出しは #277 で summary=「いま」に揃えた)
+  { word: "現況の1行", why: "#278 で summary の呼び名を「いまの1行」に揃えた (現況 = context の固定文)" },
 ];
 
 for (const { word, why, allow } of REMOVED) {

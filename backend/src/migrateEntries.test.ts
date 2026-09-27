@@ -146,8 +146,7 @@ test("--apply でも card_entries の無い DB (trash の削除済みプロジ�
   // miniPC の初回適用で実際に起きた: trash の DB で prepare が先に走り no such table で例外終了、最終行が出なかった
   assert.doesNotMatch(r.stderr, /no such table/, "表の無い DB で例外終了している");
   // 他のテストが置いた拒否対象の DB も同じ dataDir にあるので、数は 1 以上で見る
-  assert.match(r.stdout, /5-never-opened\.db
-  !! card_entries テーブルが無い/, `trash の DB を「飛ばした」扱いにしていない: ${r.stdout}`);
+  assert.match(r.stdout, /5-never-opened\.db\n  !! card_entries テーブルが無い/, `trash の DB を「飛ばした」扱いにしていない: ${r.stdout}`);
   assert.match(r.stdout, /対象 \d+ \/ 変更あり \d+ \/ 飛ばした [1-9]/, `最終行が出ていない: ${r.stdout}`);
   assert.equal(r.status, 1, "飛ばしがあるのに終了コードが 0");
   const db = new Database(p, { readonly: true });

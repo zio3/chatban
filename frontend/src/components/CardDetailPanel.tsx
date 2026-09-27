@@ -174,7 +174,7 @@ export default function CardDetailPanel({
             {card.rejected
               ? // #233: 「割り振り理由」を見に行かせていたが、その欄は #179 で列ごと落ちている。
                 // 却下の理由は現況と経緯メモに書く (rejected の契約もそう案内している)
-                "🚫 このカードは却下として確定し、アーカイブ済みです (理由は下の現況・経緯メモ参照)"
+                "🚫 このカードは却下として確定し、アーカイブ済みです (理由は下の「いま」と「現況」参照)"
               : // #233: 「Doneの要約カード」も #200 で撤去済み。いまは 📦 畳んだ完了 に入る
                 "✅ このカードは完了し、Done列の「📦 畳んだ完了」に畳まれています"}
           </div>
@@ -219,15 +219,19 @@ export default function CardDetailPanel({
           </button>
         </div>
 
+        {/* #277: 見出しはツール契約 (#274/#275) の呼び名に揃える。
+            summary=「いま」(1行) / context=「現況」(節の型で書く固定文) / entries=「経過」(日時つきの行)。
+            以前は summary を「現況」、context+entries をまとめて「経緯メモ」と呼んでいて、
+            契約の「現況」(= context) と画面の「現況」(= summary) が別の欄を指していた */}
         {card.summary && (
           <section>
-            <h3 className="mb-1 text-xs font-bold uppercase tracking-wide text-slate-500">現況</h3>
+            <h3 className="mb-1 text-xs font-bold uppercase tracking-wide text-slate-500">いま</h3>
             <p className="text-sm text-slate-700">📝 {card.summary}</p>
           </section>
         )}
 
         <section>
-          <h3 className="mb-1 text-xs font-bold uppercase tracking-wide text-slate-500">経緯メモ</h3>
+          <h3 className="mb-1 text-xs font-bold uppercase tracking-wide text-slate-500">現況</h3>
           {card.context ? (
             <div className="chat-md rounded-lg bg-slate-50 p-3 text-sm text-slate-700">
               <Markdown remarkPlugins={[remarkGfm, remarkCardLinks]} components={cardLinkComponents(onOpenCard)}>
@@ -235,13 +239,15 @@ export default function CardDetailPanel({
               </Markdown>
             </div>
           ) : (
-            !card.entries?.length && (
-              <p className="text-sm text-slate-500">まだありません。下のチャットで話すと決定事項が記録されます</p>
-            )
+            <p className="text-sm text-slate-500">まだありません。下のチャットで話すと決定事項が記録されます</p>
           )}
-          {/* #274: 経過は固定文とは別の行。日時はサーバーが打ったもの (手書きの日付は行の本文に残っていることがある) */}
-          {!!card.entries?.length && (
-            <ol data-testid="card-entries" className="mt-2 space-y-2 border-l-2 border-slate-200 pl-3">
+        </section>
+
+        {/* #274: 経過は固定文とは別の行。日時はサーバーが打ったもの (手書きの日付は行の本文に残っていることがある) */}
+        {!!card.entries?.length && (
+          <section>
+            <h3 className="mb-1 text-xs font-bold uppercase tracking-wide text-slate-500">経過</h3>
+            <ol data-testid="card-entries" className="space-y-2 border-l-2 border-slate-200 pl-3">
               {card.entries.map((e) => (
                 <li key={e.id} data-testid={`card-entry-${e.id}`} className="text-sm text-slate-700">
                   <div className="text-[10px] tabular-nums text-slate-400">
@@ -256,8 +262,8 @@ export default function CardDetailPanel({
                 </li>
               ))}
             </ol>
-          )}
-        </section>
+          </section>
+        )}
 
         <p className="text-xs text-slate-500">作成 {card.createdAt} / 更新 {card.updatedAt}</p>
       </div>

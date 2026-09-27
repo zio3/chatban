@@ -214,7 +214,7 @@ function ContextSizeChip({ chars, id }: { chars: number; id: number }) {
       data-testid={`card-chars-${id}`}
       data-heavy={heavy ? "1" : undefined}
       className={`shrink-0 text-[10px] tabular-nums ${heavy ? "font-bold text-rose-600" : "text-slate-400"}`}
-      title={heavy ? `経緯メモが ${chars.toLocaleString()} 字。AI が読む量が増えているので、現況を書き直すか畳むころ` : `経緯メモ ${chars.toLocaleString()} 字`}
+      title={heavy ? `経緯メモ (現況 + 経過) が ${chars.toLocaleString()} 字。AI が読む量が増えているので、現況を書き直すか経過を畳むころ` : `経緯メモ (現況 + 経過) ${chars.toLocaleString()} 字`}
     >
       📄{formatChars(chars)}
     </span>

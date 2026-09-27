@@ -2386,10 +2386,12 @@ test("詳細パネルのスプリッタはドラッグで動き、タッチ用�
 
 test("カードに経緯メモの文字数が出て、1万字を超えると強調される (#276)", async ({ page }) => {
   const light = await createCard("E2E: 経緯メモが短い");
+  const edge = await createCard("E2E: 経緯メモが1万字の手前");
   const heavy = await createCard("E2E: 経緯メモが重い");
   const none = await createCard("E2E: 経緯メモなし");
   for (const [id, context] of [
     [light, "あ".repeat(1234)],
+    [edge, "う".repeat(9_999)],
     [heavy, "い".repeat(10_000)],
   ] as const) {
     await fetch(`${API}/api/cards/${id}`, {
@@ -2405,6 +2407,11 @@ test("カードに経緯メモの文字数が出て、1万字を超えると強�
   await expect(lightChip).not.toHaveAttribute("data-heavy", "1");
   // 薄い文字 (板を流し読みするときの邪魔にならない)
   await expect(lightChip).toHaveCSS("font-weight", "400");
+
+  // 境界の手前は切り捨てで出す。四捨五入だと「10k字」なのに強調されず、到達済みに見える (Codex P3)
+  const edgeChip = page.getByTestId(`card-chars-${edge}`);
+  await expect(edgeChip).toHaveText("📄9.9k字");
+  await expect(edgeChip).not.toHaveAttribute("data-heavy", "1");
 
   const heavyChip = page.getByTestId(`card-chars-${heavy}`);
   await expect(heavyChip).toHaveText("📄10k字");

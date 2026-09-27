@@ -202,7 +202,10 @@ function CardTile({
  * 本文は板の配信に載っていない (#226) ので、文字数だけで判断する */
 export const CONTEXT_HEAVY_CHARS = 10_000;
 export function formatChars(n: number): string {
-  return n >= 1000 ? `${(n / 1000).toFixed(1).replace(/\.0$/, "")}k字` : `${n}字`;
+  // 切り捨て。四捨五入だと 9,999 字が「10k字」と出るのに強調されず、到達済みに見える (Codexレビュー P3)
+  if (n < 1000) return `${n}字`;
+  const k = Math.floor(n / 100) / 10;
+  return `${Number.isInteger(k) ? k : k.toFixed(1)}k字`;
 }
 function ContextSizeChip({ chars, id }: { chars: number; id: number }) {
   const heavy = chars >= CONTEXT_HEAVY_CHARS;

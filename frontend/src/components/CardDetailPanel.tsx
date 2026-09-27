@@ -173,8 +173,9 @@ export default function CardDetailPanel({
           <div className="rounded-lg bg-emerald-50 px-3 py-2 text-xs text-emerald-700">
             {card.rejected
               ? // #233: 「割り振り理由」を見に行かせていたが、その欄は #179 で列ごと落ちている。
-                // 却下の理由は現況と経緯メモに書く (rejected の契約もそう案内している)
-                "🚫 このカードは却下として確定し、アーカイブ済みです (理由は下の「いま」と「現況」参照)"
+                // 却下の理由は summary (いま) に一言、詳細は context (現況) か context_append (経過) に書く
+                // (rejected の契約もそう案内している)。#277: 3つの置き場を全部指す
+                "🚫 このカードは却下として確定し、アーカイブ済みです (理由は下の「いま」「現況」「経過」参照)"
               : // #233: 「Doneの要約カード」も #200 で撤去済み。いまは 📦 畳んだ完了 に入る
                 "✅ このカードは完了し、Done列の「📦 畳んだ完了」に畳まれています"}
           </div>
@@ -239,7 +240,13 @@ export default function CardDetailPanel({
               </Markdown>
             </div>
           ) : (
-            <p className="text-sm text-slate-500">まだありません。下のチャットで話すと決定事項が記録されます</p>
+            // #277 (Codex P3): チャットでの決定事項は context_append で「経過」に積まれる。固定文が空でも経過が
+            // あるカードで「まだありません」だけ出すと、現況が埋まるように読めてしまう
+            <p className="text-sm text-slate-500">
+              {card.entries?.length
+                ? "固定文はまだありません (決定事項は下の「経過」にあります)"
+                : "まだありません。下のチャットで話すと決定事項が「経過」に記録されます"}
+            </p>
           )}
         </section>
 

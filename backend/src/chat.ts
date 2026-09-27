@@ -2,6 +2,7 @@ import type OpenAI from "openai";
 import {
   CONTEXT_APPEND_DESCRIPTION,
   CONTEXT_MARKDOWN_RULE,
+  CONTEXT_SECTIONS_RULE,
   createCardsAsAgent,
   RESTORE_DESCRIPTION,
   restoreCardsAsAgent,
@@ -20,7 +21,7 @@ import {
   setProjectContext,
 } from "./db.js";
 import { customLanes } from "./store.js";
-import { agentStatusValues, parseHistory, parseToolArgs, reorderableStatuses } from "./toolArgs.js";
+import { agentStatusValues, DEFAULT_TAIL, parseHistory, parseToolArgs, reorderableStatuses } from "./toolArgs.js";
 import { chatCompletion } from "./llm.js";
 import { getModel } from "./config.js";
 import { argDetail, argShape, choicesDetail, isFailure, outcomeOf, safeToolName, throwOutcome } from "./mcpLog.js";
@@ -197,11 +198,12 @@ export const CONTEXT_VERSION_DESCRIPTION =
  * 呼び出し側も安くなる: SQLは平均83字 (最長136)、`{"ids":[112]}` なら13字。
  * **呼び出しは出力トークンなのでキャッシュが効かない**ぶん、効き方が大きい。 */
 export const GET_CARDS_DESCRIPTION =
-  "カードを番号で読む。経緯メモの固定文(context)と context_version、経過の行(entries: id/at/text)を返すので、書き換える前はここで読む。会話の「#112」が id=112。ゴミ箱・アーカイブ済みも読める(名指しなら在ると答える)";
+  "カードを番号で読む。経緯メモの固定文(context = 現況)と context_version、経過の行(entries: id/at/text。省略時は末尾5件)を返すので、書き換える前はここで読む。会話の「#112」が id=112。ゴミ箱・アーカイブ済みも読める(名指しなら在ると答える)";
 
 /** #274: 経過をどれだけ読むか。同じカードを何度も開くときは since で増えた分だけ受け取る */
 export const HISTORY_DESCRIPTION =
-  "経過(entries)をどれだけ読むか。none=固定文だけ / tail:5=末尾5件 / since:123=id 123 より後の行だけ(前に読んだ最後の id を渡す) / all=全部(省略時)。entryCount が全行数なので、絞ったときは差で「まだある」が分かる";
+  // #275: 既定を all から tail:5 に変えた。読む量を減らすのが #274 の狙いで、既定が全部では効かない
+  "経過(entries)をどれだけ読むか。省略時は tail:5(末尾5件)。none=固定文だけ / tail:N=末尾N件 / since:123=id 123 より後の行だけ(前に読んだ最後の id を渡す) / all=全部(経緯を遡って答えるときだけ)。entryCount が全行数なので、絞ったときは差で「まだある」が分かる";
 
 const GET_CARDS_LIMIT = 10;
 
@@ -302,7 +304,8 @@ export const SUMMARY_DESCRIPTION =
  * 実例: 外部エージェントが書き直すたびに無意識に要約し、経緯メモの情報が減った */
 export const CONTEXT_WRITE_DESCRIPTION =
   // #274: 上書きの対象は固定文だけ。経過の行 (entries) は含まれないので、上書きで経過が消えることは無い
-  "経緯メモの固定文(背景・決めたこと)の全文上書き。経過の行(entries)は含まれない。累積の記録なので、既存を読んでマージした全文を渡す(書き直すときに要約すると前の情報が消える)。渡すときは context_version も必須。1件足すだけなら context_append を使う — そちらは読む必要も版も要らない。" +
+  "経緯メモの固定文(現況)の全文上書き。経過の行(entries)は含まれない。累積の記録なので、既存を読んでマージした全文を渡す(書き直すときに要約すると前の情報が消える。特に「やらないこと」は真っ先に落ちる)。渡すときは context_version も必須。1件足すだけなら context_append を使う — そちらは読む必要も版も要らない。" +
+  CONTEXT_SECTIONS_RULE +
   CONTEXT_MARKDOWN_RULE;
 
 /** #250: **作成時の説明は入口ごとに書かない。**実測すると、同じ `context` なのに
@@ -310,6 +313,7 @@ export const CONTEXT_WRITE_DESCRIPTION =
  * 「(経緯メモの初期値)」だけだった — **MCP から作るときだけ、書く理由が伝わっていなかった** */
 export const CONTEXT_CREATE_DESCRIPTION =
   "登録に至った経緯・会話で出た論点・決まったこと。相談や議論の流れから登録するときは必ず書く (タイトルだけでは背景が失われる)。" +
+  CONTEXT_SECTIONS_RULE +
   CONTEXT_MARKDOWN_RULE;
 
 /** #153: 期限の契約。以前は「期限 YYYY-MM-DD」だけで、**渡した値が使われたかどうかが
@@ -729,6 +733,7 @@ export function buildSystemPrompt(cardFocus?: ReturnType<typeof getCard>, view?:
           `## いま注目しているカード (このチャットは #${cardFocus.id} 専用)`,
           JSON.stringify(cardFocus),
           `- 「これ」「このカード」等の指示語は #${cardFocus.id} を指す。`,
+          `- 上の entries は経過の末尾${DEFAULT_TAIL}件だけ (全 ${cardFocus.entryCount} 行)。過去の経緯を遡って答えるときは get_cards を history:all で読む。`,
           `- この会話で決まったこと・分かったことは update_cards の context_append で #${cardFocus.id} の経緯メモに足す (既存を読む必要も版も要らない)。`,
         ].join("\n")
       : "",
@@ -820,7 +825,8 @@ async function runChatTurnInner(
   view?: string
 ): Promise<ChatResult> {
   const t0 = Date.now();
-  const cardFocus = cardFocusId != null ? getCard(cardFocusId) : undefined;
+  // #275: 注目カードも経過は末尾だけ (get_cards の既定と同じ)。遡りたければ history:all で読める
+  const cardFocus = cardFocusId != null ? getCard(cardFocusId, { tail: DEFAULT_TAIL }) : undefined;
   // #68: 添付はそのままコンテンツパートでLLMへ (画像=vision / PDF=file直投げ)。原本は保存しない
   const fileParts = attachments && attachments.length > 0 ? buildAttachmentParts(attachments) : [];
   // #14: 発言者の記名。「終わりました」等の曖昧参照を解決するためのメタ情報であって発言内容ではない。

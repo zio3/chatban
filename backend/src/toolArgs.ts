@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { CustomLane } from "./types.js";
+import type { CustomLane, EntryHistory } from "./types.js";
 
 /** #245: **エージェントのツール引数を、実行時に1箇所で検査する。**
  *
@@ -58,6 +58,17 @@ export function reorderableStatuses(lanes: CustomLane[]): string[] {
 }
 
 const ids = z.array(z.number().int());
+/** #274: get_cards の history。文字列1つで受ける (none / all / tail:N / since:ID)。
+ * オブジェクトにしないのは、LLM が渡すときに形を迷わないため */
+export const HISTORY_PATTERN = /^(none|all|tail:\d+|since:\d+)$/;
+const history = z.string().regex(HISTORY_PATTERN).optional();
+
+export function parseHistory(s: string | undefined): EntryHistory {
+  if (!s || s === "all") return "all";
+  if (s === "none") return "none";
+  const [kind, n] = s.split(":");
+  return kind === "tail" ? { tail: Number(n) } : { since: Number(n) };
+}
 
 /** 作成・更新のカード1件。**未知のキーはここで断る** (`.strictObject`)。
  *
@@ -116,7 +127,7 @@ export function toolArgSchemas(lanes: CustomLane[]) {
       ids,
     }),
     search_cards: z.strictObject({ terms: z.array(z.string()) }),
-    get_cards: z.strictObject({ ids }),
+    get_cards: z.strictObject({ ids, history }),
     query_log: z.strictObject({ sql: z.string(), goal: z.string().optional() }),
     update_project_context: z.strictObject({ text: z.string(), version: z.number().int() }),
   };

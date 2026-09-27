@@ -17,6 +17,7 @@ function facts(over: Partial<CardFacts> = {}): CardFacts {
     blockedBy: null,
     rejected: false,
     contextVersion: 1,
+    entryCount: 0,
     checkedAt: null,
     sort: 0,
     ...over,
@@ -84,7 +85,7 @@ test("却下と却下の取り消しを区別する", () => {
 test("経緯メモは版だけ伝える (本文を載せると差分が膨らむ)", () => {
   const changes = diffBoards(board([[3, facts()]]), board([[3, facts({ contextVersion: 2 })]]));
   assert.equal(changes.length, 1);
-  assert.match(changes[0], /経緯メモが更新された \(v2\)/);
+  assert.match(changes[0], /経緯メモの固定文が更新された \(v2\)/);
 });
 
 test("依存は中身で比べる (null と空配列は同じ扱い)", () => {

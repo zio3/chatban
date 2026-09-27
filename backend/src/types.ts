@@ -35,10 +35,31 @@ export interface Card {
   /** #112: 経緯メモの版。contextが変わるたびに +1。
    * エージェントが「読む→考える→全文で書き戻す」の間に他人が追記していないかを見る */
   contextVersion: number;
+  /** #274: 経過の行数と文字数。板の配信にも載る (本文は載せない #226)。
+   * contextVersion は追記では動かないので、パネルや差分はこちらで「増えた」に気づく */
+  entryCount: number;
+  entryChars: number;
+  /** #274: 経過の行。getCard / getCards で読んだときだけ載る (listCards には無い)。
+   * history で絞ると一部だけになるので、全部かどうかは entryCount と比べる */
+  entries?: CardEntry[];
   sort: number;
   createdAt: string;
   updatedAt: string;
 }
+
+/** #274: 経過の1行。追記専用で、編集も削除もしない (直すなら追記で訂正する)。
+ * at はサーバーが打つ (手書きの日付は間違う実例があった)。source は出所の種別
+ * (chat / mcp / human / 移行分は null) であって人ではない (#179 で担当者は廃止) */
+export interface CardEntry {
+  id: number;
+  at: string;
+  source: string | null;
+  text: string;
+}
+
+/** #274: get_cards で経過をどれだけ読むか。none=固定文だけ / tail:N=末尾N件 /
+ * since:ID=その行より後 (前に読んだ最後の id を渡す) / all=全部 */
+export type EntryHistory = "none" | "all" | { tail: number } | { since: number };
 
 /** チャットの応答に付随してUIを動かす指示。DBには保存しない揮発物。
  *

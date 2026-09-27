@@ -20,7 +20,7 @@ import {
   setProjectContext,
 } from "./db.js";
 import { customLanes } from "./store.js";
-import { agentStatusValues, parseToolArgs, reorderableStatuses } from "./toolArgs.js";
+import { agentStatusValues, parseHistory, parseToolArgs, reorderableStatuses } from "./toolArgs.js";
 import { chatCompletion } from "./llm.js";
 import { getModel } from "./config.js";
 import { argDetail, argShape, choicesDetail, isFailure, outcomeOf, safeToolName, throwOutcome } from "./mcpLog.js";
@@ -125,6 +125,8 @@ export const QUERY_LOG_DESCRIPTION = [
   // `project_context` の列は残す — 前提情報を更新する前に版を読む経路がここしかない
   // (チャットに `get_project_context` が無い。#257 のレビューで確認済み)
   "project_context(id, text, version, updated_at)",
+  // #274: 経過の行。cards.context には固定文しか無いので、経過を条件にするならこちらを JOIN する
+  "card_entries(id, card_id, at, source, text) = 経緯メモの経過の行 (card_id が cards.id。at は追記された日時、id 昇順が追記の順)",
 "cards(id, title, status, summary, context, context_version, due, blocked_by, rejected, checked_at, done_at, trashed_at, sort, archived, created_at, updated_at)",
   "checked_at = 人が実物で確かめた日時 (nullなら未検収)。status とは別物で、done は列が動いたこと・checked_at は検収が進んだこと。片方からもう片方を推測しない。この窓口は読み取り専用で、checked_at を書く手段はどこにも無い (印を付けられるのは人間だけ)",
   "会話の「#112」は cards.id = 112 (主キー)。番号はプロジェクトごとに1から振られる",
@@ -193,7 +195,11 @@ export const CONTEXT_VERSION_DESCRIPTION =
  * 呼び出し側も安くなる: SQLは平均83字 (最長136)、`{"ids":[112]}` なら13字。
  * **呼び出しは出力トークンなのでキャッシュが効かない**ぶん、効き方が大きい。 */
 export const GET_CARDS_DESCRIPTION =
-  "カードを番号で読む。経緯メモ(context)の全文と context_version を返すので、書き換える前はここで読む。会話の「#112」が id=112。ゴミ箱・アーカイブ済みも読める(名指しなら在ると答える)";
+  "カードを番号で読む。経緯メモの固定文(context)と context_version、経過の行(entries: id/at/text)を返すので、書き換える前はここで読む。会話の「#112」が id=112。ゴミ箱・アーカイブ済みも読める(名指しなら在ると答える)";
+
+/** #274: 経過をどれだけ読むか。同じカードを何度も開くときは since で増えた分だけ受け取る */
+export const HISTORY_DESCRIPTION =
+  "経過(entries)をどれだけ読むか。none=固定文だけ / tail:5=末尾5件 / since:123=id 123 より後の行だけ(前に読んだ最後の id を渡す) / all=全部(省略時)。entriesTotal が全行数なので、絞ったときは差で「まだある」が分かる";
 
 const GET_CARDS_LIMIT = 10;
 
@@ -202,8 +208,8 @@ const GET_CARDS_LIMIT = 10;
  *
  * **チャットとMCPで同じ関数を使う** — 入口ごとに書くと必ず片方だけ直る (#92 #108 #114)。
  * `searchResult` と同じ置き方 */
-export function readCards(ids: number[]): ReturnType<typeof getCards> & { note?: string } {
-  const r = getCards(ids.slice(0, GET_CARDS_LIMIT));
+export function readCards(ids: number[], history?: string): ReturnType<typeof getCards> & { note?: string } {
+  const r = getCards(ids.slice(0, GET_CARDS_LIMIT), parseHistory(history));
   return ids.length > GET_CARDS_LIMIT
     ? { ...r, note: `一度に読めるのは${GET_CARDS_LIMIT}件までです。残りは番号を分けて呼んでください` }
     : r;
@@ -293,7 +299,8 @@ export const SUMMARY_DESCRIPTION =
  * 「累積なので上書きすると前の情報が消える」が書いていなかった。
  * 実例: 外部エージェントが書き直すたびに無意識に要約し、経緯メモの情報が減った */
 export const CONTEXT_WRITE_DESCRIPTION =
-  "経緯メモの全文上書き。累積の記録なので、既存を読んでマージした全文を渡す(書き直すときに要約すると前の情報が消える)。渡すときは context_version も必須。1件足すだけなら context_append を使う — そちらは読む必要も版も要らない。" +
+  // #274: 上書きの対象は固定文だけ。経過の行 (entries) は含まれないので、上書きで経過が消えることは無い
+  "経緯メモの固定文(背景・決めたこと)の全文上書き。経過の行(entries)は含まれない。累積の記録なので、既存を読んでマージした全文を渡す(書き直すときに要約すると前の情報が消える)。渡すときは context_version も必須。1件足すだけなら context_append を使う — そちらは読む必要も版も要らない。" +
   CONTEXT_MARKDOWN_RULE;
 
 /** #250: **作成時の説明は入口ごとに書かない。**実測すると、同じ `context` なのに
@@ -494,7 +501,10 @@ export function buildTools(lanes: CustomLane[]): OpenAI.Chat.Completions.ChatCom
       description: GET_CARDS_DESCRIPTION,
       parameters: {
         type: "object",
-        properties: { ids: { type: "array", items: { type: "integer" }, description: "カード番号" } },
+        properties: {
+          ids: { type: "array", items: { type: "integer" }, description: "カード番号" },
+          history: { type: "string", description: HISTORY_DESCRIPTION },
+        },
         required: ["ids"],
       },
     },
@@ -562,7 +572,7 @@ export async function execTool(name: string, rawArgs: any, events: Set<string>):
       return r;
     }
     case "update_cards": {
-      const { ok, status, updated, note, conflicts, notFound, badDue } = updateCardsAsAgent(args.updates);
+      const { ok, status, updated, note, conflicts, notFound, badDue } = updateCardsAsAgent(args.updates, "chat");
       events.add("board");
       // #112: 版が合わなかった経緯メモは適用していない。現在の全文を返すのでマージして再実行する
       // #153: badDue も返す。**列挙して返しているので、足し忘れると入口ごとにズレる** —
@@ -606,7 +616,7 @@ export async function execTool(name: string, rawArgs: any, events: Set<string>):
       return searchResult(r);
     }
     case "get_cards":
-      return readCards(args.ids as number[]);
+      return readCards(args.ids as number[], args.history);
     case "query_log": {
       // #181: scope は廃止 (cost 側の llm_calls を撤去したので窓口が1つになった)
       try {

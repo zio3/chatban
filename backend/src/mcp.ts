@@ -17,6 +17,7 @@ import {
   GET_CARDS_DESCRIPTION,
   readCards,
   GOAL_DESCRIPTION,
+  HISTORY_DESCRIPTION,
   QUERY_LOG_DESCRIPTION,
   REJECTED_DESCRIPTION,
   REORDER_DESCRIPTION,
@@ -33,6 +34,7 @@ import {
   reorderCards,
   trashCard,
   getProjectContextRow,
+  contextChars,
   getCard,
   listCards,
   searchCards,
@@ -43,7 +45,7 @@ import { log } from "./log.js";
 // #247: MCP経由の呼び出しを記録する (キー名だけ。値は残さない)
 import { argDetail, argShape, isFailure, safeToolName, throwOutcome, toolOutcome } from "./mcpLog.js";
 // #245: 列の一覧と引数の契約は toolArgs.ts が唯一の置き場 (チャットと同じものを指す)
-import { agentStatusValues, parseToolArgs, reorderableStatuses } from "./toolArgs.js";
+import { agentStatusValues, HISTORY_PATTERN, parseToolArgs, reorderableStatuses } from "./toolArgs.js";
 import { contextReference, contextTemplateHint } from "./contextTemplate.js";
 import { currentProjectId, customLanes, getProject } from "./store.js";
 import type { CardStatus, ViewEvent } from "./types.js";
@@ -93,7 +95,8 @@ function brief(t: ReturnType<typeof getCard>) {
     ...(t.due ? { due: t.due } : {}),
     ...(t.blockedBy?.length ? { blockedBy: t.blockedBy } : {}),
     ...(t.rejected ? { rejected: true } : {}),
-    ...(t.context ? { contextChars: t.context.length, contextVersion: t.contextVersion } : {}),
+    // #274: 大きさは固定文 + 経過の行。経過の行数も添える (版は追記で動かないので、増えたかはこちら)
+    ...(contextChars(t) > 0 ? { contextChars: contextChars(t), contextVersion: t.contextVersion, entryCount: t.entryCount } : {}),
     updatedAt: t.updatedAt,
   };
 }
@@ -240,7 +243,7 @@ export function buildMcpServer(
       const gate = parseToolArgs("update_cards", { updates }, LANES);
       if (!gate.ok) return text({ ok: false, note: gate.note });
       updates = gate.args.updates;
-      const { ok, status, updated, note, conflicts, notFound, badDue } = updateCardsAsAgent(updates as any);
+      const { ok, status, updated, note, conflicts, notFound, badDue } = updateCardsAsAgent(updates as any, "mcp");
       onEvent("board");
       return text({
         // #120/#123: 1件でも適用できなければ ok:false。
@@ -311,12 +314,15 @@ export function buildMcpServer(
     "get_cards",
     {
       description: GET_CARDS_DESCRIPTION,
-      inputSchema: { ids: z.array(z.number().int()).describe("カード番号") },
+      inputSchema: {
+        ids: z.array(z.number().int()).describe("カード番号"),
+        history: z.string().regex(HISTORY_PATTERN).optional().describe(HISTORY_DESCRIPTION),
+      },
     },
-    async ({ ids }) => {
-      const gate = parseToolArgs("get_cards", { ids }, LANES);
+    async ({ ids, history }) => {
+      const gate = parseToolArgs("get_cards", { ids, history }, LANES);
       if (!gate.ok) return text({ ok: false, note: gate.note });
-      return text(readCards(gate.args.ids as number[]));
+      return text(readCards(gate.args.ids as number[], gate.args.history));
     }
   );
 

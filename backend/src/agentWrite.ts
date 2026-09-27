@@ -2,6 +2,7 @@ import {
   createCard,
   DONE_GATE_RULE,
   DUE_FORMAT_RULE,
+  appendEntry,
   getCard,
   isDueDate,
   restoreCard,
@@ -77,17 +78,17 @@ function coerceStatus(status: string | undefined): { status?: CardStatus; coerce
  * (remark がエスケープを解決してから text ノードに入れるので、#248 のプラグインからは
  * 素の `#` と区別が付かない)。**直さずに、書き方のほうを決めた** (zio判断) */
 export const CONTEXT_MARKDOWN_RULE =
-  "経緯メモは Markdown として表示される(箇条書き・表・強調が使える)。ただし節は増やさず、末尾の「## 経過」に積む。#12 のような番号はカードへのリンクになるので、番号を文字として見せたいときはバックティックで囲む";
+  // #274: 「節は増やさず末尾の ## 経過 に積む」はここにあった。経過が行になったので、
+  // 固定文に経過の節を作る必要も、追記の口を守るために節を我慢する必要も無くなった
+  "経緯メモは Markdown として表示される(箇条書き・表・強調が使える)。#12 のような番号はカードへのリンクになるので、番号を文字として見せたいときはバックティックで囲む";
 
 export const CONTEXT_APPEND_DESCRIPTION =
-  "経緯メモの末尾に追記する。既存を読む必要も context_version も要らない(足すだけなので他の人の追記を消さない)。進捗・決定事項・検収エビデンスを1件足すときはこちらを使う。全文を整理したい・過去の記述を書き換えたいときだけ context + context_version の上書きを使う。" +
-  // 実例: 経緯メモを【実測】【原因】【対処】と節で構造化したため、末尾に足すと節の外に付いてしまい、
-  // 追記の口があるのに一度も使えなかった(5回の更新で6000字以上を送り直していた)。
-  // 「追記を使え」という指示はあったが、使える形で書き始める方法が無かった
-  "追記で積む前提なら、経緯メモの末尾に「## 経過」を作っておく。前半(背景・決めたこと)は固定、経過だけが伸びる形なら追記が効く — 節で細かく構造化すると追記が節の外に付き、毎回全文を書き直すことになる。" +
+  // #274: 追記は context の末尾に文字列で足すのではなく、経過 (entries) の行として積む。
+  // 日時はサーバーが打つので本文に書かなくてよい。「## 経過」を作る話は行になったので消えた
+  // (以前は節で構造化すると追記が節の外に付き、5回の更新で6000字以上を送り直した実例があった)
+  "経緯メモの経過に1行足す(entries の行になり、日時はサーバーが打つ)。既存を読む必要も context_version も要らない(足すだけなので他の人の追記を消さない)。進捗・決定事項・検収エビデンスを1件足すときはこちらを使う。固定文(context)を整理したいときだけ context + context_version の上書きを使う — 経過の行は上書きの対象に含まれない。" +
   // #250: **一番使わせている口にこそ契約が要る。**Markdownの案内を作成と全文上書きにだけ付けたら、
-  // 「1件足すときはこちらを使う」と誘導しているこの口だけ届いていなかった (Codexレビュー P2)。
-  // 節の話は上で言っているので繰り返さない — 足すのは書式と、番号を文字として残す書き方だけ
+  // 「1件足すときはこちらを使う」と誘導しているこの口だけ届いていなかった (Codexレビュー P2)
   "追記も Markdown として表示される。#12 のような番号はカードへのリンクになるので、外部の番号など文字として残したいものはバックティックで囲む。" +
   // #276: 経緯メモは AI が1回読む量に直結する。長さの目安は契約に書いておき、超えたら返り値でも言う
   "1回の追記は800字まで (超えても保存はするが注意が返る)。長い内容はファイルや PR に書き、ここにはリンクと要点だけ積む";
@@ -221,7 +222,8 @@ export const RESTORE_CHECKED_NOTE =
 
 export const RESTORE_DESCRIPTION = `ゴミ箱に入れたカードを元に戻す(複数可)。**戻すと検収の印は外れる** — ${DONE_GATE_RULE}。戻せなかったIDは notRestored で名指しで返る`;
 
-export function updateCardsAsAgent(updates: AgentCardUpdate[]): {
+/** @param source #274: 追記の出所 (chat / mcp)。経過の行に残る。人ではなく入口の種別 */
+export function updateCardsAsAgent(updates: AgentCardUpdate[], source: string | null = null): {
   ok: boolean;
   /** #123: 全件通ったのか一部だけかを、配列を数えさせずに言う。
    * ok だけだと「全部失敗」と「一部だけ失敗」が同じ false になる */
@@ -240,12 +242,13 @@ export function updateCardsAsAgent(updates: AgentCardUpdate[]): {
   const notFound: number[] = [];
   const badDue: number[] = [];
   const longAppend: number[] = [];
+  const entryInserts: { id: number; text: string }[] = [];
 
   const patches = updates.map((u) => {
     // #87: 「差分だけ送る」モデルを前提にしない。全フィールドをエコーバックするモデル
     // (実測: gpt-5.6-terra) だと、変更していない値まで patch に載って既存値を壊す。
     // 現在値と突き合わせ、実際に変わったフィールドだけを通す
-    const cur = getCard(u.id);
+    const cur = getCard(u.id, "none");
     // #123: 存在しないIDは名指しで返す。以前は updated に null が混ざるだけで、
     // ok:true / updated:[null, {...}] を見て「2件とも書けた」と読めてしまった。
     // エラーで全体を落とさないのは #120/#108 と同じ理由 (古い一覧を元に呼んだだけで
@@ -280,11 +283,10 @@ export function updateCardsAsAgent(updates: AgentCardUpdate[]): {
     // (#114のdone→reviewと同じ「拒否ではなく情報を返す」形。LLMは読み直して考え直せる)
     // 追記は「既存の末尾に足す」だけなので版で守る必要がない。
     // 全文置換と併用されたら、置換後の全文の末尾に足す (自然な読み方。片方を黙って捨てない)
+    // #274: 追記は context に足すのではなく、経過の行 (card_entries) に insert する。
+    // 全文置換と併用されたら、固定文を置き換えたうえで行も足す (片方を黙って捨てない)
     const appended = typeof u.context_append === "string" ? cleanAgentText(u.context_append).trim() : "";
-    const baseContext = u.context !== undefined ? u.context : cur?.context ?? null;
-    const nextContext = appended
-      ? [baseContext, appended].filter((s) => s && s.trim() !== "").join("\n\n")
-      : u.context;
+    const nextContext = u.context;
 
     const contextIncoming = changed(nextContext, cur?.context ?? null);
     // 版を確認するのは全文置換のときだけ。追記のみなら読んでいなくてよい
@@ -309,6 +311,7 @@ export function updateCardsAsAgent(updates: AgentCardUpdate[]): {
     if (dueCheck.bad) badDue.push(u.id);
     if (didCoerce) coerced.push(u.id);
     if (appended.length > LONG_APPEND_CHARS) longAppend.push(u.id);
+    if (appended) entryInserts.push({ id: u.id, text: appended });
 
     return {
       id: u.id,
@@ -324,6 +327,8 @@ export function updateCardsAsAgent(updates: AgentCardUpdate[]): {
     };
   });
 
+  // #274: 経過の行は patch より先に足す。updateCards が返す Card に行数が乗るようにするため
+  for (const e of entryInserts) appendEntry(e.id, e.text, source);
   // 一括更新は db 層でまとめて処理 (完了遷移の通知=Done列の畳み直しが1回で済む #60)
   const updated = updateCards(patches.filter((p): p is NonNullable<typeof p> => p !== null));
   const notes = [

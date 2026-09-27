@@ -157,6 +157,14 @@ CREATE TABLE IF NOT EXISTS project_context (
   text TEXT NOT NULL DEFAULT '',
   updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
 );
+CREATE TABLE IF NOT EXISTS card_entries (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  card_id INTEGER NOT NULL,
+  at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+  source TEXT,
+  text TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS card_entries_card ON card_entries(card_id, id);
 CREATE TABLE IF NOT EXISTS chat_messages (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   role TEXT NOT NULL,
@@ -195,6 +203,10 @@ CREATE TABLE IF NOT EXISTS chat_messages (
   // 他人の追記が消える。status や due のような単一値は後勝ちでも実害が小さく、
   // むしろ長いサイクル(context)と同じ番号で守ると、実害のない衝突でリトライが多発する
   addColumn("ALTER TABLE cards ADD COLUMN context_version INTEGER NOT NULL DEFAULT 1");
+  // #274: 経緯メモの「経過」は cards.context の末尾に文字列で積んでいたが、card_entries の行にした
+  // (上の CREATE)。context は前半の固定文 (背景・決めたこと) だけになり、版はそちらにしか効かない。
+  // 古い形 (context の中に「## 経過」節) は `scripts/migrate-entries.mjs` (下見 → --apply) で行に落とす。
+  // 未移行のDBを開いても壊れない — 経過が固定文の一部として見えるだけ
   // #108: 検収の印。人が実物で確かめた日時が入る (nullなら未検収)。
   // status とは別物 — done は「列が動いた」、checked_at は「人が確かめた」。
   // 一塊の完了を管理する重要なフラグなので、UIの一時状態ではなくDBに持つ。

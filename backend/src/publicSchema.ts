@@ -26,6 +26,8 @@ export const PUBLIC_TABLES: readonly string[] = [
   // 会話をキーワードで引く経路は `search_cards` に残っている (db.ts の `chatHits`)。
   // 失うのは「時期や条件で絞る」だけ。
   "project_context",
+  // #274: 経過の行。cards.context の末尾に文字列で積んでいたものを表にした
+  "card_entries",
 ];
 
 /** #252: `PUBLIC_TABLES` に出てくる列名の全部。**ログにSQLを残すときの許可リスト**で使う
@@ -37,7 +39,9 @@ export const PUBLIC_TABLES: readonly string[] = [
 // **この一覧は「引ける表の列」**であって、DBに在る列の一覧ではない。
 export const PUBLIC_COLUMNS: readonly string[] = [
   "archived",
+  "at",
   "blocked_by",
+  "card_id",
   "checked_at",
   "context",
   "context_version",
@@ -50,6 +54,7 @@ export const PUBLIC_COLUMNS: readonly string[] = [
   "rejected",
   "sort",
   "sort_key",
+  "source",
   "status",
   "summary",
   "text",

@@ -95,7 +95,8 @@ test("引ける表の一覧から外れている (説明ではなく実体)", as
   const { PUBLIC_TABLES, PUBLIC_COLUMNS } = await import("./db.js");
   assert.ok(!PUBLIC_TABLES.includes("chat_messages"), "許可リストに残っている");
   // 専用列も落とす。**この一覧は「引ける表の列」**であって、DBに在る列の一覧ではない
-  for (const c of ["role", "content", "trace", "usage", "card_id"]) {
+  // #274: card_id は card_entries の列として引けるようになった (chat_messages のものではない)
+  for (const c of ["role", "content", "trace", "usage"]) {
     assert.ok(!PUBLIC_COLUMNS.includes(c), `${c} が引ける列に残っている`);
   }
 });

@@ -46,6 +46,8 @@ import {
   restoreCard,
   trashCard,
   getProjectContextRow,
+  appendEntry,
+  contextChars,
   getCard,
   listChatMessages,
   listCards,
@@ -242,8 +244,9 @@ function canAcceptAttachments(): boolean {
  * 同じ形に揃える — 本文の代わりに contextChars (あるかどうか・どれくらいか) と
  * contextVersion (変わったかどうか) を載せる。パネルは版を見て取り直せる */
 function briefCard(t: Card) {
-  const { context, ...rest } = t;
-  return { ...rest, contextChars: context?.length ?? 0 };
+  const { context, entries: _entries, ...rest } = t;
+  // #274: 大きさは固定文 + 経過の行。行数 (entryCount) は rest に入っている
+  return { ...rest, contextChars: contextChars(t) };
 }
 
 function boardPayload(projectId: number) {
@@ -374,6 +377,16 @@ app.get("/api/cards/:id", (req, res) => {
   const card = getCard(Number(req.params.id));
   if (!card) return res.status(404).json({ error: "not found" });
   res.json(card);
+});
+
+// #274: 経過に1行足す (人の手による追記。UIとE2Eの口)。追記専用で、直す口は無い (直すなら追記で訂正)
+app.post("/api/cards/:id/entries", (req, res) => {
+  const text = typeof req.body?.text === "string" ? req.body.text.trim() : "";
+  if (!text) return res.status(400).json({ error: "text required" });
+  const entry = appendEntry(Number(req.params.id), text, "human");
+  if (!entry) return res.status(404).json({ error: "not found" });
+  broadcastBoard();
+  res.json(entry);
 });
 
 app.patch("/api/cards/:id", (req, res) => {

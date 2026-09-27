@@ -2383,3 +2383,39 @@ test("詳細パネルのスプリッタはドラッグで動き、タッチ用�
   // 左へ120px ドラッグ → パネルが広くなる
   await expect.poll(async () => (await panel.boundingBox())!.width).toBeGreaterThan(before + 60);
 });
+
+test("カードに経緯メモの文字数が出て、1万字を超えると強調される (#276)", async ({ page }) => {
+  const light = await createCard("E2E: 経緯メモが短い");
+  const heavy = await createCard("E2E: 経緯メモが重い");
+  const none = await createCard("E2E: 経緯メモなし");
+  for (const [id, context] of [
+    [light, "あ".repeat(1234)],
+    [heavy, "い".repeat(10_000)],
+  ] as const) {
+    await fetch(`${API}/api/cards/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ context }),
+    });
+  }
+  await page.goto("/");
+
+  const lightChip = page.getByTestId(`card-chars-${light}`);
+  await expect(lightChip).toHaveText("📄1.2k字");
+  await expect(lightChip).not.toHaveAttribute("data-heavy", "1");
+  // 薄い文字 (板を流し読みするときの邪魔にならない)
+  await expect(lightChip).toHaveCSS("font-weight", "400");
+
+  const heavyChip = page.getByTestId(`card-chars-${heavy}`);
+  await expect(heavyChip).toHaveText("📄10k字");
+  await expect(heavyChip).toHaveAttribute("data-heavy", "1");
+  // 強調は色と太さの両方 (色だけだと白飛びする画面で見分けられない #203)
+  await expect(heavyChip).toHaveCSS("font-weight", "700");
+  const lightColor = await lightChip.evaluate((el) => getComputedStyle(el).color);
+  const heavyColor = await heavyChip.evaluate((el) => getComputedStyle(el).color);
+  expect(heavyColor).not.toBe(lightColor);
+
+  // 経緯メモが無いカードにはチップ自体が出ない (0字と書かない)
+  await expect(page.getByTestId(`card-tile-${none}`)).toBeVisible();
+  await expect(page.getByTestId(`card-chars-${none}`)).toHaveCount(0);
+});

@@ -15,6 +15,9 @@
 //     (箇条書きで積む運用が決まる前の書き方)。固定文に戻すと進捗が固定文に混ざり、行に分けると
 //     節の見出しだけの行ができるので、節を1件として残す
 //   - 罫線 (`---` だけの行) は区切りとして捨てる
+//   - **コードフェンス (``` 〜 ```) の中は本文として扱う** — 中の `## 経過` / `- ` / `---` を見出しや
+//     箇条書きに読まない (Codexレビュー P1: フェンス内の `## 経過` が見出し扱いで消えていた)。
+//     フェンスが閉じないまま終わるカードは分け方が決められないので拒む
 //   - 日時: 行頭の `YYYY-MM-DD` (任意で ` HH:MM`) を拾う。無ければ直前の件と同じ。1件目にも無ければ
 //     カードの updated_at。source は null (移行分。chat / mcp / human と区別できる)
 //   - 見出しより前が空なら context は NULL
@@ -35,13 +38,23 @@ const DATA = process.env.CHATBAN_DATA_DIR ?? "data";
 const HEADING = /^## 経過\s*$/;
 const SECTION_HEADING = /^#{1,6} /;
 const RULE = /^---\s*$/;
+const FENCE = /^\s*(```|~~~)/;
 const DATE_ANYWHERE = /(\d{4}-\d{2}-\d{2})/;
 const DATE_AT_HEAD = /^(\d{4}-\d{2}-\d{2})(?:[ T](\d{1,2}):(\d{2}))?/;
 
 /** 固定文と経過の行に分ける。純粋関数 (テストから直接呼べる) */
 export function splitContext(context, fallbackAt) {
   const lines = context.replace(/\r\n/g, "\n").split("\n");
-  const at = lines.findIndex((l) => HEADING.test(l));
+  // フェンスの外にある最初の「## 経過」行
+  let fence = false;
+  let at = -1;
+  for (let i = 0; i < lines.length; i++) {
+    if (FENCE.test(lines[i])) fence = !fence;
+    else if (!fence && HEADING.test(lines[i])) {
+      at = i;
+      break;
+    }
+  }
   if (at < 0) return null;
 
   const head = lines.slice(0, at).join("\n").trimEnd();
@@ -56,7 +69,20 @@ export function splitContext(context, fallbackAt) {
   };
   // section = 見出しで始まる節の中 (箇条書きも節に含める) / bullets = 「- 」ごとに1件
   let mode = "bullets";
+  fence = false;
   for (const raw of lines.slice(at + 1)) {
+    if (FENCE.test(raw)) {
+      fence = !fence;
+      if (!cur) cur = { at: lastAt, lines: [] };
+      cur.lines.push(raw.trimEnd());
+      continue;
+    }
+    if (fence) {
+      // フェンスの中は見出しでも箇条書きでも罫線でもない。そのまま本文
+      if (!cur) cur = { at: lastAt, lines: [] };
+      cur.lines.push(raw.trimEnd());
+      continue;
+    }
     if (HEADING.test(raw)) {
       // 繰り返しの見出し。節の途中なら節を閉じて箇条書きの読み方に戻る
       flush();
@@ -96,6 +122,7 @@ export function splitContext(context, fallbackAt) {
     cur.lines.push(line);
   }
   flush();
+  if (fence) return { unterminatedFence: true };
   return { head: head === "" ? null : head, entries };
 }
 
@@ -115,12 +142,16 @@ function inspect(db) {
   for (const r of rows) {
     const split = splitContext(r.context, r.updated_at);
     if (!split) continue; // バッククォート等で本文に出てくるだけ
+    if (split.unterminatedFence) {
+      refusals.push(`#${r.id} はコードフェンスが閉じていない — 分け方を決められないので人が直すこと`);
+      continue;
+    }
     const already = db.prepare("SELECT COUNT(*) c FROM card_entries WHERE card_id = ?").get(r.id).c;
     if (already > 0) {
       refusals.push(`#${r.id} は既に経過の行が ${already} 件あるのに、固定文にも「## 経過」節が残っている — 人が中身を見て決めること`);
       continue;
     }
-    ops.push({ id: r.id, ...split });
+    ops.push({ id: r.id, original: r.context, ...split });
     n += split.entries.length;
   }
   if (ops.length > 0) plan.push(`${ops.length} 枚の「## 経過」節を ${n} 行に分ける`);
@@ -130,18 +161,25 @@ function inspect(db) {
 function handle(path) {
   const db = new Database(path, APPLY ? {} : { readonly: true });
   try {
-    const { plan, refusals, ops } = inspect(db);
-    if (refusals.length > 0) return { plan, refusals, applied: false };
-    if (!APPLY || ops.length === 0) return { plan, refusals, applied: false };
+    if (!APPLY) {
+      const { plan, refusals } = inspect(db);
+      return { plan, refusals, applied: false };
+    }
+    // 読む・拒否を決める・書く、を1つの書き込みトランザクションの中で行う (Codexレビュー P2)。
+    // 外で読んでから書くと、稼働中の本体がその間に固定文を書き換えたり行を足したりしたぶんが、
+    // 古い本文から作った head の無条件 UPDATE で消える。immediate で最初に書きロックを取る
     const ins = db.prepare("INSERT INTO card_entries (card_id, at, source, text) VALUES (?, ?, NULL, ?)");
-    const upd = db.prepare("UPDATE cards SET context = ? WHERE id = ?");
-    db.transaction(() => {
+    const upd = db.prepare("UPDATE cards SET context = ? WHERE id = ? AND context = ?");
+    return db.transaction(() => {
+      const { plan, refusals, ops } = inspect(db);
+      if (refusals.length > 0 || ops.length === 0) return { plan, refusals, applied: false };
       for (const op of ops) {
         for (const e of op.entries) ins.run(op.id, e.at, e.text);
-        upd.run(op.head, op.id);
+        // 読んだ本文と同じときだけ書く。違えば (同じトランザクション内なので起きないはずだが) 巻き戻す
+        if (upd.run(op.head, op.id, op.original).changes !== 1) throw new Error(`#${op.id} の固定文が読んだときと違う`);
       }
-    })();
-    return { plan, refusals, applied: true };
+      return { plan, refusals, applied: true };
+    }).immediate();
   } finally {
     db.close();
   }

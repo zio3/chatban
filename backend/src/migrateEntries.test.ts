@@ -31,6 +31,11 @@ const OLD = [
   "",
   "決めたこと。本文で `## 経過` と書いた説明は見出しではない。",
   "",
+  "```md",
+  "## 経過",
+  "フェンスの中の見出しは本文 (Codexレビュー P1)",
+  "```",
+  "",
   "## 経過",
   "",
   "- 2026-08-28: 起票",
@@ -38,6 +43,10 @@ const OLD = [
   "",
   "- 実装完了 (PR#1)。日付が無いので直前の件と同じ日時",
   "- 2026-09-06 10:38 JST デプロイ完了",
+  "  ```yaml",
+  "  ---",
+  "  - フェンスの中の罫線と箇条書きは分けない",
+  "  ```",
   "",
   "---",
   "",
@@ -76,14 +85,18 @@ test("下見は書かない。--apply で「## 経過」節が行になり、固
   assert.equal(applied.status, 0, applied.stderr);
   db = new Database(p, { readonly: true });
   const card = db.prepare("SELECT context FROM cards WHERE id = 1").get() as any;
-  assert.equal(card.context, "## 背景\n\n決めたこと。本文で `## 経過` と書いた説明は見出しではない。", "固定文が残っていない");
+  assert.equal(
+    card.context,
+    "## 背景\n\n決めたこと。本文で `## 経過` と書いた説明は見出しではない。\n\n```md\n## 経過\nフェンスの中の見出しは本文 (Codexレビュー P1)\n```",
+    "固定文が残っていない (フェンスの中の ## 経過 は見出しではない)"
+  );
   const rows = db.prepare("SELECT at, source, text FROM card_entries WHERE card_id = 1 ORDER BY id").all() as any[];
   assert.deepEqual(
     rows.map((r) => [r.at, r.text]),
     [
       ["2026-08-28 00:00:00", "2026-08-28: 起票\n  - サブの箇条書きは前の件に付く"],
       ["2026-08-28 00:00:00", "実装完了 (PR#1)。日付が無いので直前の件と同じ日時"],
-      ["2026-09-06 10:38:00", "2026-09-06 10:38 JST デプロイ完了"],
+      ["2026-09-06 10:38:00", "2026-09-06 10:38 JST デプロイ完了\n  ```yaml\n  ---\n  - フェンスの中の罫線と箇条書きは分けない\n  ```"],
       // 見出しの節は箇条書きごと1件。罫線は捨てる。日時は見出しの日付
       ["2026-09-10 00:00:00", "## 2026-09-10 結果 (見出しで書かれた進捗)\n\n節の中の箇条書きは分けない:\n- 実測 a\n- 実測 b"],
     ]
@@ -98,6 +111,18 @@ test("下見は書かない。--apply で「## 経過」節が行になり、固
   const again = run(true);
   assert.equal(again.status, 0);
   assert.doesNotMatch(again.stdout, /に分ける/, "二重に移行している");
+});
+
+test("コードフェンスが閉じていないカードは拒む (分け方を決められない)", () => {
+  const p = oldDb("3-fence.db", (db) => {
+    db.prepare("INSERT INTO cards (id, title, context) VALUES (9, '開いたまま', '## 経過\n```\n- 閉じない')").run();
+  });
+  const r = run(true);
+  assert.equal(r.status, 1, "拒否したのに終了コードが 0");
+  assert.match(r.stdout, /#9 はコードフェンスが閉じていない/, r.stdout);
+  const db = new Database(p, { readonly: true });
+  assert.equal((db.prepare("SELECT COUNT(*) c FROM card_entries").get() as any).c, 0, "拒んだ DB に書いている (#1 も同じ DB)");
+  db.close();
 });
 
 test("既に行があるのに節も残っているカードは拒み、そのDBには1バイトも書かない", () => {

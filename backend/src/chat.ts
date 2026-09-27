@@ -159,7 +159,8 @@ export const QUERY_LOG_DESCRIPTION = [
   // 揃ったものだけ外した。done_cards の例文を1本残してあるのは、ビューの存在自体は
   // 例文でしか目に入らないため (ビューを作った経緯は store.ts の done_cards を参照)
   "例(いつ何件終わったか): SELECT done_day, COUNT(*) n FROM done_cards GROUP BY 1 ORDER BY 1 DESC",
-  "SELECT * は使わない。必要な列だけ挙げる。context(経緯メモ)は1件1,000字を超えるので、一覧では length(context) か substr(context,1,120) にし、全文が要るカードだけ id で絞って引き直す",
+  // #274: context は固定文だけ。経過は card_entries の行なので、「context を引けば全文」ではなくなった
+  "SELECT * は使わない。必要な列だけ挙げる。context(経緯メモの固定文)は長いので、一覧では length(context) か substr(context,1,120) にする。経過の行は context に無く card_entries にある — 経緯の全文が要るカードは get_cards (history) で読む",
   "live_cards ビューを使う。cards から「生きているもの」(ゴミ箱でもアーカイブ済みでもないもの)だけを、ボードと同じ並びで抜いたもの。条件と並びを毎回書かなくてよく、書き忘れてゴミ箱のカードが混ざることもない。列は cards と同じ + sort_key(=COALESCE(sort,id))。ゴミ箱やアーカイブを見たいときだけ cards を直に引く",
   "例(1件の詳細。経緯メモの全文と版): SELECT title, status, summary, context, context_version, blocked_by FROM cards WHERE id=112",
   "LLM呼び出しの記録 (トークン・単価・レイテンシ) はここには無い (#181で撤去)。速度やキャッシュの効きを見たいときは backend/logs/ のログを読む",
@@ -199,7 +200,7 @@ export const GET_CARDS_DESCRIPTION =
 
 /** #274: 経過をどれだけ読むか。同じカードを何度も開くときは since で増えた分だけ受け取る */
 export const HISTORY_DESCRIPTION =
-  "経過(entries)をどれだけ読むか。none=固定文だけ / tail:5=末尾5件 / since:123=id 123 より後の行だけ(前に読んだ最後の id を渡す) / all=全部(省略時)。entriesTotal が全行数なので、絞ったときは差で「まだある」が分かる";
+  "経過(entries)をどれだけ読むか。none=固定文だけ / tail:5=末尾5件 / since:123=id 123 より後の行だけ(前に読んだ最後の id を渡す) / all=全部(省略時)。entryCount が全行数なので、絞ったときは差で「まだある」が分かる";
 
 const GET_CARDS_LIMIT = 10;
 

@@ -14,7 +14,7 @@ import test from "node:test";
 const { ensureInitialProject } = await import("./store.js");
 ensureInitialProject();
 
-const { createCard, getCard, listCards, searchCards } = await import("./db.js");
+const { createCard, getCard, listCards, listEntries, purgeCard, searchCards, trashCard } = await import("./db.js");
 const { execTool } = await import("./chat.js");
 
 const run = (name: string, args: unknown) => execTool(name, args, new Set<string>()) as Promise<any>;
@@ -87,6 +87,18 @@ test("get_cards の history で読む量を選べる (none / tail / since / all)
   // 形が違う history は入口で弾く (黙って全部返さない)
   const bad = await run("get_cards", { ids: [id], history: "last:3" });
   assert.equal(bad.ok, false, "契約に無い history が通っている");
+});
+
+test("ゴミ箱から本当に消すと、経過の行も一緒に消える", async () => {
+  const id = await cardWithHead("消えるカード");
+  await run("update_cards", { updates: [{ id, context_append: "消えるべき行" }] });
+  assert.equal(listEntries(id).length, 1);
+
+  trashCard(id);
+  assert.equal(listEntries(id).length, 1, "ゴミ箱に入れただけで行が消えている (復元できなくなる)");
+  assert.equal(purgeCard(id), true);
+  // Codexレビュー P1: cards だけ消すと本文が card_entries に残り、SQL 窓口から読めた
+  assert.equal(listEntries(id).length, 0, "本当に消したのに経過の行が残っている");
 });
 
 test("検索は経過の行も見る", async () => {

@@ -430,7 +430,13 @@ export function restoreCard(id: number): Card | undefined {
  * 復元できる状態を必ず一度経由させる。条件はコードで持つ (UIがゴミ箱画面からしか
  * 呼ばない、に依存しない — #57/#69 と同じ形) */
 export function purgeCard(id: number): boolean {
-  return db().prepare("DELETE FROM cards WHERE id = ? AND trashed_at IS NOT NULL").run(id).changes > 0;
+  // #274: 経過の行も一緒に消す (Codexレビュー P1)。card_entries に外部キーは無いので、ここで対にする。
+  // 残すと「本当に消す」で消したはずの本文が SQL 窓口 (card_entries は公開している) から読める
+  return db().transaction(() => {
+    const gone = db().prepare("DELETE FROM cards WHERE id = ? AND trashed_at IS NOT NULL").run(id).changes > 0;
+    if (gone) db().prepare("DELETE FROM card_entries WHERE card_id = ?").run(id);
+    return gone;
+  })();
 }
 
 export interface SummaryElement {

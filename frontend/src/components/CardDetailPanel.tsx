@@ -235,7 +235,27 @@ export default function CardDetailPanel({
               </Markdown>
             </div>
           ) : (
-            <p className="text-sm text-slate-500">まだありません。下のチャットで話すと決定事項が記録されます</p>
+            !card.entries?.length && (
+              <p className="text-sm text-slate-500">まだありません。下のチャットで話すと決定事項が記録されます</p>
+            )
+          )}
+          {/* #274: 経過は固定文とは別の行。日時はサーバーが打ったもの (手書きの日付は行の本文に残っていることがある) */}
+          {!!card.entries?.length && (
+            <ol data-testid="card-entries" className="mt-2 space-y-2 border-l-2 border-slate-200 pl-3">
+              {card.entries.map((e) => (
+                <li key={e.id} data-testid={`card-entry-${e.id}`} className="text-sm text-slate-700">
+                  <div className="text-[10px] tabular-nums text-slate-400">
+                    {e.at}
+                    {e.source && <span className="ml-1">· {e.source}</span>}
+                  </div>
+                  <div className="chat-md">
+                    <Markdown remarkPlugins={[remarkGfm, remarkCardLinks]} components={cardLinkComponents(onOpenCard)}>
+                      {e.text}
+                    </Markdown>
+                  </div>
+                </li>
+              ))}
+            </ol>
           )}
         </section>
 

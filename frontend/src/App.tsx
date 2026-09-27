@@ -190,6 +190,8 @@ export default function App() {
   // 板の配信には版だけが載っているので、本文を配らずに鮮度が保てる
   const detailContextVersion =
     detailCardId !== null ? cards.find((t) => t.id === detailCardId)?.contextVersion : undefined;
+  // #274: 追記は版を動かさないので、経過の行数も見る。行は増えるだけ (追記専用) なので数で足りる
+  const detailEntryCount = detailCardId !== null ? cards.find((t) => t.id === detailCardId)?.entryCount : undefined;
   useEffect(() => {
     if (detailCardId === null) {
       setDetailFull(null);
@@ -206,7 +208,7 @@ export default function App() {
     return () => {
       alive = false;
     };
-  }, [detailCardId, detailContextVersion]);
+  }, [detailCardId, detailContextVersion, detailEntryCount]);
 
   // 詳細パネルの「ボードで表示」: パネルは開いたまま、スクロール→フラッシュ (Slackスレッド風の常駐)
   const jumpToBoard = useCallback((id: number) => {
@@ -344,7 +346,9 @@ export default function App() {
   // チャットやMCPが書き換えても、板の配信に載る版だけで気づける。
   // 新しい仕組みは作らない: 取得先はアーカイブ済みカードと同じ GET /api/cards/:id
   const detailCard =
-    detailBase && detailFull?.id === detailBase.id ? { ...detailBase, context: detailFull.context } : detailBase;
+    detailBase && detailFull?.id === detailBase.id
+      ? { ...detailBase, context: detailFull.context, entries: detailFull.entries }
+      : detailBase;
   const detailArchived = detailCardId !== null && !foundDetailCard && !!detailCard;
 
   // #97: プロジェクト切替はページ遷移 (/p/<id>) にしたので、画面の持ち越しを個別に消す処理は不要になった。

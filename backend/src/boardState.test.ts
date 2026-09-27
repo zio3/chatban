@@ -64,14 +64,21 @@ test("消滅を拾える (タイムスタンプ方式では絶対に拾えない
 });
 
 test("変わったフィールドだけを並べる (変わっていないものは書かない)", () => {
-  const before = board([[7, facts({ title: "T", status: "todo", summary: "前の現況", due: "2026-08-18" })]]);
-  const after = board([[7, facts({ title: "T", status: "review", summary: "前の現況", due: "2026-08-19" })]]);
+  const before = board([[7, facts({ title: "T", status: "todo", summary: "前の1行", due: "2026-08-18" })]]);
+  const after = board([[7, facts({ title: "T", status: "review", summary: "前の1行", due: "2026-08-19" })]]);
 
   const changes = diffBoards(before, after);
   assert.equal(changes.length, 1);
   assert.match(changes[0], /status: todo -> review/);
   assert.match(changes[0], /期限: 2026-08-18 -> 2026-08-19/);
-  assert.ok(!changes[0].includes("現況"), "変わっていない summary は出さない");
+  assert.ok(!changes[0].includes("いま:"), "変わっていない summary は出さない");
+});
+
+test("summary の差分の見出しは「いま」 (#278: 「現況」は context の固定文を指す語)", () => {
+  const changes = diffBoards(board([[7, facts({ summary: "前の1行" })]]), board([[7, facts({ summary: "新しい1行" })]]));
+  assert.equal(changes.length, 1);
+  assert.match(changes[0], /いま: 新しい1行/);
+  assert.doesNotMatch(changes[0], /現況/);
 });
 
 test("却下と却下の取り消しを区別する", () => {

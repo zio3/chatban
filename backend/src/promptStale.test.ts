@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildSystemPrompt, QUERY_LOG_DESCRIPTION, REJECTED_DESCRIPTION } from "./chat.js";
+import { buildSystemPrompt, buildTools, QUERY_LOG_DESCRIPTION, REJECTED_DESCRIPTION } from "./chat.js";
 import { CONTEXT_TEMPLATE, contextReference } from "./contextTemplate.js";
 
 // #218: **撤去した機能への言及がプロンプトに残っていないか**の番人。
@@ -57,6 +57,9 @@ function everythingTheModelReads(): { where: string; text: string }[] {
     { where: "システムプロンプト", text: staticPrompt() },
     { where: "query_log の契約", text: QUERY_LOG_DESCRIPTION },
     { where: "rejected の契約", text: REJECTED_DESCRIPTION },
+    // #278: 道具の契約 (ツール自身の説明と引数の説明) を丸ごと。上の2件はその一部だが、
+    // 「summary(現況の1行)」を update_cards の説明に残したまま壊しても、この面が無いと通ってしまった
+    { where: "チャットの道具の契約", text: JSON.stringify(buildTools([])) },
     { where: "前提情報テンプレート", text: CONTEXT_TEMPLATE },
     { where: "前提情報リファレンス", text: JSON.stringify(contextReference()) },
   ];
@@ -89,6 +92,13 @@ const REMOVED: { word: string; why: string; allow?: RegExp }[] = [
   // 返り値の形も他と違った (失敗が英語の {error} だけ)。誘導先はプロンプトに2箇所あったので、
   // 定義を消しただけでは「無い道具を呼べ」と書いてある状態になる — そこをここで見る
   { word: "update_task_context", why: "#223 で撤去 (update_cards の context_append に寄せた)" },
+  // #278: #275 で「現況」は context の固定文を指す語になった。summary を「現況の1行」と呼ぶ古い言い方が
+  // 2か所残っていて、同じ語が別の欄を指していた (画面の見出しは #277 で summary=「いま」に揃えた)
+  { word: "現況の1行", why: "#278 で summary の呼び名を「いまの1行」に揃えた (現況 = context の固定文)" },
+  // Codexレビュー P2: 字面「現況の1行」だけ塞いでも、「summary に…と現況を書く」「現況: <summary>」の形が
+  // 3か所残っていた。summary を現況と呼ぶ言い回しは、見つけた形をここに並べていく
+  { word: "と現況を書", why: "#278: summary を「現況」と呼ぶ言い回し (システムプロンプトと前提情報テンプレートに残っていた)" },
+  { word: "現況の一言", why: "#278: summary を「現況」と呼ぶ言い回し" },
 ];
 
 for (const { word, why, allow } of REMOVED) {

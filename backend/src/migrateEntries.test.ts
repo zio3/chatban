@@ -38,6 +38,12 @@ const OLD = [
   "",
   "- 実装完了 (PR#1)。日付が無いので直前の件と同じ日時",
   "- 2026-09-06 10:38 JST デプロイ完了",
+  "",
+  "---",
+  "",
+  "## 設計確定",
+  "",
+  "経過の下に書かれた節は固定文に戻す (経過の行ではない)",
 ].join("\n");
 
 function oldDb(file: string, extra?: (db: Database.Database) => void) {
@@ -68,7 +74,11 @@ test("下見は書かない。--apply で「## 経過」節が行になり、固
   assert.equal(applied.status, 0, applied.stderr);
   db = new Database(p, { readonly: true });
   const card = db.prepare("SELECT context FROM cards WHERE id = 1").get() as any;
-  assert.equal(card.context, "## 背景\n\n決めたこと。本文で `## 経過` と書いた説明は見出しではない。", "固定文が残っていない");
+  assert.equal(
+    card.context,
+    "## 背景\n\n決めたこと。本文で `## 経過` と書いた説明は見出しではない。\n\n---\n\n## 設計確定\n\n経過の下に書かれた節は固定文に戻す (経過の行ではない)",
+    "固定文が残っていない (経過の下の節も固定文に戻る)"
+  );
   const rows = db.prepare("SELECT at, source, text FROM card_entries WHERE card_id = 1 ORDER BY id").all() as any[];
   assert.deepEqual(
     rows.map((r) => [r.at, r.text]),

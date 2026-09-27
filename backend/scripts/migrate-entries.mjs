@@ -8,7 +8,10 @@
 //     バッククォートで `## 経過` と書いた箇所 (説明文) は行頭に無いので見出しにならない
 //   - 「## 経過」の行が複数あるもの (空の節のあとにもう一度作った形) は、繰り返しの見出し行を読み飛ばす
 //   - `- ` で始まる行が1件。字下げされた続き (サブ箇条書き・折り返し) は前の件に付ける
-//   - 字下げの無い地の文や `## ` 見出しが経過の中に混じっていたら、前の件に付ける (件が無ければ1件目にする)
+//   - 字下げの無い地の文が経過の中に混じっていたら、前の件に付ける (件が無ければ1件目にする)
+//   - 経過の途中で見出し (`# ` 〜 `###### `) か罫線 (`---`) が出たら、**そこから後ろは固定文に戻す**。
+//     経過の下に設計の節を丸ごと書いたカードが実在し (開発機の実データで 6,667 字の1件になった)、
+//     それは経過ではなく固定文の続き。経過の行はその手前で終わる
 //   - 日時: 行頭の `YYYY-MM-DD` (任意で ` HH:MM`) を拾う。無ければ直前の件と同じ。1件目にも無ければ
 //     カードの updated_at。source は null (移行分。chat / mcp / human と区別できる)
 //   - 見出しより前が空なら context は NULL
@@ -27,6 +30,7 @@ const APPLY = process.argv.includes("--apply");
 const DATA = process.env.CHATBAN_DATA_DIR ?? "data";
 
 const HEADING = /^## 経過\s*$/;
+const SECTION_START = /^(#{1,6} |---\s*$)/;
 const DATE_AT_HEAD = /^(\d{4}-\d{2}-\d{2})(?:[ T](\d{1,2}):(\d{2}))?/;
 
 /** 固定文と経過の行に分ける。純粋関数 (テストから直接呼べる) */
@@ -45,8 +49,15 @@ export function splitContext(context, fallbackAt) {
     if (text) entries.push({ at: cur.at, text });
     cur = null;
   };
-  for (const raw of lines.slice(at + 1)) {
+  const rest = lines.slice(at + 1);
+  const tailSections = [];
+  for (let i = 0; i < rest.length; i++) {
+    const raw = rest[i];
     if (HEADING.test(raw)) continue; // 繰り返しの見出し
+    if (SECTION_START.test(raw)) {
+      tailSections.push(...rest.slice(i));
+      break;
+    }
     const line = raw.trimEnd();
     if (line.startsWith("- ")) {
       flush();
@@ -68,7 +79,9 @@ export function splitContext(context, fallbackAt) {
     cur.lines.push(line);
   }
   flush();
-  return { head: head === "" ? null : head, entries };
+  const tail = tailSections.join("\n").trim();
+  const fullHead = [head, tail].filter((s) => s !== "").join("\n\n");
+  return { head: fullHead === "" ? null : fullHead, entries };
 }
 
 function inspect(db) {

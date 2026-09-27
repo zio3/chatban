@@ -244,7 +244,7 @@ export default function CardDetailPanel({
             // あるカードで「まだありません」だけ出すと、現況が埋まるように読めてしまう
             <p className="text-sm text-slate-500">
               {card.entries?.length
-                ? "固定文はまだありません (決定事項は下の「経過」にあります)"
+                ? "固定文はまだありません (追記は下の「経過」にあります)"
                 : "まだありません。下のチャットで話すと決定事項が「経過」に記録されます"}
             </p>
           )}

@@ -131,6 +131,30 @@ test("コードフェンスが閉じていないカードは拒む (分け方を
   db.close();
 });
 
+test("--apply でも card_entries の無い DB (trash の削除済みプロジェクト) は飛ばすだけで、他の DB は処理する", () => {
+  const p = oldDb("4-with-table.db");
+  // trash/ に本体が開いたことの無い旧 DB を置く (card_entries が無い)
+  fs.mkdirSync(path.join(dataDir, "trash"), { recursive: true });
+  const t = path.join(dataDir, "trash", "5-never-opened.db");
+  if (fs.existsSync(t)) fs.rmSync(t);
+  const old = new Database(t);
+  old.exec("CREATE TABLE cards (id INTEGER PRIMARY KEY, title TEXT NOT NULL, context TEXT, updated_at TEXT NOT NULL DEFAULT '')");
+  old.prepare("INSERT INTO cards (id, title, context) VALUES (1, '旧', '## 経過\n- a')").run();
+  old.close();
+
+  const r = run(true);
+  // miniPC の初回適用で実際に起きた: trash の DB で prepare が先に走り no such table で例外終了、最終行が出なかった
+  assert.doesNotMatch(r.stderr, /no such table/, "表の無い DB で例外終了している");
+  // 他のテストが置いた拒否対象の DB も同じ dataDir にあるので、数は 1 以上で見る
+  assert.match(r.stdout, /5-never-opened\.db\n  !! card_entries テーブルが無い/, `trash の DB を「飛ばした」扱いにしていない: ${r.stdout}`);
+  assert.match(r.stdout, /対象 \d+ \/ 変更あり \d+ \/ 飛ばした [1-9]/, `最終行が出ていない: ${r.stdout}`);
+  assert.equal(r.status, 1, "飛ばしがあるのに終了コードが 0");
+  const db = new Database(p, { readonly: true });
+  assert.equal((db.prepare("SELECT COUNT(*) c FROM card_entries WHERE card_id = 1").get() as any).c, 4, "表のある DB が処理されていない");
+  db.close();
+  fs.rmSync(t);
+});
+
 test("既に行があるのに節も残っているカードは拒み、そのDBには1バイトも書かない", () => {
   const p = oldDb("2-mixed.db", (db) => {
     db.prepare("INSERT INTO card_entries (card_id, text) VALUES (1, '先に足された行')").run();

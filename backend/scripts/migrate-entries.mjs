@@ -186,11 +186,14 @@ function handle(path) {
     // 読む・拒否を決める・書く、を1つの書き込みトランザクションの中で行う (Codexレビュー P2)。
     // 外で読んでから書くと、稼働中の本体がその間に固定文を書き換えたり行を足したりしたぶんが、
     // 古い本文から作った head の無条件 UPDATE で消える。immediate で最初に書きロックを取る
-    const ins = db.prepare("INSERT INTO card_entries (card_id, at, source, text) VALUES (?, ?, NULL, ?)");
-    const upd = db.prepare("UPDATE cards SET context = ? WHERE id = ? AND context = ?");
     return db.transaction(() => {
       const { plan, refusals, ops } = inspect(db);
       if (refusals.length > 0 || ops.length === 0) return { plan, refusals, applied: false };
+      // prepare は inspect の後。表の無い DB (trash/ の削除済みプロジェクト) で先に prepare すると
+      // 「no such table」で落ちて、残りの DB を見ずに止まる (miniPC の初回適用で実際に起きた。
+      // projects/ が名前順で先だったので実害は無かった)
+      const ins = db.prepare("INSERT INTO card_entries (card_id, at, source, text) VALUES (?, ?, NULL, ?)");
+      const upd = db.prepare("UPDATE cards SET context = ? WHERE id = ? AND context = ?");
       for (const op of ops) {
         for (const e of op.entries) ins.run(op.id, e.at, e.text);
         // 読んだ本文と同じときだけ書く。違えば (同じトランザクション内なので起きないはずだが) 巻き戻す

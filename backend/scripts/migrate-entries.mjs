@@ -17,7 +17,8 @@
 //   - 罫線 (`---` だけの行) は区切りとして捨てる
 //   - **コードフェンス (``` 〜 ```) の中は本文として扱う** — 中の `## 経過` / `- ` / `---` を見出しや
 //     箇条書きに読まない (Codexレビュー P1: フェンス内の `## 経過` が見出し扱いで消えていた)。
-//     フェンスが閉じないまま終わるカードは分け方が決められないので拒む
+//     閉じるのは CommonMark どおり「開いたのと同じ記号で、同じ長さ以上の行」だけ (```` の中の ``` は閉じない。
+//     Codexレビュー 2周目)。フェンスが閉じないまま終わるカードは分け方が決められないので拒む
 //   - 日時: 行頭の `YYYY-MM-DD` (任意で ` HH:MM`) を拾う。無ければ直前の件と同じ。1件目にも無ければ
 //     カードの updated_at。source は null (移行分。chat / mcp / human と区別できる)
 //   - 見出しより前が空なら context は NULL
@@ -38,7 +39,18 @@ const DATA = process.env.CHATBAN_DATA_DIR ?? "data";
 const HEADING = /^## 経過\s*$/;
 const SECTION_HEADING = /^#{1,6} /;
 const RULE = /^---\s*$/;
-const FENCE = /^\s*(```|~~~)/;
+const FENCE_OPEN = /^\s*(`{3,}|~{3,})/;
+const FENCE_CLOSE = /^\s*(`{3,}|~{3,})\s*$/;
+/** フェンスの開閉。open が null なら外。閉じ行は同じ記号で同じ長さ以上 (CommonMark) */
+function fenceStep(open, line) {
+  if (!open) {
+    const m = FENCE_OPEN.exec(line);
+    return m ? { ch: m[1][0], len: m[1].length, changed: true } : { changed: false, open: null };
+  }
+  const m = FENCE_CLOSE.exec(line);
+  const closes = !!m && m[1][0] === open.ch && m[1].length >= open.len;
+  return closes ? { changed: true, open: null } : { changed: false, open };
+}
 const DATE_ANYWHERE = /(\d{4}-\d{2}-\d{2})/;
 const DATE_AT_HEAD = /^(\d{4}-\d{2}-\d{2})(?:[ T](\d{1,2}):(\d{2}))?/;
 
@@ -46,11 +58,15 @@ const DATE_AT_HEAD = /^(\d{4}-\d{2}-\d{2})(?:[ T](\d{1,2}):(\d{2}))?/;
 export function splitContext(context, fallbackAt) {
   const lines = context.replace(/\r\n/g, "\n").split("\n");
   // フェンスの外にある最初の「## 経過」行
-  let fence = false;
+  let fence = null;
   let at = -1;
   for (let i = 0; i < lines.length; i++) {
-    if (FENCE.test(lines[i])) fence = !fence;
-    else if (!fence && HEADING.test(lines[i])) {
+    const step = fenceStep(fence, lines[i]);
+    if (step.changed) {
+      fence = step.open ?? (fence ? null : step);
+      continue;
+    }
+    if (!fence && HEADING.test(lines[i])) {
       at = i;
       break;
     }
@@ -69,10 +85,11 @@ export function splitContext(context, fallbackAt) {
   };
   // section = 見出しで始まる節の中 (箇条書きも節に含める) / bullets = 「- 」ごとに1件
   let mode = "bullets";
-  fence = false;
+  fence = null;
   for (const raw of lines.slice(at + 1)) {
-    if (FENCE.test(raw)) {
-      fence = !fence;
+    const step = fenceStep(fence, raw);
+    if (step.changed) {
+      fence = step.open ?? (fence ? null : step);
       if (!cur) cur = { at: lastAt, lines: [] };
       cur.lines.push(raw.trimEnd());
       continue;

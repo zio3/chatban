@@ -31,10 +31,12 @@ const OLD = [
   "",
   "決めたこと。本文で `## 経過` と書いた説明は見出しではない。",
   "",
-  "```md",
-  "## 経過",
-  "フェンスの中の見出しは本文 (Codexレビュー P1)",
+  "````md",
   "```",
+  "## 経過",
+  "フェンスの中の見出しは本文 (Codexレビュー P1)。4連の中の3連は閉じない (2周目)",
+  "```",
+  "````",
   "",
   "## 経過",
   "",
@@ -87,7 +89,7 @@ test("下見は書かない。--apply で「## 経過」節が行になり、固
   const card = db.prepare("SELECT context FROM cards WHERE id = 1").get() as any;
   assert.equal(
     card.context,
-    "## 背景\n\n決めたこと。本文で `## 経過` と書いた説明は見出しではない。\n\n```md\n## 経過\nフェンスの中の見出しは本文 (Codexレビュー P1)\n```",
+    "## 背景\n\n決めたこと。本文で `## 経過` と書いた説明は見出しではない。\n\n````md\n```\n## 経過\nフェンスの中の見出しは本文 (Codexレビュー P1)。4連の中の3連は閉じない (2周目)\n```\n````",
     "固定文が残っていない (フェンスの中の ## 経過 は見出しではない)"
   );
   const rows = db.prepare("SELECT at, source, text FROM card_entries WHERE card_id = 1 ORDER BY id").all() as any[];
@@ -115,7 +117,8 @@ test("下見は書かない。--apply で「## 経過」節が行になり、固
 
 test("コードフェンスが閉じていないカードは拒む (分け方を決められない)", () => {
   const p = oldDb("3-fence.db", (db) => {
-    db.prepare("INSERT INTO cards (id, title, context) VALUES (9, '開いたまま', '## 経過\n```\n- 閉じない')").run();
+    // 4連で開いて3連で閉じたつもり = 閉じていない (CommonMark)
+    db.prepare("INSERT INTO cards (id, title, context) VALUES (9, '開いたまま', '## 経過\n````\n- 閉じない\n```')").run();
   });
   const r = run(true);
   assert.equal(r.status, 1, "拒否したのに終了コードが 0");

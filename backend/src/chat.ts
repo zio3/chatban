@@ -162,7 +162,8 @@ export const QUERY_LOG_DESCRIPTION = [
   // #274: context は固定文だけ。経過は card_entries の行なので、「context を引けば全文」ではなくなった
   "SELECT * は使わない。必要な列だけ挙げる。context(経緯メモの固定文)は長いので、一覧では length(context) か substr(context,1,120) にする。経過の行は context に無く card_entries にある — 経緯の全文が要るカードは get_cards (history) で読む",
   "live_cards ビューを使う。cards から「生きているもの」(ゴミ箱でもアーカイブ済みでもないもの)だけを、ボードと同じ並びで抜いたもの。条件と並びを毎回書かなくてよく、書き忘れてゴミ箱のカードが混ざることもない。列は cards と同じ + sort_key(=COALESCE(sort,id))。ゴミ箱やアーカイブを見たいときだけ cards を直に引く",
-  "例(1件の詳細。経緯メモの全文と版): SELECT title, status, summary, context, context_version, blocked_by FROM cards WHERE id=112",
+  // #274: この例は「全文」と言っていたが、context には経過の行が無い。固定文と版の例に言い直す
+  "例(1件の詳細 = 固定文と版。経過の行は含まれない): SELECT title, status, summary, context, context_version, blocked_by FROM cards WHERE id=112",
   "LLM呼び出しの記録 (トークン・単価・レイテンシ) はここには無い (#181で撤去)。速度やキャッシュの効きを見たいときは backend/logs/ のログを読む",
 ].join("\n");
 

@@ -17,8 +17,13 @@ export interface Card {
   context?: string | null;
   /** 経緯メモの文字数 (板の配信に載る)。本文の代わりに「あるか・どれくらいか」を伝える */
   contextChars?: number;
-  /** #112: 経緯メモの版。本文が変わるたびに +1。パネルはこれを見て取り直す */
+  /** #112: 経緯メモの版。固定文が変わるたびに +1。パネルはこれを見て取り直す。
+   * #274: 追記では動かない — 経過が増えたことは entryCount / contextChars で分かる */
   contextVersion?: number;
+  /** #274: 経過の行数 (板の配信に載る) */
+  entryCount?: number;
+  /** #274: 経過の行。GET /api/cards/:id で取り直したときだけ載る */
+  entries?: CardEntry[];
   /** 期限 YYYY-MM-DD (#44) */
   due: string | null;
   /** 依存先カードID (#41)。**関係の覚え書きで、着手やDoneを止めるものではない** (#152) */
@@ -34,6 +39,14 @@ export interface Card {
   sort: number;
   createdAt: string;
   updatedAt: string;
+}
+
+/** #274: 経過の1行。追記専用。at はサーバーが打つ。source は出所の種別 (chat / mcp / human / 移行分は null) */
+export interface CardEntry {
+  id: number;
+  at: string;
+  source: string | null;
+  text: string;
 }
 
 /** #200: Done列の2段目。直近24時間に畳んだカードを1つにまとめた箱。

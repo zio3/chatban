@@ -671,26 +671,72 @@ test("存在しないIDは notFound で名指しし、成功と混ぜない (#12
   expect(all.status).toBe("ok");
 });
 
-test("経緯メモは版なしで追記でき、追記どうしは互いを消さない", async () => {
+test("経緯メモは版なしで追記でき、追記どうしは互いを消さない (#274: 追記は経過の行になる)", async () => {
   const id = await createCard("追記の検証");
 
   // 全文上書きは版が要る (既存の守り)。追記は要らない — 足すだけなので他人の追記を消さない
   const a = await mcp("update_cards", { updates: [{ id, context_append: "1件目の追記" }] });
   expect(a.ok).toBe(true);
+  expect(a.updated[0].entryCount).toBe(1); // 返り値にも行数が乗る (本文は乗らない #108)
 
   // 読み直さずにもう1件足せる。版を持っていなくても通る
   const b = await mcp("update_cards", { updates: [{ id, context_append: "2件目の追記" }] });
   expect(b.ok).toBe(true);
 
   const after = (await (await fetch(`${API}/api/cards/${id}`)).json()) as any;
-  expect(after.context).toBe(["1件目の追記", "2件目の追記"].join("\n\n")); // 1件目が残っている
-  expect(after.contextVersion).toBeGreaterThan(1); // 版は進む (全文置換しようとしている人を弾くため)
+  expect(after.entries.map((e: any) => e.text)).toEqual(["1件目の追記", "2件目の追記"]); // 1件目が残っている
+  expect(after.entries[0].source).toBe("mcp"); // 出所の種別
+  expect(after.context).toBeNull(); // 固定文には入らない
+  expect(after.contextVersion).toBe(1); // 追記は版を動かさない (版は固定文の上書き競合を守るもの)
 
-  // 全文上書きは従来どおり版が要る
-  const stale = await mcp("update_cards", { updates: [{ id, context: "全部消す", context_version: 1 }] });
+  // 固定文の上書きは版が要る。合わなければ通らず、通っても経過の行は消えない
+  const stale = await mcp("update_cards", { updates: [{ id, context: "固定文", context_version: 99 }] });
   expect(stale.ok).toBe(false);
+  const ok = await mcp("update_cards", { updates: [{ id, context: "固定文", context_version: 1 }] });
+  expect(ok.ok).toBe(true);
   const still = (await (await fetch(`${API}/api/cards/${id}`)).json()) as any;
-  expect(still.context).toContain("1件目の追記");
+  expect(still.context).toBe("固定文");
+  expect(still.entries.length).toBe(2);
+
+  // get_cards は history で読む量を選べる
+  const tail = await mcp("get_cards", { ids: [id], history: "tail:1" });
+  expect(tail.cards[0].entries.map((e: any) => e.text)).toEqual(["2件目の追記"]);
+  expect(tail.cards[0].entryCount).toBe(2);
+});
+
+test("詳細パネルは経過の行を固定文の下に出し、追記されたら版が動かなくても取り直す (#274)", async ({ page }) => {
+  const id = await createCard("経過を持つタスク");
+  await fetch(`${API}/api/cards/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ context: "固定文の背景" }),
+  });
+  await mcp("update_cards", { updates: [{ id, context_append: "最初の経過" }] });
+
+  await page.goto("/");
+  await page.getByTestId(`card-tile-${id}`).click();
+  const panel = page.getByTestId("card-detail-panel");
+  await expect(panel).toContainText("固定文の背景");
+  const entries = panel.getByTestId("card-entries");
+  await expect(entries).toContainText("最初の経過");
+  await expect(entries.locator("li")).toHaveCount(1);
+
+  // 人の手による追記の口 (REST)。開いたままでも板の配信の行数が変わるので取り直す
+  const res = await fetch(`${API}/api/cards/${id}/entries`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text: "あとから足した経過" }),
+  });
+  expect((await res.json()).source).toBe("human");
+  await expect(entries.locator("li")).toHaveCount(2);
+  await expect(entries).toContainText("あとから足した経過");
+
+  // 板のチップは固定文 + 経過の合計
+  const board = await (await fetch(`${API}/api/board`)).json();
+  const card = board.cards.find((c: any) => c.id === id);
+  expect(card.contextChars).toBe("固定文の背景".length + "最初の経過".length + "あとから足した経過".length);
+  expect(card.entryCount).toBe(2);
+  expect(card.entries).toBeUndefined(); // 本文は板の配信に載せない
 });
 
 test("生きているタスクは live_cards ビューで引ける (母集団の条件を毎回書かせない)", async () => {
@@ -759,9 +805,10 @@ test("前提情報のリファレンスは、足りないときだけ知らせ�
   expect(withRef.reference).toContain("review = 検収待ち");
   expect(withRef.reference).toContain("review = 相手待ち");
   expect(withRef.referenceNote).toContain("そのまま書き戻さないこと");
-  // summary の書き分けと、追記が効く経緯メモの書き始め方
+  // summary の書き分けと、経緯メモの書き方 (#274: 経過は行なので「## 経過」を作らせない)
   expect(withRef.reference).toContain("summary の書き方");
-  expect(withRef.reference).toContain("## 経過");
+  expect(withRef.reference).toContain("context_append で経過の行として積む");
+  expect(withRef.reference).not.toContain("## 経過");
   // 参考と前提情報が食い違ったときの優先順位を名指しする (判断させない)
   expect(withRef.reference).toContain("前提情報が優先");
 

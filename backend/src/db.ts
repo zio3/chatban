@@ -3,7 +3,7 @@ import { log } from "./log.js";
 import { customLanes, db, projectReadonly } from "./store.js";
 import { PUBLIC_TABLES } from "./publicSchema.js";
 import { decodeUnicodeEscapes } from "./text.js";
-import type { CustomLane, Card, CardStatus } from "./types.js";
+import type { CustomLane, Card, CardEntry, CardStatus, EntryHistory } from "./types.js";
 
 // #179: 担当者・割り振りは機能ごと落とした (個人利用に特化)。
 // cards.assignee / assign_reason と members / proposals / assignment_history は
@@ -19,22 +19,85 @@ export function listCards(includeArchived = false): Card[] {
   // sort未設定の既存行はid順に混ざる (COALESCEでidを暫定sortとして扱う)
   // #102: ゴミ箱(trashed_at)は常に除外。復元できる形にしただけで、見え方は削除と同じ
   const where = includeArchived ? "WHERE trashed_at IS NULL" : "WHERE archived = 0 AND trashed_at IS NULL";
-  return (db().prepare(`SELECT * FROM cards ${where} ORDER BY COALESCE(sort, id), id`).all() as any[]).map(rowToCard);
+  const stats = entryStats();
+  return (db().prepare(`SELECT * FROM cards ${where} ORDER BY COALESCE(sort, id), id`).all() as any[]).map((r) =>
+    rowToCard(r, stats.get(r.id))
+  );
+}
+
+/** #274: 経過の行数と文字数をカードごとに。板の配信 (listCards) は本文を載せないので、
+ * 「増えたか・どれくらいか」だけを1クエリで揃える (カードごとに引くと N+1 になる) */
+function entryStats(): Map<number, { n: number; chars: number }> {
+  const rows = db()
+    .prepare("SELECT card_id, COUNT(*) n, COALESCE(SUM(length(text)), 0) chars FROM card_entries GROUP BY card_id")
+    .all() as { card_id: number; n: number; chars: number }[];
+  return new Map(rows.map((r) => [r.card_id, { n: r.n, chars: r.chars }]));
+}
+
+function entryStatFor(cardId: number): { n: number; chars: number } {
+  return db()
+    .prepare("SELECT COUNT(*) n, COALESCE(SUM(length(text)), 0) chars FROM card_entries WHERE card_id = ?")
+    .get(cardId) as { n: number; chars: number };
+}
+
+const rowToEntry = (r: any): CardEntry => ({ id: r.id, at: r.at, source: r.source ?? null, text: r.text });
+
+/** #274: 経過の行を読む。順序は常に id 昇順 (= 追記された順)。
+ * since は「その id より後」— 前に読んだ最後の id を渡せば、増えた分だけ受け取れる */
+export function listEntries(cardId: number, history: EntryHistory = "all"): CardEntry[] {
+  if (history === "none") return [];
+  if (history === "all") {
+    return (db().prepare("SELECT * FROM card_entries WHERE card_id = ? ORDER BY id").all(cardId) as any[]).map(rowToEntry);
+  }
+  if ("since" in history) {
+    return (
+      db().prepare("SELECT * FROM card_entries WHERE card_id = ? AND id > ? ORDER BY id").all(cardId, history.since) as any[]
+    ).map(rowToEntry);
+  }
+  // tail: 末尾N件を、表示順 (古い→新しい) に戻して返す
+  const n = Math.max(0, Math.floor(history.tail));
+  if (n === 0) return [];
+  return (
+    db()
+      .prepare("SELECT * FROM (SELECT * FROM card_entries WHERE card_id = ? ORDER BY id DESC LIMIT ?) ORDER BY id")
+      .all(cardId, n) as any[]
+  ).map(rowToEntry);
+}
+
+/** #274: 経過に1行足す。追記専用 (UPDATE / DELETE の関数は置かない)。
+ * at はサーバーが打つ。cards.updated_at は動かす (カードが動いたことは板に伝える) が、
+ * context_version は動かさない — 版は固定文の上書き競合を守るためのもので、追記は競合しない */
+export function appendEntry(cardId: number, text: string, source: string | null): CardEntry | undefined {
+  if (!db().prepare("SELECT 1 FROM cards WHERE id = ?").get(cardId)) return undefined;
+  const id = db().transaction(() => {
+    const r = db().prepare("INSERT INTO card_entries (card_id, source, text) VALUES (?, ?, ?)").run(cardId, source, text);
+    db().prepare("UPDATE cards SET updated_at = datetime('now', 'localtime') WHERE id = ?").run(cardId);
+    return Number(r.lastInsertRowid);
+  })();
+  return rowToEntry(db().prepare("SELECT * FROM card_entries WHERE id = ?").get(id));
+}
+
+/** #274: 経緯メモの大きさ (固定文 + 経過)。板のチップ (#276) と brief の contextChars はこれ */
+export function contextChars(c: Pick<Card, "context" | "entryChars">): number {
+  return (c.context?.length ?? 0) + (c.entryChars ?? 0);
 }
 
 /** ゴミ箱の中身 (新しい順)。UIの復元導線とチャットの「戻して」で使う */
 export function listTrashedCards(): Card[] {
+  const stats = entryStats();
   return (
     db().prepare("SELECT * FROM cards WHERE trashed_at IS NOT NULL ORDER BY trashed_at DESC, id DESC").all() as any[]
-  ).map(rowToCard);
+  ).map((r) => rowToCard(r, stats.get(r.id)));
 }
 
-function rowToCard(r: any): Card {
+function rowToCard(r: any, stat?: { n: number; chars: number }): Card {
   return {
     id: r.id,
     title: r.title,
     status: r.status,
     context: r.context ?? null,
+    entryCount: stat?.n ?? 0,
+    entryChars: stat?.chars ?? 0,
     summary: r.summary ?? null,
     due: r.due ?? null,
     blockedBy: r.blocked_by ? JSON.parse(r.blocked_by) : null,
@@ -64,9 +127,13 @@ export function createCard(title: string, status: CardStatus = "todo"): Card {
   return getCard(Number(info.lastInsertRowid))!;
 }
 
-export function getCard(id: number): Card | undefined {
+/** @param history #274: 経過をどれだけ載せるか。既定は全部 (読む側の契約を変えない)。
+ *  "none" は行数だけ要るとき (更新経路の現状読み) に使い、経過の行を引かない */
+export function getCard(id: number, history: EntryHistory = "all"): Card | undefined {
   const r = db().prepare("SELECT * FROM cards WHERE id = ?").get(id) as any;
-  return r ? rowToCard(r) : undefined;
+  if (!r) return undefined;
+  const card = rowToCard(r, entryStatFor(id));
+  return history === "none" ? card : { ...card, entries: listEntries(id, history) };
 }
 
 export type CardPatch = Partial<
@@ -363,7 +430,13 @@ export function restoreCard(id: number): Card | undefined {
  * 復元できる状態を必ず一度経由させる。条件はコードで持つ (UIがゴミ箱画面からしか
  * 呼ばない、に依存しない — #57/#69 と同じ形) */
 export function purgeCard(id: number): boolean {
-  return db().prepare("DELETE FROM cards WHERE id = ? AND trashed_at IS NOT NULL").run(id).changes > 0;
+  // #274: 経過の行も一緒に消す (Codexレビュー P1)。card_entries に外部キーは無いので、ここで対にする。
+  // 残すと「本当に消す」で消したはずの本文が SQL 窓口 (card_entries は公開している) から読める
+  return db().transaction(() => {
+    const gone = db().prepare("DELETE FROM cards WHERE id = ? AND trashed_at IS NOT NULL").run(id).changes > 0;
+    if (gone) db().prepare("DELETE FROM card_entries WHERE card_id = ?").run(id);
+    return gone;
+  })();
 }
 
 export interface SummaryElement {
@@ -595,10 +668,16 @@ export function searchCards(terms: string[], limit = 10) {
       "SELECT id, title, status, summary, context, archived FROM cards WHERE trashed_at IS NULL"
     )
     .all() as any[];
+  // #274: 経過の行も探す対象 (以前は context の末尾に入っていたので、外すと検索の範囲が黙って狭まる)
+  const entryText = new Map(
+    (
+      db().prepare("SELECT card_id, group_concat(text, char(10)) t FROM card_entries GROUP BY card_id").all() as any[]
+    ).map((e) => [e.card_id as number, e.t as string])
+  );
 
   const scored = rows
     .map((r) => {
-      const haystack = [r.title, r.summary, r.context].filter(Boolean).join("\n");
+      const haystack = [r.title, r.summary, r.context, entryText.get(r.id)].filter(Boolean).join("\n");
       const lower = haystack.toLowerCase();
       const matched = words.filter((w) => lower.includes(w.toLowerCase()));
       if (matched.length === 0) return null;
@@ -855,11 +934,12 @@ export function setChecked(id: number, checked: boolean): { card?: Card; error?:
  *
  * ゴミ箱・アーカイブ済みも返す。**名指しで聞かれたものは在るなら在ると答える** —
  * 見えないことと存在しないことは違う (`live_cards` に出ないのは板の話)。 */
-export function getCards(cardIds: number[]): { cards: Card[]; missing: number[] } {
+export function getCards(cardIds: number[], history: EntryHistory = "all"): { cards: Card[]; missing: number[] } {
   const cards: Card[] = [];
   const missing: number[] = [];
   for (const id of cardIds) {
-    const c = getCard(id);
+    // "none" でも entries: [] を載せる — 読む側が「経過は別欄」と分かる形にそろえる
+    const c = getCard(id, history === "none" ? { tail: 0 } : history);
     if (c) cards.push(c);
     else missing.push(id);
   }

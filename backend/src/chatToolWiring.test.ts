@@ -217,7 +217,8 @@ test("契約どおりに渡せば、これまでどおり全部通る", async ()
   assert.equal(after.title, "新しいタイトル");
   assert.equal(after.status, "inprogress");
   assert.deepEqual(after.blockedBy, [other]);
-  assert.match(after.context!, /追記した/);
+  // #274: 追記は固定文ではなく経過の行に入る
+  assert.deepEqual(after.entries!.map((e) => e.text), ["追記した"]);
 });
 
 // **消したいときは空文字。**null で消す道は塞いだので、契約を1つに保つ
@@ -266,7 +267,7 @@ test("context_append が800字を超えると、保存はした上で note で�
   const r = await run("update_cards", { updates: [{ id, context_append: long }] });
 
   assert.equal(r.ok, true, "長い追記が弾かれている (止めない契約)");
-  assert.ok(getCard(id)!.context!.endsWith(long), "追記が保存されていない");
+  assert.equal(getCard(id)!.entries!.at(-1)?.text, long, "追記が保存されていない");
   assert.match(r.note ?? "", new RegExp(`#${id} の追記が800字を超えています`), "注意が返っていない");
   assert.match(r.note ?? "", /保存はしました/, "保存したことを言っていない (縮めた版を送り直される)");
 });

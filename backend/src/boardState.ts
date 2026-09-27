@@ -45,6 +45,8 @@ export interface CardFacts {
   blockedBy: number[] | null;
   rejected: boolean;
   contextVersion: number;
+  /** #274: 経過の行数。追記では contextVersion が動かないので、増えたことはこちらで拾う */
+  entryCount: number;
   /** 人が実物で確かめた日時。**この機能が拾いたいものの本体。**
    * 2026-08-15 の事故は「人間が検収したことをエージェントが知らなかった」ために起きた。
    * setChecked は updated_at を動かさないので、タイムスタンプ方式では二重に拾えない (自動レビュー指摘) */
@@ -111,6 +113,7 @@ export function captureBoard(): Omit<BoardSnapshot, "syncToken" | "takenAt"> {
         blockedBy: t.blockedBy,
         rejected: t.rejected,
         contextVersion: t.contextVersion,
+        entryCount: t.entryCount,
         checkedAt: t.checkedAt ?? null,
         sort: t.sort,
       },
@@ -178,7 +181,8 @@ function fieldChanges(prev: CardFacts, cur: CardFacts): string[] {
   if (prev.checkedAt !== cur.checkedAt)
     out.push(cur.checkedAt ? `人が検収の印を付けた (${cur.checkedAt})` : "検収の印が外れた");
   // 経緯メモは本文を載せると差分が膨らむので、変わったことだけ伝えて中身は取りに行かせる
-  if (prev.contextVersion !== cur.contextVersion) out.push(`経緯メモが更新された (v${cur.contextVersion})`);
+  if (prev.contextVersion !== cur.contextVersion) out.push(`経緯メモの固定文が更新された (v${cur.contextVersion})`);
+  if (prev.entryCount !== cur.entryCount) out.push(`経過が ${cur.entryCount - prev.entryCount} 行増えた (計 ${cur.entryCount} 行)`);
   return out;
 }
 

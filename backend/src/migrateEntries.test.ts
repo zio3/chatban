@@ -41,9 +41,11 @@ const OLD = [
   "",
   "---",
   "",
-  "## 設計確定",
+  "## 2026-09-10 結果 (見出しで書かれた進捗)",
   "",
-  "経過の下に書かれた節は固定文に戻す (経過の行ではない)",
+  "節の中の箇条書きは分けない:",
+  "- 実測 a",
+  "- 実測 b",
 ].join("\n");
 
 function oldDb(file: string, extra?: (db: Database.Database) => void) {
@@ -65,7 +67,7 @@ test("下見は書かない。--apply で「## 経過」節が行になり、固
 
   const preview = run(false);
   assert.equal(preview.status, 0, preview.stderr);
-  assert.match(preview.stdout, /1 枚の「## 経過」節を 3 行に分ける/, preview.stdout);
+  assert.match(preview.stdout, /1 枚の「## 経過」節を 4 行に分ける/, preview.stdout);
   let db = new Database(p, { readonly: true });
   assert.equal((db.prepare("SELECT COUNT(*) c FROM card_entries").get() as any).c, 0, "下見で書いている");
   db.close();
@@ -74,11 +76,7 @@ test("下見は書かない。--apply で「## 経過」節が行になり、固
   assert.equal(applied.status, 0, applied.stderr);
   db = new Database(p, { readonly: true });
   const card = db.prepare("SELECT context FROM cards WHERE id = 1").get() as any;
-  assert.equal(
-    card.context,
-    "## 背景\n\n決めたこと。本文で `## 経過` と書いた説明は見出しではない。\n\n---\n\n## 設計確定\n\n経過の下に書かれた節は固定文に戻す (経過の行ではない)",
-    "固定文が残っていない (経過の下の節も固定文に戻る)"
-  );
+  assert.equal(card.context, "## 背景\n\n決めたこと。本文で `## 経過` と書いた説明は見出しではない。", "固定文が残っていない");
   const rows = db.prepare("SELECT at, source, text FROM card_entries WHERE card_id = 1 ORDER BY id").all() as any[];
   assert.deepEqual(
     rows.map((r) => [r.at, r.text]),
@@ -86,6 +84,8 @@ test("下見は書かない。--apply で「## 経過」節が行になり、固
       ["2026-08-28 00:00:00", "2026-08-28: 起票\n  - サブの箇条書きは前の件に付く"],
       ["2026-08-28 00:00:00", "実装完了 (PR#1)。日付が無いので直前の件と同じ日時"],
       ["2026-09-06 10:38:00", "2026-09-06 10:38 JST デプロイ完了"],
+      // 見出しの節は箇条書きごと1件。罫線は捨てる。日時は見出しの日付
+      ["2026-09-10 00:00:00", "## 2026-09-10 結果 (見出しで書かれた進捗)\n\n節の中の箇条書きは分けない:\n- 実測 a\n- 実測 b"],
     ]
   );
   assert.ok(rows.every((r) => r.source === null), "移行分の source は null にする (chat / mcp / human と区別)");

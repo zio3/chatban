@@ -9,9 +9,12 @@
 //   - 「## 経過」の行が複数あるもの (空の節のあとにもう一度作った形) は、繰り返しの見出し行を読み飛ばす
 //   - `- ` で始まる行が1件。字下げされた続き (サブ箇条書き・折り返し) は前の件に付ける
 //   - 字下げの無い地の文が経過の中に混じっていたら、前の件に付ける (件が無ければ1件目にする)
-//   - 経過の途中で見出し (`# ` 〜 `###### `) か罫線 (`---`) が出たら、**そこから後ろは固定文に戻す**。
-//     経過の下に設計の節を丸ごと書いたカードが実在し (開発機の実データで 6,667 字の1件になった)、
-//     それは経過ではなく固定文の続き。経過の行はその手前で終わる
+//   - 経過の途中の見出し (`# ` 〜 `###### `) は**節ごと1件**にする (次の見出し・罫線・「## 経過」まで。
+//     節の中の箇条書きは分けない)。日時は見出しの中の `YYYY-MM-DD` を拾う。開発機の実データ 174 枚のうち
+//     91 枚がこの形で、大半は「## 2026-08-18 実装完了 (PR #38)」のような日付つきの進捗の節だった
+//     (箇条書きで積む運用が決まる前の書き方)。固定文に戻すと進捗が固定文に混ざり、行に分けると
+//     節の見出しだけの行ができるので、節を1件として残す
+//   - 罫線 (`---` だけの行) は区切りとして捨てる
 //   - 日時: 行頭の `YYYY-MM-DD` (任意で ` HH:MM`) を拾う。無ければ直前の件と同じ。1件目にも無ければ
 //     カードの updated_at。source は null (移行分。chat / mcp / human と区別できる)
 //   - 見出しより前が空なら context は NULL
@@ -30,7 +33,9 @@ const APPLY = process.argv.includes("--apply");
 const DATA = process.env.CHATBAN_DATA_DIR ?? "data";
 
 const HEADING = /^## 経過\s*$/;
-const SECTION_START = /^(#{1,6} |---\s*$)/;
+const SECTION_HEADING = /^#{1,6} /;
+const RULE = /^---\s*$/;
+const DATE_ANYWHERE = /(\d{4}-\d{2}-\d{2})/;
 const DATE_AT_HEAD = /^(\d{4}-\d{2}-\d{2})(?:[ T](\d{1,2}):(\d{2}))?/;
 
 /** 固定文と経過の行に分ける。純粋関数 (テストから直接呼べる) */
@@ -49,17 +54,29 @@ export function splitContext(context, fallbackAt) {
     if (text) entries.push({ at: cur.at, text });
     cur = null;
   };
-  const rest = lines.slice(at + 1);
-  const tailSections = [];
-  for (let i = 0; i < rest.length; i++) {
-    const raw = rest[i];
-    if (HEADING.test(raw)) continue; // 繰り返しの見出し
-    if (SECTION_START.test(raw)) {
-      tailSections.push(...rest.slice(i));
-      break;
+  // section = 見出しで始まる節の中 (箇条書きも節に含める) / bullets = 「- 」ごとに1件
+  let mode = "bullets";
+  for (const raw of lines.slice(at + 1)) {
+    if (HEADING.test(raw)) {
+      // 繰り返しの見出し。節の途中なら節を閉じて箇条書きの読み方に戻る
+      flush();
+      mode = "bullets";
+      continue;
     }
     const line = raw.trimEnd();
-    if (line.startsWith("- ")) {
+    if (RULE.test(line)) {
+      flush();
+      continue;
+    }
+    if (SECTION_HEADING.test(line)) {
+      flush();
+      const m = DATE_ANYWHERE.exec(line);
+      if (m) lastAt = `${m[1]} 00:00:00`;
+      cur = { at: lastAt, lines: [line] };
+      mode = "section";
+      continue;
+    }
+    if (line.startsWith("- ") && mode === "bullets") {
       flush();
       const body = line.slice(2);
       const m = DATE_AT_HEAD.exec(body);
@@ -79,9 +96,7 @@ export function splitContext(context, fallbackAt) {
     cur.lines.push(line);
   }
   flush();
-  const tail = tailSections.join("\n").trim();
-  const fullHead = [head, tail].filter((s) => s !== "").join("\n\n");
-  return { head: fullHead === "" ? null : fullHead, entries };
+  return { head: head === "" ? null : head, entries };
 }
 
 function inspect(db) {

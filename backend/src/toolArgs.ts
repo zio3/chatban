@@ -63,8 +63,13 @@ const ids = z.array(z.number().int());
 export const HISTORY_PATTERN = /^(none|all|tail:\d+|since:\d+)$/;
 const history = z.string().regex(HISTORY_PATTERN).optional();
 
+/** #275: 省略時に読む経過の行数。「現況 (固定文) + 直近の経過」で足りる場面が大半で、
+ * 全部要るときだけ all を明示する。同じカードを何度も開くなら since で増えた分だけ */
+export const DEFAULT_TAIL = 5;
+
 export function parseHistory(s: string | undefined): EntryHistory {
-  if (!s || s === "all") return "all";
+  if (!s) return { tail: DEFAULT_TAIL };
+  if (s === "all") return "all";
   if (s === "none") return "none";
   const [kind, n] = s.split(":");
   return kind === "tail" ? { tail: Number(n) } : { since: Number(n) };

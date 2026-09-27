@@ -68,21 +68,25 @@ test("固定文の上書きは経過の行を消さない。追記と併用し�
 
 test("get_cards の history で読む量を選べる (none / tail / since / all)", async () => {
   const id = await cardWithHead("固定文");
-  for (const t of ["a", "b", "c", "d", "e"]) await run("update_cards", { updates: [{ id, context_append: t }] });
-  const all = (await run("get_cards", { ids: [id] })).cards[0];
-  assert.deepEqual(all.entries.map((e: any) => e.text), ["a", "b", "c", "d", "e"], "省略時が全部になっていない");
-  assert.equal(all.entryCount, 5);
+  for (const t of ["a", "b", "c", "d", "e", "f"]) await run("update_cards", { updates: [{ id, context_append: t }] });
+  // #275: 省略時は末尾5件 (全部ではない)。全行数は entryCount で分かる
+  const dflt = (await run("get_cards", { ids: [id] })).cards[0];
+  assert.deepEqual(dflt.entries.map((e: any) => e.text), ["b", "c", "d", "e", "f"], "省略時が末尾5件になっていない");
+  assert.equal(dflt.entryCount, 6);
+  const all = (await run("get_cards", { ids: [id], history: "all" })).cards[0];
+  assert.deepEqual(all.entries.map((e: any) => e.text), ["a", "b", "c", "d", "e", "f"], "all が全部になっていない");
+  assert.equal(all.entryCount, 6);
 
   const none = (await run("get_cards", { ids: [id], history: "none" })).cards[0];
   assert.deepEqual(none.entries, [], "none で経過が載っている");
   assert.equal(none.context, "固定文", "none で固定文まで落ちている");
-  assert.equal(none.entryCount, 5, "絞っても全行数は分かる形にする");
+  assert.equal(none.entryCount, 6, "絞っても全行数は分かる形にする");
 
   const tail = (await run("get_cards", { ids: [id], history: "tail:2" })).cards[0];
-  assert.deepEqual(tail.entries.map((e: any) => e.text), ["d", "e"], "tail が末尾になっていない (順も古い→新しい)");
+  assert.deepEqual(tail.entries.map((e: any) => e.text), ["e", "f"], "tail が末尾になっていない (順も古い→新しい)");
 
   const since = (await run("get_cards", { ids: [id], history: `since:${all.entries[2].id}` })).cards[0];
-  assert.deepEqual(since.entries.map((e: any) => e.text), ["d", "e"], "since がその id より後になっていない");
+  assert.deepEqual(since.entries.map((e: any) => e.text), ["d", "e", "f"], "since がその id より後になっていない");
 
   // 形が違う history は入口で弾く (黙って全部返さない)
   const bad = await run("get_cards", { ids: [id], history: "last:3" });

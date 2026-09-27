@@ -709,7 +709,7 @@ test("詳細パネルは経過の行を固定文の下に出し、追記され�
   await fetch(`${API}/api/cards/${id}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ context: "固定文の背景" }),
+    body: JSON.stringify({ context: "固定文の背景", summary: "1行の状況" }),
   });
   await mcp("update_cards", { updates: [{ id, context_append: "最初の経過" }] });
 
@@ -717,6 +717,12 @@ test("詳細パネルは経過の行を固定文の下に出し、追記され�
   await page.getByTestId(`card-tile-${id}`).click();
   const panel = page.getByTestId("card-detail-panel");
   await expect(panel).toContainText("固定文の背景");
+  // #277: 見出しはツール契約の呼び名 (summary=いま / context=現況 / entries=経過)。
+  // 以前は summary の見出しが「現況」で、契約の「現況」(= context) と別の欄を指していた
+  await expect(panel.getByRole("heading", { name: "いま", exact: true })).toBeVisible();
+  await expect(panel.getByRole("heading", { name: "現況", exact: true })).toBeVisible();
+  await expect(panel.getByRole("heading", { name: "経過", exact: true })).toBeVisible();
+  await expect(panel.getByRole("heading", { name: "経緯メモ" })).toHaveCount(0);
   const entries = panel.getByTestId("card-entries");
   await expect(entries).toContainText("最初の経過");
   await expect(entries.locator("li")).toHaveCount(1);

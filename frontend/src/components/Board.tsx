@@ -142,6 +142,7 @@ function CardTile({
           <span className="mr-1 text-xs text-slate-500">#{card.id}</span>
           {card.title}
         </span>
+        {(card.contextChars ?? 0) > 0 && <ContextSizeChip chars={card.contextChars!} id={card.id} />}
       </div>
       {/* 2行目: 状態のチップ。検収OKもここに畳む (以前はカード幅いっぱいの独立行で、
           Review列のカードだけ背が高かった)。何も無ければ行ごと出ない */}
@@ -193,6 +194,30 @@ function CardTile({
       {/* 3行目: いまどうなっているか */}
       {card.summary && <p className="mt-1 text-xs text-slate-600">📝 {card.summary}</p>}
     </div>
+  );
+}
+
+/** #276: 経緯メモの大きさをカードに出す。AI が1回読む量に直結するので、
+ * 大きくなったら目に入るようにする (「そろそろ現況を書き直す」のきっかけ)。
+ * 本文は板の配信に載っていない (#226) ので、文字数だけで判断する */
+export const CONTEXT_HEAVY_CHARS = 10_000;
+export function formatChars(n: number): string {
+  // 切り捨て。四捨五入だと 9,999 字が「10k字」と出るのに強調されず、到達済みに見える (Codexレビュー P3)
+  if (n < 1000) return `${n}字`;
+  const k = Math.floor(n / 100) / 10;
+  return `${Number.isInteger(k) ? k : k.toFixed(1)}k字`;
+}
+function ContextSizeChip({ chars, id }: { chars: number; id: number }) {
+  const heavy = chars >= CONTEXT_HEAVY_CHARS;
+  return (
+    <span
+      data-testid={`card-chars-${id}`}
+      data-heavy={heavy ? "1" : undefined}
+      className={`shrink-0 text-[10px] tabular-nums ${heavy ? "font-bold text-rose-600" : "text-slate-400"}`}
+      title={heavy ? `経緯メモが ${chars.toLocaleString()} 字。AI が読む量が増えているので、現況を書き直すか畳むころ` : `経緯メモ ${chars.toLocaleString()} 字`}
+    >
+      📄{formatChars(chars)}
+    </span>
   );
 }
 

@@ -29,7 +29,7 @@ export interface Card {
   /** 依存先カードID (#41)。**関係の覚え書きで、着手やDoneを止めるものではない** (#152) */
   blockedBy: number[] | null;
   /** 却下=やらない決定 (#65) */
-  /** #92: 現況の一言。カードに出る。Reviewでは検収の要点を書く (詳細はcontextへ) */
+  /** #92: いまの一言 (1行)。カードに出る。Reviewでは検収の要点を書く (詳細はcontextへ) */
   summary?: string | null;
   rejected: boolean;
   /** #102: ゴミ箱に入れた日時。nullなら通常のカード */

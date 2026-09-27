@@ -177,7 +177,8 @@ function fieldChanges(prev: CardFacts, cur: CardFacts): string[] {
   if (prev.due !== cur.due) out.push(`期限: ${prev.due ?? "なし"} -> ${cur.due ?? "なし"}`);
   if (!sameDeps(prev.blockedBy, cur.blockedBy))
     out.push(`依存: [${(prev.blockedBy ?? []).join(",")}] -> [${(cur.blockedBy ?? []).join(",")}]`);
-  if (prev.summary !== cur.summary) out.push(`現況: ${cur.summary ?? "(消去)"}`);
+  // #278: summary の見出しは「いま」(#277 の画面と同じ)。「現況」は context の固定文を指す語
+  if (prev.summary !== cur.summary) out.push(`いま: ${cur.summary ?? "(消去)"}`);
   if (prev.checkedAt !== cur.checkedAt)
     out.push(cur.checkedAt ? `人が検収の印を付けた (${cur.checkedAt})` : "検収の印が外れた");
   // 経緯メモは本文を載せると差分が膨らむので、変わったことだけ伝えて中身は取りに行かせる

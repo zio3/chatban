@@ -21,7 +21,7 @@ export interface Card {
   /** 依存先カードID (#41)。「#AはBが終わってから」という**関係の覚え書き**で、
    * コードは何も止めない (#152: mayEnterDone は依存を見ない。相互・循環も矛盾ではない) */
   blockedBy: number[] | null;
-  /** #92: 現況の一言。カードに出る。Reviewでは検収の要点を書く (詳細はcontextへ) */
+  /** #92: いまの一言 (1行)。カードに出る。Reviewでは検収の要点を書く (詳細はcontextへ) */
   summary?: string | null;
   /** 却下=やらない決定 (#65)。**理由の置き場は summary と経緯メモ** (REJECTED_DESCRIPTION と同じ契約)。
    * かつては専用の reason 列があったが #179 で廃止した */

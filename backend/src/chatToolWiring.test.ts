@@ -257,3 +257,35 @@ test("チャットが宣言している全ツールに、引数の契約があ�
   const stale = [...guarded].filter((n) => !declared.has(n));
   assert.deepEqual(stale, [], `使われていない契約が残っている: ${stale.join(", ")}`);
 });
+
+// ---- #276: 長い追記は保存した上で注意を返す (止めない) ----
+
+test("context_append が800字を超えると、保存はした上で note で知らせる", async () => {
+  const id = await cardWith("## 経過");
+  const long = "あ".repeat(801);
+  const r = await run("update_cards", { updates: [{ id, context_append: long }] });
+
+  assert.equal(r.ok, true, "長い追記が弾かれている (止めない契約)");
+  assert.ok(getCard(id)!.context!.endsWith(long), "追記が保存されていない");
+  assert.match(r.note ?? "", new RegExp(`#${id} の追記が800字を超えています`), "注意が返っていない");
+  assert.match(r.note ?? "", /保存はしました/, "保存したことを言っていない (縮めた版を送り直される)");
+});
+
+test("context_append が800字ちょうどなら注意は付かない", async () => {
+  const id = await cardWith("## 経過");
+  const r = await run("update_cards", { updates: [{ id, context_append: "い".repeat(800) }] });
+
+  assert.equal(r.ok, true);
+  assert.doesNotMatch(r.note ?? "", /追記が800字を超えています/, "境界の内側で鳴っている");
+});
+
+test("版が合わず未適用の行には、長い追記の注意を付けない", async () => {
+  const id = await cardWith("## 経過");
+  const long = "う".repeat(801);
+  // 全文置換 (古い版) + 追記の併用。行ごと未適用になる
+  const r = await run("update_cards", { updates: [{ id, context: "書き直し", context_version: 999, context_append: long }] });
+
+  assert.equal(r.ok, false, "版違いが通っている");
+  assert.equal(getCard(id)!.context, "## 経過", "未適用のはずの行が書かれている");
+  assert.doesNotMatch(r.note ?? "", /追記が800字を超えています/, "適用していない行に「保存はしました」と言っている");
+});

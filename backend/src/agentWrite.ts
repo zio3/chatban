@@ -112,6 +112,12 @@ const CONFLICT_NOTE =
 
 // 「できません」だけ返すと、エージェントは何度か言い換えて再挑戦する。
 // なぜ通らないのか(経路)と、代わりに何をしたのかを両方言う
+/** #276: 1回の追記がこれを超えたら、保存はした上で返り値に注意を添える。
+ * 経緯メモは AI が1回読むときの量に直結するので、長い内容は本文でなくリンクで積ませたい。
+ * 止めはしない — 「書けなかった」と読まれて縮めた版を送り直され、情報が減る方が損 */
+export const LONG_APPEND_CHARS = 800;
+const LONG_APPEND_NOTE = `の追記が${LONG_APPEND_CHARS}字を超えています (保存はしました)。長い内容はファイルや PR に書き、経緯メモにはリンクと要点だけ積んでください`;
+
 const DONE_NOTE =
   `done は指定できないので review に置きました。${DONE_GATE_RULE}。` +
   "実装や作業が終わったという意味だと解釈しています。ユーザーには「reviewに置いたので検収してください」と伝えてください";
@@ -231,6 +237,7 @@ export function updateCardsAsAgent(updates: AgentCardUpdate[]): {
 
   const notFound: number[] = [];
   const badDue: number[] = [];
+  const longAppend: number[] = [];
 
   const patches = updates.map((u) => {
     // #87: 「差分だけ送る」モデルを前提にしない。全フィールドをエコーバックするモデル
@@ -299,6 +306,7 @@ export function updateCardsAsAgent(updates: AgentCardUpdate[]): {
     // ここまで来た行は適用される。**適用されたことが前提の報告はこの位置で積む** (#153)
     if (dueCheck.bad) badDue.push(u.id);
     if (didCoerce) coerced.push(u.id);
+    if (appended.length > LONG_APPEND_CHARS) longAppend.push(u.id);
 
     return {
       id: u.id,
@@ -329,6 +337,8 @@ export function updateCardsAsAgent(updates: AgentCardUpdate[]): {
     // #153: 期限だけ捨てた行。**rejected には数えない** — 他の項目は保存できているので、
     // ここで ok:false にすると「1件も書けなかった」と読まれて全部送り直される
     ...(badDue.length > 0 ? [`#${badDue.join(", #")} は${BAD_DUE_NOTE}`] : []),
+    // #276: 長い追記は注意だけ。適用済みの行にしか付かない (contextStale で弾いた行は上で return している)
+    ...(longAppend.length > 0 ? [`#${longAppend.join(", #")} ${LONG_APPEND_NOTE}`] : []),
   ];
   // #124: 適用できた行だけが入る。undefined/null は混ざらない (内部事情を漏らさない)
   const applied = updated.filter((t): t is NonNullable<typeof t> => t != null);

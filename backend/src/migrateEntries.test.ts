@@ -36,6 +36,9 @@ const OLD = [
   "## 経過",
   "フェンスの中の見出しは本文 (Codexレビュー P1)。4連の中の3連は閉じない (2周目)",
   "```",
+  "    ```",
+  "## 経過",
+  "4スペース字下げの ``` はコード本文で、開閉ではない (3周目)",
   "````",
   "",
   "## 経過",
@@ -89,7 +92,7 @@ test("下見は書かない。--apply で「## 経過」節が行になり、固
   const card = db.prepare("SELECT context FROM cards WHERE id = 1").get() as any;
   assert.equal(
     card.context,
-    "## 背景\n\n決めたこと。本文で `## 経過` と書いた説明は見出しではない。\n\n````md\n```\n## 経過\nフェンスの中の見出しは本文 (Codexレビュー P1)。4連の中の3連は閉じない (2周目)\n```\n````",
+    "## 背景\n\n決めたこと。本文で `## 経過` と書いた説明は見出しではない。\n\n````md\n```\n## 経過\nフェンスの中の見出しは本文 (Codexレビュー P1)。4連の中の3連は閉じない (2周目)\n```\n    ```\n## 経過\n4スペース字下げの ``` はコード本文で、開閉ではない (3周目)\n````",
     "固定文が残っていない (フェンスの中の ## 経過 は見出しではない)"
   );
   const rows = db.prepare("SELECT at, source, text FROM card_entries WHERE card_id = 1 ORDER BY id").all() as any[];

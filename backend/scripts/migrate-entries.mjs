@@ -39,8 +39,9 @@ const DATA = process.env.CHATBAN_DATA_DIR ?? "data";
 const HEADING = /^## 経過\s*$/;
 const SECTION_HEADING = /^#{1,6} /;
 const RULE = /^---\s*$/;
-const FENCE_OPEN = /^\s*(`{3,}|~{3,})/;
-const FENCE_CLOSE = /^\s*(`{3,}|~{3,})\s*$/;
+// 字下げは 3 スペースまで (CommonMark)。4 スペース以上の ``` はコードの本文であって開閉ではない (Codexレビュー 3周目)
+const FENCE_OPEN = /^ {0,3}(`{3,}|~{3,})/;
+const FENCE_CLOSE = /^ {0,3}(`{3,}|~{3,})\s*$/;
 /** フェンスの開閉。open が null なら外。閉じ行は同じ記号で同じ長さ以上 (CommonMark) */
 function fenceStep(open, line) {
   if (!open) {

@@ -659,7 +659,7 @@ export function buildSystemPrompt(cardFocus?: ReturnType<typeof getCard>, view?:
   // キャッシュ友好の並び: 静的な内容(人格/ルール/思想)を先頭に固定し、動的な内容(索引/履歴/カード)を末尾へ。
   // プロンプトキャッシュはプレフィックス一致なので、先頭が安定しているほどヒット部分が伸びる。
   return [
-    "あなたはチームのタスク管理ボード「ChatBan」のアシスタント。日本語で簡潔に応答する。",
+    "あなたはタスク管理ボード「ChatBan」のアシスタント。日本語で簡潔に応答する。",
     "",
     "## 行動ルール",
     // #215: 板の上のものの名前は「カード」に統一したが、**ユーザーに言い換えを強いない**。
@@ -747,11 +747,13 @@ export function buildSystemPrompt(cardFocus?: ReturnType<typeof getCard>, view?:
 // #93: 画面ごとの文脈。チャットは常設 (#74) なので、ボード以外を見ているときも
 // 「その画面の話」ができないと噛み合わない。操作できないものは断り方まで決めておく。
 // 発言者と同じくメタ情報なので、動的セクションの末尾に置く (キャッシュのプレフィックスを崩さない)
-const VIEW_HINTS: Record<string, string> = {
+// #280: 番人 (promptStale.test.ts) が読めるように export した。動的セクションの後ろに入るので、
+// 静的部分だけを見る検査からは漏れていた (「チームの前提情報」がここに残っていた)
+export const VIEW_HINTS: Record<string, string> = {
   context: [
     "",
     "## いま見ている画面: 📋前提情報",
-    "チームの前提情報を見ている。「ここに◯◯を足して」等は update_project_context で反映する。",
+    "プロジェクトの前提情報を見ている。「ここに◯◯を足して」等は update_project_context で反映する。",
   ].join("\n"),
   // #181: 📊コスト と 📜監査 のヒントはここにあった。両タブごと撤去した
   trash: [

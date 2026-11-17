@@ -11,7 +11,6 @@
  *
  * だから定数だけを、DBを開かないここに置く。 */
 export const PUBLIC_TABLES: readonly string[] = [
-  "cards",
   "live_cards",
   "done_cards",
   // #262: **`chat_messages` を外した。**行も表も残っているが、SQLの窓口からは引けない。
@@ -28,6 +27,10 @@ export const PUBLIC_TABLES: readonly string[] = [
   "project_context",
   // #274: 経過の行。cards.context の末尾に文字列で積んでいたものを表にした
   "card_entries",
+  // #281: **生の表は最後に置く。**この並びがそのまま説明の「引けるもの:」になり、先頭にあると
+  // 初見のエージェントはそれで書く。実際に cards を直に引いて、ゴミ箱の4枚を生きている札として扱った
+  // (2026-11-17)。live_cards を使えという案内は説明の後ろにあったが、先に目に入るのは一覧のほうだった
+  "cards",
 ];
 
 /** #252: `PUBLIC_TABLES` に出てくる列名の全部。**ログにSQLを残すときの許可リスト**で使う

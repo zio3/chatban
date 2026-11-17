@@ -128,3 +128,22 @@ test("query_log を使えと言っている用途は、説明から引ける", a
     assert.match(QUERY_LOG_DESCRIPTION, /project_context\(/, "前提情報の列が説明に無い (版を読めない)");
   }
 });
+
+// #281: **案内の中身ではなく、置き場所を固定する。**「live_cards を使う」は前から書いてあったが、
+// 表の一覧は cards が先頭、案内は後ろから3行目だった。初見のエージェントは先に目に入った表で書き、
+// ゴミ箱の札を生きているものとして扱った (2026-11-17)
+test("引ける表の一覧は live_cards から始まり、生の cards は最後", () => {
+  const list = QUERY_LOG_DESCRIPTION.split("\n").find((l) => l.startsWith("引けるもの:"));
+  assert.ok(list, "一覧の行が無い");
+  const names = list!.replace("引けるもの:", "").split("/").map((x) => x.trim());
+  assert.equal(names[0], "live_cards");
+  assert.equal(names[names.length - 1], "cards");
+});
+
+test("live_cards を使う案内は、cards の列の一覧より前にある", () => {
+  const guide = QUERY_LOG_DESCRIPTION.indexOf("live_cards ビューを使う");
+  const columns = QUERY_LOG_DESCRIPTION.indexOf("cards(id, title,");
+  assert.ok(guide >= 0, "案内が消えている");
+  assert.ok(columns >= 0, "cards の列の一覧が消えている");
+  assert.ok(guide < columns, "案内が列の一覧のあとにある");
+});

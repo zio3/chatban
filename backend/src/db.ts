@@ -830,7 +830,15 @@ function runReadonly(
     if (e instanceof VirtualTableError) throw e;
   }
   const rows = conn.prepare(trimmed).all() as unknown[];
-  return { rows: rows.slice(0, limit), sql: trimmed, truncated: rows.length > limit, ...silentTrap(trimmed) };
+  return queryResult(rows, trimmed, limit);
+}
+
+/** 結果の入れ物。**注意書き (note) を行より前に置く** (#281)。
+ *
+ * 以前は行のあとに付けていたので、100行読んで判断が済んでから注意が来ていた。
+ * JSON はキーを書いた順に出るので、先に書くだけで先に読まれる。 */
+export function queryResult(rows: unknown[], sql: string, limit: number) {
+  return { ...silentTrap(sql), rows: rows.slice(0, limit), sql, truncated: rows.length > limit };
 }
 
 /** エラーにならない間違いに、結果と一緒に一言添える。

@@ -279,6 +279,13 @@ CREATE VIEW done_cards AS
    WHERE done_at IS NOT NULL
    ORDER BY done_at DESC;`);
 
+  // #282: **done を外す。**以前の条件は `archived = 0 AND trashed_at IS NULL` だけで、検収直後の
+  // (まだ畳まれていない) Done が入り、done_cards と同じカードが両方に出ていた。意図した設計ではなく、
+  // 外部エージェントが毎回書いていた条件をそのまま固めた跡 (2026-08-11。当時は Done を要約カードに
+  // まとめてアーカイブする世界で、板に残る Done は「畳まれる途中」でしかなかった)。#200 で要約カードが
+  // 無くなったあとも定義は見直されず、重なりは説明文の1段落 (#175) で埋めていた。
+  // 「生きている / 終わった」と呼ぶなら重ならないほうが名前どおりなので、定義のほうを直す。
+  // archived = 0 は残す (done 以外で畳まれている行は作られないはずだが、壊れた行を拾わないため)
   db.exec(`
 DROP VIEW IF EXISTS live_cards;
 CREATE VIEW live_cards AS
@@ -286,7 +293,7 @@ CREATE VIEW live_cards AS
          due, blocked_by, rejected, checked_at, done_at, sort, COALESCE(sort, id) AS sort_key,
          created_at, updated_at
     FROM cards
-   WHERE archived = 0 AND trashed_at IS NULL
+   WHERE status <> 'done' AND archived = 0 AND trashed_at IS NULL
    ORDER BY COALESCE(sort, id), id;`);
 
   // #179: 担当者・割り振りを廃止 / #180: 認証を廃止。**列とテーブルごと落とす。**

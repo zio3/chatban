@@ -1750,9 +1750,10 @@ test("live_cards と done_cards に何が入るかは、契約に書いてある
     expect(ids, `${label} が live_cards に出ていない`).toContain(id);
   }
 
-  // 検収してDoneへ確定すると done_cards に現れる。
-  // **このE2Eは AUTO_ARCHIVE=0 なので畳まれず、live_cards にも残る** —
-  // 契約に書いた「同じタスクが両方に出る瞬間がある (不整合ではない)」がこの状態
+  // 検収してDoneへ確定すると done_cards に現れ、live_cards からは消える。
+  // **このE2Eは AUTO_ARCHIVE=0 なので畳まれない** = 板の Done 列に見えたままの状態。
+  // #282 より前はここで live_cards にも残り、「両方に出る (不整合ではない)」と契約で断っていた。
+  // いまは live_cards が done を除くので重ならない
   await fetch(`${API}/api/cards/${review}/checked`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -1775,18 +1776,23 @@ test("live_cards と done_cards に何が入るかは、契約に書いてある
     scope: "audit",
     sql: `SELECT id FROM live_cards WHERE id=${review}`,
   });
-  expect(stillLive.rows, "畳まれていないDoneが live_cards から消えている (契約の記述と違う)").toHaveLength(1);
+  expect(stillLive.rows, "Doneへ確定したカードが live_cards に残っている (契約の記述と違う)").toHaveLength(0);
+
+  // 板の Done 列に見えているカードは done_cards の archived=0 で引ける (契約の案内どおり)
+  const onBoard = await mcp("query_log", {
+    scope: "audit",
+    sql: `SELECT id FROM done_cards WHERE archived=0 AND id=${review}`,
+  });
+  expect(onBoard.rows, "検収直後のDoneが done_cards の archived=0 に居ない").toHaveLength(1);
 
   // 契約側にもその説明が書かれていること (書いていないと推測される #92/#175)
   const tools = await mcpToolList();
   const desc = tools.find((t: any) => t.name === "query_log").description as string;
-  for (const word of ["todo / inprogress / review", "畳まれるまでは同じカードが両方に出る"]) {
+  for (const word of ["todo / inprogress / review", "done_cards とは重ならない", "板の Done 列にまだ見えている"]) {
     expect(desc, `契約に「${word}」の説明が無い`).toContain(word);
   }
-  // **「短時間」と書き戻さない。**畳む処理は fire-and-forget で、プロセスが止まれば
-  // ジョブは失われ、起動時に回収する処理も無い = 両方に出る状態は無期限に残る (Codexレビュー指摘)。
-  // 「時間で消える」と書くと、エージェントは待てば直ると判断してしまう
-  expect(desc, "「短時間」と書くと待てば直ると読まれる").not.toContain("短時間");
+  // #282: 重なりを断る段落は定義を直して要らなくなった。書き戻されていたら定義と食い違う
+  expect(desc, "「両方に出る」は #282 で無くした状態").not.toContain("両方に出る");
 });
 
 test("チャットに番号だけ打つと、LLMを呼ばずにそのタスクを開く (#197)", async ({ page }) => {

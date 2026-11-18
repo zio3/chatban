@@ -56,6 +56,15 @@ test("live_cards に入るのは done 以外。検収直後でまだ畳まれて
   assert.ok(!onBoard.rows.some((x) => x.id === folded), "畳んだ Done が archived=0 に出ている");
 });
 
+// Codexレビュー指摘: 説明文は「板の Done 列に見えているものは done_cards の archived=0」と案内する。
+// done_cards がゴミ箱を除いていないと、捨てた Done がそこに混ざる (板の一覧は trashed_at IS NULL)
+test("Done にしてからゴミ箱へ入れたカードは、done_cards にも live_cards にも出ない", () => {
+  const trashedDone = makeDoneCard("Done にしてからゴミ箱へ");
+  trashCard(trashedDone);
+  assert.ok(!ids("done_cards").includes(trashedDone), "ゴミ箱の Done が done_cards に出ている");
+  assert.ok(!ids("live_cards").includes(trashedDone), "ゴミ箱の Done が live_cards に出ている");
+});
+
 test("同じカードが live_cards と done_cards の両方に出ることはない", () => {
   makeDoneCard("重なりを見るための Done");
   const done = new Set(ids("done_cards"));

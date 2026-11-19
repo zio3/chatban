@@ -857,6 +857,14 @@ export function silentTrap(sql: string): { note?: string } {
   if (/count\s*\(|group\s+by/.test(s) && /date\s*\(\s*created_at/.test(s) && /\bfrom\s+cards\b/.test(s)) {
     notes.push("created_at は登録日です。完了の集計なら done_at (または done_cards.done_day) を使ってください");
   }
+  // #282: live_cards から done を外したので、ここで done を拾いにいく SQL は**エラーにならず0件になる**。
+  // 外す前は検収直後の Done が返っていた形 (実測 2026-11-19: live_cards を引く SQL 199本のうち、
+  // status を一致で絞るものが101本。値はログで伏せてあり、done を含む本数は分からなかった)。
+  // 除外の形 (status <> 'done' / NOT IN / IS NOT) は害が無いので何も言わない。
+  // 一致は SQLite で通る書き方を拾う: `=` / `==` / `IS` / `IN (…)` (Codexレビュー指摘で `==` と `IS` を足した)
+  if (/\blive_cards\b/.test(s) && /\bstatus\s*((==?|is\s)\s*'done'|in\s*\([^)]*'done')/.test(s)) {
+    notes.push("live_cards に done は入りません (まだ終わっていないものだけ)。完了したカードは done_cards を使ってください。板の Done 列に見えているものだけなら done_cards の WHERE archived=0");
+  }
   return notes.length > 0 ? { note: notes.join(" / ") } : {};
 }
 

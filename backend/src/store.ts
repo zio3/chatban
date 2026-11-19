@@ -270,15 +270,28 @@ CREATE TABLE IF NOT EXISTS chat_messages (
   // #232: 古い名前 (done_tasks / live_tasks) を落とす行がここに在ったが、全DBを移行し切ったので
   // 相手がいなくなった。旧スキーマを入口で止める番人も #239 で撤去した (バックアップから
   // 古いDBを戻したときは `scripts/migrate-cards.mjs` が空の cards 越しでも救う)
+  //
+  // #282: **ゴミ箱を除く。**以前は done_at だけを見ていて、Done にしてからゴミ箱へ入れたカードが出ていた
+  // (trashCard は status も done_at も動かさない)。live_cards から done を外して「板の Done 列に
+  // 見えているものは done_cards の archived=0」と案内することにしたので、ここにゴミ箱が混ざると
+  // 「板に見えているもの」のつもりで捨てたカードを拾う (Codexレビュー指摘)。
+  // 列に trashed_at が無いので、引く側では除けない。ビューの側で除く
   db.exec(`
 DROP VIEW IF EXISTS done_cards;
 CREATE VIEW done_cards AS
   SELECT id, title, summary, rejected, checked_at, done_at,
          date(done_at) AS done_day, archived, created_at
     FROM cards
-   WHERE done_at IS NOT NULL
+   WHERE done_at IS NOT NULL AND trashed_at IS NULL
    ORDER BY done_at DESC;`);
 
+  // #282: **done を外す。**以前の条件は `archived = 0 AND trashed_at IS NULL` だけで、検収直後の
+  // (まだ畳まれていない) Done が入り、done_cards と同じカードが両方に出ていた。意図した設計ではなく、
+  // 外部エージェントが毎回書いていた条件をそのまま固めた跡 (2026-08-11。当時は Done を要約カードに
+  // まとめてアーカイブする世界で、板に残る Done は「畳まれる途中」でしかなかった)。#200 で要約カードが
+  // 無くなったあとも定義は見直されず、重なりは説明文の1段落 (#175) で埋めていた。
+  // 「生きている / 終わった」と呼ぶなら重ならないほうが名前どおりなので、定義のほうを直す。
+  // archived = 0 は残す (done 以外で畳まれている行は作られないはずだが、壊れた行を拾わないため)
   db.exec(`
 DROP VIEW IF EXISTS live_cards;
 CREATE VIEW live_cards AS
@@ -286,7 +299,7 @@ CREATE VIEW live_cards AS
          due, blocked_by, rejected, checked_at, done_at, sort, COALESCE(sort, id) AS sort_key,
          created_at, updated_at
     FROM cards
-   WHERE archived = 0 AND trashed_at IS NULL
+   WHERE status <> 'done' AND archived = 0 AND trashed_at IS NULL
    ORDER BY COALESCE(sort, id), id;`);
 
   // #179: 担当者・割り振りを廃止 / #180: 認証を廃止。**列とテーブルごと落とす。**

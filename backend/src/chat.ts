@@ -130,25 +130,23 @@ export const QUERY_LOG_DESCRIPTION = [
   "card_entries(id, card_id, at, source, text) = 経緯メモの経過の行 (card_id が cards.id。at は追記された日時、id 昇順が追記の順)",
   // #281: **この行は cards の列の一覧より前に置く。**以前は後ろから3行目にあり、先に目に入る
   // cards の列で SQL を書かれた (ゴミ箱の札が混ざる)。中身は変えず、置き場所だけ動かした
-  "live_cards ビューを使う。cards から「生きているもの」(ゴミ箱でもアーカイブ済みでもないもの)だけを、ボードと同じ並びで抜いたもの。条件と並びを毎回書かなくてよく、書き忘れてゴミ箱のカードが混ざることもない。列は cards と同じ + sort_key(=COALESCE(sort,id))。ゴミ箱やアーカイブを見たいときだけ cards を直に引く",
+  "live_cards ビューを使う。cards から「生きているもの」(まだ終わっていないもの。done でもゴミ箱でもない)だけを、ボードと同じ並びで抜いたもの。条件と並びを毎回書かなくてよく、書き忘れてゴミ箱のカードが混ざることもない。列は cards と同じ + sort_key(=COALESCE(sort,id))。終わったものは done_cards、ゴミ箱を見たいときだけ cards を直に引く",
 "cards(id, title, status, summary, context, context_version, due, blocked_by, rejected, checked_at, done_at, trashed_at, sort, archived, created_at, updated_at)",
   "checked_at = 人が実物で確かめた日時 (nullなら未検収)。status とは別物で、done は列が動いたこと・checked_at は検収が進んだこと。片方からもう片方を推測しない。この窓口は読み取り専用で、checked_at を書く手段はどこにも無い (印を付けられるのは人間だけ)",
   "会話の「#112」は cards.id = 112 (主キー)。番号はプロジェクトごとに1から振られる",
   "日付の列を取り違えない。created_at=登録日 / updated_at=最終更新(その後の編集でも動く) / done_at=Doneへ確定した日 / checked_at=人が確かめた日。完了の集計には done_at を使う(created_at だと登録日を数えてしまう)",
   "done_at のうち 2026-08-10 以前のものは、列を作る前に終わったぶんを updated_at から埋めた近似値(完了後に触っていなければ最終更新=完了日時)。日単位の集計には使えるが、分単位の議論には使わない",
-  "done_cards は完了したもの(done_at 入り)だけを、完了が新しい順に抜いたビュー。live_cards の対",
+  "done_cards は完了したもの(done_at 入り。ゴミ箱は除く)だけを、完了が新しい順に抜いたビュー。live_cards の対",
   // #175: **どの status がどちらに入るかを書く。**「生きている / 終わった」だけだと
   // review がどちらか分からず、実際に「live_cards に review が出ないバグがある」と誤報した
   // (2026-08-15。ビューは正しく、検収済みで消えていただけ)。
-  // ビューの条件は status ではなく archived / trashed_at / done_at なので、**両方に出る状態がある** —
-  // そこも書かないと「重複している=おかしい」と読まれる。
   //
-  // **「短時間だけ」とは書かない** (Codexレビュー指摘)。畳むのは #200 以降**同期**だが、
-  // そのとき畳むのは**前回の検収ぶん**なので (`foldDoneColumn`)、いま確定したカードは
-  // **次に誰かが検収を押すまで** `archived=0` のまま残る。押さなければ何も動かない。
-  // (起動時に `status=done AND archived=0` を回収する処理も無い)
-  // 時間で消えると書くと、エージェントは「待てば直る」と判断してしまう
-  "live_cards に入るのは **done 以外の列すべて** (todo / inprogress / review と、そのプロジェクトで有効な任意レーン)。加えて「Doneへ確定したが、まだ畳まれていないもの」も入る。done_cards は done_at が入っているものなので、**畳まれるまでは同じカードが両方に出る**(不整合ではない)。畳むのは**人が検収を押した瞬間だけ**で、押さなければ何も動かない — 時間が経てば消えると考えないこと。列で絞りたいなら status を書く: WHERE status='review'",
+  // #282: **両方に出る状態を、説明ではなく定義で無くした。**以前は live_cards が status を見ておらず、
+  // 検収直後の Done が両方に出るので「不整合ではない」「時間では消えない」とここで長く断っていた。
+  // live_cards に `status <> 'done'` を足したので、その段落は要らなくなった。
+  // 代わりに書くのは1点だけ: **板の Done 列に見えているカードは live_cards に無い** (done_cards の
+  // archived=0)。「見えているのに引けない」を不具合と読まれないようにする (#175 と同じ形の誤報を防ぐ)
+  "live_cards に入るのは **done 以外の列すべて** (todo / inprogress / review と、そのプロジェクトで有効な任意レーン)。done は入らず、done_cards とは重ならない。**板の Done 列にまだ見えている検収直後のカードも done_cards 側**で、板に見えているものだけなら WHERE archived=0 を足す。列で絞りたいなら status を書く: WHERE status='review'",
   // #255: **散文で言ったことを、SQLで言い直さない。**外した例文5本はどれも
   // 上の行が既に言っている事実の書き直しだった (length(context) は15行目、
   // updated_at の意味は9行目、ゴミ箱は16行目、review+checked_at は7・12行目、

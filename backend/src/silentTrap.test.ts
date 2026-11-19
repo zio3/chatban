@@ -33,6 +33,28 @@ test("created_at で完了を数えていたら、done_at を案内する", () =
   assert.match(note, /done_at/);
 });
 
+// #282: live_cards から done を外した。done を拾いにいく SQL はエラーにならず0件になるので、一言添える
+test("live_cards から done を拾おうとしたら、done_cards を案内する", () => {
+  for (const sql of [
+    "select id from live_cards where status='done'",
+    "SELECT id FROM live_cards WHERE status = 'done' ORDER BY sort_key",
+    "select id from live_cards where status in ('review', 'done')",
+  ]) {
+    const note = silentTrap(sql).note;
+    assert.ok(note, `助言が出ていない: ${sql}`);
+    assert.match(note, /done_cards/);
+  }
+});
+
+test("live_cards で done を除いているだけなら、何も言わない", () => {
+  // 除外は害が無い (もう入っていないだけ)。言うと助言が雑音になる
+  assert.equal(silentTrap("select id from live_cards where status <> 'done'").note, undefined);
+  assert.equal(silentTrap("select id from live_cards where status != 'done'").note, undefined);
+  assert.equal(silentTrap("select id from live_cards where status not in ('done')").note, undefined);
+  assert.equal(silentTrap("select id from live_cards where status='review'").note, undefined);
+  assert.equal(silentTrap("select id from done_cards where archived=0").note, undefined);
+});
+
 // #281: 注意書きは行より前に出す。行のあとだと、読んで判断が済んでから届く
 test("注意書きは結果の行より前に出る", () => {
   const r = queryResult([{ id: 1 }, { id: 2 }], "select id from cards", 200);

@@ -39,6 +39,9 @@ test("live_cards から done を拾おうとしたら、done_cards を案内す�
     "select id from live_cards where status='done'",
     "SELECT id FROM live_cards WHERE status = 'done' ORDER BY sort_key",
     "select id from live_cards where status in ('review', 'done')",
+    // SQLite で通る等価の書き方 (Codexレビュー指摘)。どちらも0件になるのに注意が付いていなかった
+    "select id from live_cards where status == 'done'",
+    "select id from live_cards where status IS 'done'",
   ]) {
     const note = silentTrap(sql).note;
     assert.ok(note, `助言が出ていない: ${sql}`);
@@ -51,6 +54,7 @@ test("live_cards で done を除いているだけなら、何も言わない", 
   assert.equal(silentTrap("select id from live_cards where status <> 'done'").note, undefined);
   assert.equal(silentTrap("select id from live_cards where status != 'done'").note, undefined);
   assert.equal(silentTrap("select id from live_cards where status not in ('done')").note, undefined);
+  assert.equal(silentTrap("select id from live_cards where status is not 'done'").note, undefined);
   assert.equal(silentTrap("select id from live_cards where status='review'").note, undefined);
   assert.equal(silentTrap("select id from done_cards where archived=0").note, undefined);
 });

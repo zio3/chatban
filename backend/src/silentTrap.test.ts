@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { silentTrap } from "./db.js";
+import { queryResult, silentTrap } from "./db.js";
 
 // #216: **判定側だけ古い名前に取り残された。**#215 の改名で、この助言の文面は
 // 「cards を直に引いています」に直ったのに、それを出すかどうかを決める正規表現は
@@ -31,4 +31,20 @@ test("created_at で完了を数えていたら、done_at を案内する", () =
   const note = silentTrap("select date(created_at) d, count(*) n from cards group by 1").note;
   assert.ok(note, "助言が出ていない");
   assert.match(note, /done_at/);
+});
+
+// #281: 注意書きは行より前に出す。行のあとだと、読んで判断が済んでから届く
+test("注意書きは結果の行より前に出る", () => {
+  const r = queryResult([{ id: 1 }, { id: 2 }], "select id from cards", 200);
+  const json = JSON.stringify(r);
+  assert.ok(json.indexOf("note") >= 0, "注意が付いていない");
+  assert.ok(json.indexOf("note") < json.indexOf("rows"), "注意が行のあとにある");
+  assert.equal(r.rows.length, 2);
+  assert.equal(r.truncated, false);
+});
+
+test("注意が要らないときは note のキーごと付けない", () => {
+  const r = queryResult([{ id: 1 }], "select id from live_cards", 200);
+  assert.ok(!("note" in r));
+  assert.equal(queryResult([1, 2, 3], "select id from live_cards", 2).truncated, true);
 });

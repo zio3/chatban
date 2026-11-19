@@ -128,6 +128,9 @@ export const QUERY_LOG_DESCRIPTION = [
   "project_context(id, text, version, updated_at)",
   // #274: 経過の行。cards.context には固定文しか無いので、経過を条件にするならこちらを JOIN する
   "card_entries(id, card_id, at, source, text) = 経緯メモの経過の行 (card_id が cards.id。at は追記された日時、id 昇順が追記の順)",
+  // #281: **この行は cards の列の一覧より前に置く。**以前は後ろから3行目にあり、先に目に入る
+  // cards の列で SQL を書かれた (ゴミ箱の札が混ざる)。中身は変えず、置き場所だけ動かした
+  "live_cards ビューを使う。cards から「生きているもの」(ゴミ箱でもアーカイブ済みでもないもの)だけを、ボードと同じ並びで抜いたもの。条件と並びを毎回書かなくてよく、書き忘れてゴミ箱のカードが混ざることもない。列は cards と同じ + sort_key(=COALESCE(sort,id))。ゴミ箱やアーカイブを見たいときだけ cards を直に引く",
 "cards(id, title, status, summary, context, context_version, due, blocked_by, rejected, checked_at, done_at, trashed_at, sort, archived, created_at, updated_at)",
   "checked_at = 人が実物で確かめた日時 (nullなら未検収)。status とは別物で、done は列が動いたこと・checked_at は検収が進んだこと。片方からもう片方を推測しない。この窓口は読み取り専用で、checked_at を書く手段はどこにも無い (印を付けられるのは人間だけ)",
   "会話の「#112」は cards.id = 112 (主キー)。番号はプロジェクトごとに1から振られる",
@@ -162,7 +165,6 @@ export const QUERY_LOG_DESCRIPTION = [
   "例(いつ何件終わったか): SELECT done_day, COUNT(*) n FROM done_cards GROUP BY 1 ORDER BY 1 DESC",
   // #274: context は固定文だけ。経過は card_entries の行なので、「context を引けば全文」ではなくなった
   "SELECT * は使わない。必要な列だけ挙げる。context(経緯メモの固定文)は長いので、一覧では length(context) か substr(context,1,120) にする。経過の行は context に無く card_entries にある — 経緯の全文が要るカードは get_cards (history) で読む",
-  "live_cards ビューを使う。cards から「生きているもの」(ゴミ箱でもアーカイブ済みでもないもの)だけを、ボードと同じ並びで抜いたもの。条件と並びを毎回書かなくてよく、書き忘れてゴミ箱のカードが混ざることもない。列は cards と同じ + sort_key(=COALESCE(sort,id))。ゴミ箱やアーカイブを見たいときだけ cards を直に引く",
   // #274: この例は「全文」と言っていたが、context には経過の行が無い。固定文と版の例に言い直す
   "例(1件の詳細 = 固定文と版。経過の行は含まれない): SELECT title, status, summary, context, context_version, blocked_by FROM cards WHERE id=112",
   "LLM呼び出しの記録 (トークン・単価・レイテンシ) はここには無い (#181で撤去)。速度やキャッシュの効きを見たいときは backend/logs/ のログを読む",

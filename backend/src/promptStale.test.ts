@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildSystemPrompt, buildTools, QUERY_LOG_DESCRIPTION, REJECTED_DESCRIPTION } from "./chat.js";
+import { buildSystemPrompt, buildTools, QUERY_LOG_DESCRIPTION, REJECTED_DESCRIPTION, VIEW_HINTS } from "./chat.js";
 import { CONTEXT_TEMPLATE, contextReference } from "./contextTemplate.js";
 
 // #218: **撤去した機能への言及がプロンプトに残っていないか**の番人。
@@ -60,6 +60,9 @@ function everythingTheModelReads(): { where: string; text: string }[] {
     // #278: 道具の契約 (ツール自身の説明と引数の説明) を丸ごと。上の2件はその一部だが、
     // 「summary(現況の1行)」を update_cards の説明に残したまま壊しても、この面が無いと通ってしまった
     { where: "チャットの道具の契約", text: JSON.stringify(buildTools([])) },
+    // #280: 画面別のヒントは動的セクションの後ろに差し込まれるので、staticPrompt() には入らない (各ヒントは改行で始まるので、連結は空文字で足りる)。
+    // 「チームの前提情報を見ている」がここに残っていて、上の面だけでは見つけられなかった
+    { where: "画面別のヒント", text: Object.values(VIEW_HINTS).join("") },
     { where: "前提情報テンプレート", text: CONTEXT_TEMPLATE },
     { where: "前提情報リファレンス", text: JSON.stringify(contextReference()) },
   ];
@@ -99,6 +102,9 @@ const REMOVED: { word: string; why: string; allow?: RegExp }[] = [
   // 3か所残っていた。summary を現況と呼ぶ言い回しは、見つけた形をここに並べていく
   { word: "と現況を書", why: "#278: summary を「現況」と呼ぶ言い回し (システムプロンプトと前提情報テンプレートに残っていた)" },
   { word: "現況の一言", why: "#278: summary を「現況」と呼ぶ言い回し" },
+  // #280: 担当者・認証は #179/#180 で撤去して個人利用に特化したのに、呼び方だけチーム前提のまま残っていた
+  // (冒頭の「チームのタスク管理ボード」と、前提情報タブのヒントの「チームの前提情報」)
+  { word: "チームの", why: "#280: 個人利用に特化した (持ち主ひとり)。チーム前提の呼び方は外した" },
 ];
 
 for (const { word, why, allow } of REMOVED) {
